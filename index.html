@@ -1417,12 +1417,12 @@ async function swipeCard(direction) {
 async function blockSender(email) {
   const { addr } = parseSender(email.sender);
   if (!addr) { toast('Could not parse sender'); return; }
-  setStatus(true, \`Blocking \${addr}…\`);
+  setStatus(true, `Blocking ${addr}…`);
   try {
     // 1. Find all unread messages from this sender
     const listRes = await gapi.client.gmail.users.messages.list({
       userId: 'me',
-      q: \`from:\${addr} is:unread\`,
+      q: `from:${addr} is:unread`,
       maxResults: 100
     });
     const msgs = listRes.result.messages || [];
@@ -1446,7 +1446,7 @@ async function blockSender(email) {
     selectedIds.delete(email.id);
 
     setStatus(false);
-    toast(\`Blocked \${addr} (\${allIds.length} emails moved to spam)\`);
+    toast(`Blocked ${addr} (${allIds.length} emails moved to spam)`);
   } catch(e) {
     console.error(e);
     setStatus(false, 'Error blocking sender');
