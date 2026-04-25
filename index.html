@@ -936,7 +936,6 @@ html, body {
 
 <div id="toast"></div>
 
-<script src="https://apis.google.com/js/api.js"></script>
 <script>
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
@@ -980,12 +979,14 @@ function loadClientId() {
 // ── Auth ───────────────────────────────────────────────────
 document.getElementById('client-id-input').addEventListener('input', function() {
   const v = this.value.trim();
-  localStorage.setItem('ic_client_id', v);
+  if (v) localStorage.setItem('ic_client_id', v);
   document.getElementById('signin-btn').disabled = !v;
 });
 
 function signIn() {
-  const clientId = localStorage.getItem('ic_client_id') || '';
+  // Read from the input field directly (primary), fall back to localStorage
+  const inputEl = document.getElementById('client-id-input');
+  const clientId = (inputEl ? inputEl.value.trim() : '') || localStorage.getItem('ic_client_id') || '';
   if (!clientId) return;
   // Redirect-based OAuth — works on all mobile browsers and standalone PWA mode
   const redirectUri = location.origin + '/';
@@ -1680,16 +1681,19 @@ if ('serviceWorker' in navigator) {
 loadRules();
 loadClientId();
 
-// Handle OAuth redirect token on page load
-if (handleOAuthRedirect()) {
-  gapi.load('client', async () => {
-    await gapi.client.init({});
-    await gapi.client.load('https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest');
-    gapi.client.setToken({ access_token: accessToken });
-    await loadUserInfo();
-    showApp();
-  });
+// Handle OAuth redirect token on page load — deferred until gapi is ready
+function onGapiLoad() {
+  if (handleOAuthRedirect()) {
+    gapi.load('client', async () => {
+      await gapi.client.init({});
+      await gapi.client.load('https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest');
+      gapi.client.setToken({ access_token: accessToken });
+      await loadUserInfo();
+      showApp();
+    });
+  }
 }
 </script>
+<script src="https://apis.google.com/js/api.js" onload="onGapiLoad()"></script>
 </body>
 </html>
