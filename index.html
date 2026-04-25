@@ -1054,6 +1054,13 @@ function switchTab(tab) {
 
 // ── Fetch emails ───────────────────────────────────────────
 async function fetchEmails() {
+  // Immediately update button to loading state
+  const fetchBtns = document.querySelectorAll('.fetch-btn, .btn-sm[onclick*="fetchEmails"]');
+  fetchBtns.forEach(btn => {
+    btn.disabled = true;
+    btn._origHTML = btn.innerHTML;
+    btn.innerHTML = '<div class="mini-spinner" style="display:inline-block;width:14px;height:14px;margin-right:4px;vertical-align:middle"></div>Loading…';
+  });
   setStatus(true, 'Fetching unread emails…');
   emails = [];
   swipeQueue = [];
@@ -1106,6 +1113,12 @@ async function fetchEmails() {
   } catch(e) {
     console.error(e);
     setStatus(false, 'Error loading emails.');
+  } finally {
+    const fetchBtns = document.querySelectorAll('.fetch-btn, .btn-sm[onclick*="fetchEmails"]');
+    fetchBtns.forEach(btn => {
+      btn.disabled = false;
+      if (btn._origHTML) { btn.innerHTML = btn._origHTML; btn._origHTML = null; }
+    });
   }
 }
 
@@ -1151,6 +1164,8 @@ function b64decode(data) {
 function htmlToText(html) {
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
+  // Remove style and script elements so their text content isn't included
+  tmp.querySelectorAll('style, script, head').forEach(el => el.remove());
   return (tmp.textContent || tmp.innerText || '').replace(/\s{3,}/g, '\n\n').trim();
 }
 
@@ -1516,20 +1531,9 @@ function updateOpenGmailBtn(email) {
 
 function openInGmail() {
   if (!currentEmail) return;
-  // Gmail message deep link using hex message ID
-  // Convert decimal ID to hex for Gmail URL
   const hexId = BigInt(currentEmail.id).toString(16);
   const gmailUrl = `https://mail.google.com/mail/u/0/#inbox/${hexId}`;
-  // Try Gmail app deep link first on mobile, fallback to web
-  const appUrl = `googlegmail://mail/u/0/#inbox/${hexId}`;
-  // Attempt app link; if it doesn't open within 500ms, fall back to web
-  const start = Date.now();
-  window.location = appUrl;
-  setTimeout(() => {
-    if (Date.now() - start < 1500) {
-      window.open(gmailUrl, '_blank');
-    }
-  }, 500);
+  window.open(gmailUrl, '_blank');
 }
 
 // Keyboard shortcuts
