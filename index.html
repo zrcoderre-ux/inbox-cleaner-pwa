@@ -1084,12 +1084,19 @@ async function fetchEmails() {
 
     setStatus(true, `Loading ${messages.length} messages…`);
 
-    const results = await Promise.all(
-      messages.map(m => gapi.client.gmail.users.messages.get({
-        userId: 'me', id: m.id, format: 'metadata',
-        metadataHeaders: ['From', 'Subject', 'Date']
-      }))
-    );
+    // Chunk requests 10 at a time to avoid rate limiting
+    const results = [];
+    for (let i = 0; i < messages.length; i += 10) {
+      const chunk = messages.slice(i, i + 10);
+      const chunkResults = await Promise.all(
+        chunk.map(m => gapi.client.gmail.users.messages.get({
+          userId: 'me', id: m.id, format: 'metadata',
+          metadataHeaders: ['From', 'Subject', 'Date']
+        }))
+      );
+      results.push(...chunkResults);
+      setStatus(true, `Loading ${results.length} / ${messages.length}…`);
+    }
 
     emails = results.map(r => {
       const h = {};
@@ -1533,7 +1540,13 @@ function openInGmail() {
   if (!currentEmail) return;
   const hexId = BigInt(currentEmail.id).toString(16);
   const gmailUrl = `https://mail.google.com/mail/u/0/#inbox/${hexId}`;
-  window.open(gmailUrl, '_blank');
+  // In standalone PWA mode window.open is blocked — use location.href instead
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+  if (isStandalone) {
+    window.location.href = gmailUrl;
+  } else {
+    window.open(gmailUrl, '_blank');
+  }
 }
 
 // Keyboard shortcuts
