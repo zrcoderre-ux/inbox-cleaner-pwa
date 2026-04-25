@@ -936,6 +936,7 @@ html, body {
 
 <div id="toast"></div>
 
+<script src="https://apis.google.com/js/api.js"></script>
 <script>
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
@@ -984,7 +985,6 @@ document.getElementById('client-id-input').addEventListener('input', function() 
 });
 
 function signIn() {
-  // Read from the input field directly (primary), fall back to localStorage
   const inputEl = document.getElementById('client-id-input');
   const clientId = (inputEl ? inputEl.value.trim() : '') || localStorage.getItem('ic_client_id') || '';
   if (!clientId) return;
@@ -1681,8 +1681,8 @@ if ('serviceWorker' in navigator) {
 loadRules();
 loadClientId();
 
-// Handle OAuth redirect token on page load — deferred until gapi is ready
-function onGapiLoad() {
+// Handle OAuth redirect token on page load — deferred until gapi.js is ready
+function initAfterGapi() {
   if (handleOAuthRedirect()) {
     gapi.load('client', async () => {
       await gapi.client.init({});
@@ -1693,7 +1693,12 @@ function onGapiLoad() {
     });
   }
 }
+
+if (typeof gapi !== 'undefined') {
+  initAfterGapi();
+} else {
+  document.querySelector('script[src*="api.js"]').addEventListener('load', initAfterGapi);
+}
 </script>
-<script src="https://apis.google.com/js/api.js" onload="onGapiLoad()"></script>
 </body>
 </html>
