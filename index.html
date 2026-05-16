@@ -828,7 +828,7 @@ html, body {
       <div class="card-stack-area" id="card-stack-area">
         <div class="empty-swipe" id="swipe-empty">
           <div class="empty-icon">📭</div>
-          <div>Tap "Load emails" to start swiping</div>
+          <div id="swipe-empty-msg">Tap "Load emails" to start swiping</div>
         </div>
       </div>
 
@@ -1099,13 +1099,32 @@ async function fetchEmails() {
       setTimeout(() => signIn(), 1500);
       return;
     }
-    const listRes = await gapi.client.gmail.users.messages.list({
+    // Priority Inbox-style ordering: important unread first, then the rest.
+    // Two queries so important messages appear at the top of the swipe stack,
+    // matching what Gmail's Priority Inbox shows.
+    const MAX_TOTAL = 200;
+    const importantRes = await gapi.client.gmail.users.messages.list({
       userId: 'me',
-      q: 'is:unread in:inbox category:primary',
-      maxResults: 200
+      q: 'is:unread in:inbox is:important',
+      maxResults: MAX_TOTAL
     });
+    const importantMsgs = importantRes.result.messages || [];
 
-    const messages = listRes.result.messages || [];
+    let messages = importantMsgs.slice();
+    if (messages.length < MAX_TOTAL) {
+      const restRes = await gapi.client.gmail.users.messages.list({
+        userId: 'me',
+        q: 'is:unread in:inbox -is:important',
+        maxResults: MAX_TOTAL - messages.length
+      });
+      const restMsgs = restRes.result.messages || [];
+      // Dedupe just in case Gmail returns overlap
+      const seen = new Set(messages.map(m => m.id));
+      for (const m of restMsgs) {
+        if (!seen.has(m.id)) messages.push(m);
+      }
+    }
+
     if (!messages.length) {
       setStatus(false, 'No unread emails found.');
       renderSwipeStack();
@@ -1129,6 +1148,7 @@ async function fetchEmails() {
       setStatus(true, `Loading ${results.length} / ${messages.length}…`);
     }
 
+    const importantIds = new Set(importantMsgs.map(m => m.id));
     emails = results.map(r => {
       const h = {};
       (r.result.payload.headers || []).forEach(hdr => { h[hdr.name] = hdr.value; });
@@ -1138,6 +1158,7 @@ async function fetchEmails() {
         sender: h['From'] || '',
         subject: h['Subject'] || '(no subject)',
         date: h['Date'] || '',
+        important: importantIds.has(r.result.id),
         bodyText: null,
         bodyLoaded: false
       };
@@ -1684,6 +1705,10 @@ function setStatus(loading, msg = '') {
   strip.style.display = 'flex';
   spinner.style.display = loading ? 'block' : 'none';
   msgEl.textContent = msg;
+  // Also mirror to the swipe screen's empty-state line so the user sees
+  // status messages regardless of which tab they're on.
+  const swipeEmptyMsg = document.getElementById('swipe-empty-msg');
+  if (swipeEmptyMsg && msg) swipeEmptyMsg.textContent = msg;
 }
 
 // ── Section collapse ───────────────────────────────────────
