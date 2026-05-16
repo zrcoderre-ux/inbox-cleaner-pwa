@@ -1003,13 +1003,33 @@ function signIn() {
 function handleOAuthRedirect() {
   // Parse token from URL hash after Google redirects back
   const hash = location.hash.substring(1);
-  if (!hash) return false;
-  const params = new URLSearchParams(hash);
-  const token = params.get('access_token');
-  if (!token) return false;
-  history.replaceState(null, '', location.pathname);
-  accessToken = token;
-  return true;
+  if (hash) {
+    const params = new URLSearchParams(hash);
+    const token = params.get('access_token');
+    const expiresIn = parseInt(params.get('expires_in') || '3600', 10);
+    if (token) {
+      history.replaceState(null, '', location.pathname);
+      accessToken = token;
+      try {
+        sessionStorage.setItem('ic_access_token', token);
+        sessionStorage.setItem('ic_token_expiry', String(Date.now() + expiresIn * 1000));
+      } catch(e) {}
+      return true;
+    }
+  }
+  // No fresh redirect — try to restore a still-valid token from sessionStorage
+  try {
+    const stored = sessionStorage.getItem('ic_access_token');
+    const expiry = parseInt(sessionStorage.getItem('ic_token_expiry') || '0', 10);
+    if (stored && Date.now() < expiry - 30000) { // 30s safety margin
+      accessToken = stored;
+      return true;
+    }
+    // Expired — clean up
+    sessionStorage.removeItem('ic_access_token');
+    sessionStorage.removeItem('ic_token_expiry');
+  } catch(e) {}
+  return false;
 }
 
 async function loadUserInfo() {
@@ -1032,6 +1052,10 @@ function showApp() {
 function signOut() {
   if (!confirm('Sign out?')) return;
   accessToken = null;
+  try {
+    sessionStorage.removeItem('ic_access_token');
+    sessionStorage.removeItem('ic_token_expiry');
+  } catch(e) {}
   emails = [];
   swipeQueue = [];
   swipeHistory = [];
@@ -1068,6 +1092,13 @@ async function fetchEmails() {
   selectedIds.clear();
 
   try {
+    // Guard: if gapi.client.gmail isn't loaded, we can't call the API.
+    // This happens on stale page state — force re-auth.
+    if (!gapi.client || !gapi.client.gmail) {
+      setStatus(false, 'Session expired. Please sign in again.');
+      setTimeout(() => signIn(), 1500);
+      return;
+    }
     const listRes = await gapi.client.gmail.users.messages.list({
       userId: 'me',
       q: 'is:unread in:inbox category:primary',
@@ -1118,8 +1149,20 @@ async function fetchEmails() {
     renderEmailList();
     setStatus(false, `${emails.length} emails loaded.`);
   } catch(e) {
-    console.error(e);
-    setStatus(false, 'Error loading emails.');
+    console.error('fetchEmails error:', e);
+    // Detect auth failures specifically — 401 means token expired
+    const status = e?.status || e?.result?.error?.code;
+    if (status === 401) {
+      setStatus(false, 'Session expired. Please sign in again.');
+      try {
+        sessionStorage.removeItem('ic_access_token');
+        sessionStorage.removeItem('ic_token_expiry');
+      } catch(_) {}
+      setTimeout(() => signIn(), 1500);
+    } else {
+      const msg = e?.result?.error?.message || e?.message || 'Unknown error';
+      setStatus(false, 'Error: ' + msg);
+    }
   } finally {
     const fetchBtns = document.querySelectorAll('.fetch-btn, .btn-sm[onclick*="fetchEmails"]');
     fetchBtns.forEach(btn => {
@@ -1700,13 +1743,25 @@ loadClientId();
 
 // Handle OAuth redirect token on page load — deferred until gapi.js is ready
 function initAfterGapi() {
+  // handleOAuthRedirect now also restores a still-valid token from sessionStorage,
+  // so this runs on every page load that has a usable token — not just fresh redirects.
   if (handleOAuthRedirect()) {
     gapi.load('client', async () => {
-      await gapi.client.init({});
-      await gapi.client.load('https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest');
-      gapi.client.setToken({ access_token: accessToken });
-      await loadUserInfo();
-      showApp();
+      try {
+        await gapi.client.init({});
+        await gapi.client.load('https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest');
+        gapi.client.setToken({ access_token: accessToken });
+        await loadUserInfo();
+        showApp();
+      } catch(e) {
+        console.error('gapi init failed:', e);
+        // If init fails, clear stored token and stay on auth screen
+        try {
+          sessionStorage.removeItem('ic_access_token');
+          sessionStorage.removeItem('ic_token_expiry');
+        } catch(_) {}
+        accessToken = null;
+      }
     });
   }
 }
