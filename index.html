@@ -1289,6 +1289,7 @@ async function fetchEmails() {
 
     swipeQueue = [...emails];
     applyRulesToEmails();
+    sortQueue();
     renderSwipeStack();
     renderEmailList();
     setStatus(false, `${emails.length} emails loaded.`);
@@ -1817,14 +1818,19 @@ window.addEventListener('keydown', e => {
 // ── Bulk UI ────────────────────────────────────────────────
 function setSortMode(mode) {
   sortMode = mode;
-  renderEmailList();
+  sortQueue();            // reorder remaining swipe cards
+  renderSwipeStack();     // refresh swipe view
+  renderEmailList();      // refresh bulk list
 }
 
-function sortedEmails() {
-  // 'priority' keeps the order emails were fetched in (important-first),
-  // so the original ordering is never lost. Other modes return a sorted copy.
-  if (sortMode === 'priority') return emails;
-
+// Comparator shared by the bulk list and the swipe stack so both stay in sync.
+function emailComparator(mode) {
+  if (mode === 'priority') {
+    // Restore the original fetched (important-first) order. `emails` keeps that
+    // order, so its index is the priority key for whatever items remain.
+    const order = new Map(emails.map((e, i) => [e.id, i]));
+    return (a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0);
+  }
   const senderKey = e => {
     const { name, addr } = parseSender(e.sender || '');
     return (name || addr || '').toLowerCase();
@@ -1833,19 +1839,32 @@ function sortedEmails() {
     const t = new Date(e.date).getTime();
     return isNaN(t) ? null : t;
   };
-
-  return [...emails].sort((a, b) => {
-    if (sortMode === 'sender-az' || sortMode === 'sender-za') {
+  if (mode === 'sender-az' || mode === 'sender-za') {
+    return (a, b) => {
       const cmp = senderKey(a).localeCompare(senderKey(b));
-      return sortMode === 'sender-az' ? cmp : -cmp;
-    }
-    // date-desc (newest first) or date-asc (oldest first)
+      return mode === 'sender-az' ? cmp : -cmp;
+    };
+  }
+  // date-desc (newest first) or date-asc (oldest first)
+  return (a, b) => {
     const da = dateVal(a), db = dateVal(b);
     if (da === null && db === null) return 0;
     if (da === null) return 1;   // unparseable dates sink to the bottom
     if (db === null) return -1;
-    return sortMode === 'date-asc' ? da - db : db - da;
-  });
+    return mode === 'date-asc' ? da - db : db - da;
+  };
+}
+
+function sortedEmails() {
+  // 'priority' keeps the fetched order; other modes return a sorted copy.
+  if (sortMode === 'priority') return emails;
+  return [...emails].sort(emailComparator(sortMode));
+}
+
+// Reorders the remaining swipe cards in place (preserves current/undo behavior
+// between sort changes since it only runs when the sort mode changes or on load).
+function sortQueue() {
+  swipeQueue.sort(emailComparator(sortMode));
 }
 
 function renderEmailList() {
