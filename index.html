@@ -771,6 +771,26 @@ html, body {
 .btn-sm.danger:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-sm.danger:not(:disabled):active { background: var(--red-light); }
 
+.sort-select {
+  height: 32px;
+  padding: 0 26px 0 10px;
+  border-radius: 8px;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 0.5px solid var(--border-mid);
+  background-color: var(--surface-2);
+  color: var(--text-1);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235F6368' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+.sort-select:focus { border-color: var(--red); }
+
 .email-list-inner { max-height: 380px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
 .email-item {
@@ -975,6 +995,13 @@ html, body {
               <span class="sel-count" id="sel-count-label">0 selected</span>
             </div>
             <div class="toolbar-right">
+              <select class="sort-select" id="sort-select" onchange="setSortMode(this.value)" aria-label="Sort emails">
+                <option value="priority">Priority</option>
+                <option value="date-desc">Newest first</option>
+                <option value="date-asc">Oldest first</option>
+                <option value="sender-az">Sender A–Z</option>
+                <option value="sender-za">Sender Z–A</option>
+              </select>
               <button class="btn-sm" onclick="fetchEmails()">Load (200)</button>
               <button class="btn-sm danger" id="mark-read-btn" onclick="bulkMarkRead()" disabled>Mark read</button>
             </div>
@@ -1045,6 +1072,7 @@ let selectedIds = new Set();
 let activeTab = 'swipe';
 let swipeMode = 'triage';
 let currentEmail = null;
+let sortMode = 'priority';
 
 // ── Colour palette for avatars ─────────────────────────────
 const AVATAR_COLORS = ['#EA4335','#1A73E8','#34A853','#FBBC04','#9334E6','#E52592','#1E8E3E','#D93025'];
@@ -1787,6 +1815,39 @@ window.addEventListener('keydown', e => {
 });
 
 // ── Bulk UI ────────────────────────────────────────────────
+function setSortMode(mode) {
+  sortMode = mode;
+  renderEmailList();
+}
+
+function sortedEmails() {
+  // 'priority' keeps the order emails were fetched in (important-first),
+  // so the original ordering is never lost. Other modes return a sorted copy.
+  if (sortMode === 'priority') return emails;
+
+  const senderKey = e => {
+    const { name, addr } = parseSender(e.sender || '');
+    return (name || addr || '').toLowerCase();
+  };
+  const dateVal = e => {
+    const t = new Date(e.date).getTime();
+    return isNaN(t) ? null : t;
+  };
+
+  return [...emails].sort((a, b) => {
+    if (sortMode === 'sender-az' || sortMode === 'sender-za') {
+      const cmp = senderKey(a).localeCompare(senderKey(b));
+      return sortMode === 'sender-az' ? cmp : -cmp;
+    }
+    // date-desc (newest first) or date-asc (oldest first)
+    const da = dateVal(a), db = dateVal(b);
+    if (da === null && db === null) return 0;
+    if (da === null) return 1;   // unparseable dates sink to the bottom
+    if (db === null) return -1;
+    return sortMode === 'date-asc' ? da - db : db - da;
+  });
+}
+
 function renderEmailList() {
   const el = document.getElementById('email-list-el');
   if (!emails.length) {
@@ -1794,7 +1855,7 @@ function renderEmailList() {
     updateBulkToolbar();
     return;
   }
-  el.innerHTML = emails.map(e => {
+  el.innerHTML = sortedEmails().map(e => {
     const auto = matchesRules(e);
     const checked = selectedIds.has(e.id);
     return `
