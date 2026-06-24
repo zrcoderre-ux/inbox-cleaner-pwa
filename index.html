@@ -176,6 +176,22 @@ html, body {
 
 .nav-btn.active .nav-indicator { opacity: 1; }
 
+.nav-badge {
+  position: absolute;
+  top: 7px;
+  left: calc(50% + 9px);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--red);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+
 /* ── Auth Screen ──────────────────────────────────────────── */
 #auth-screen {
   justify-content: center;
@@ -287,6 +303,30 @@ html, body {
 }
 
 .swipe-toolbar .fetch-btn:active { background: var(--surface-3); }
+
+/* Kept-unread status bar */
+.kept-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 4px;
+  font-size: 12px;
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+.kept-bar .kept-msg { flex: 1; min-width: 0; }
+.kept-bar button {
+  background: none;
+  border: none;
+  color: var(--red);
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 2px 4px;
+  flex-shrink: 0;
+}
+.kept-bar button:active { opacity: 0.6; }
 
 /* Card stack area */
 .card-stack-area {
@@ -631,6 +671,42 @@ html, body {
   -webkit-overflow-scrolling: touch;
 }
 
+/* When the reader carries a Mark-as-read footer (Keep tab), the body itself
+   scrolls and the email content sizes to its height, so the button sits below
+   the full email and is only reachable after scrolling to the bottom. */
+.reader-body.with-footer {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.reader-body.with-footer iframe { height: auto; display: block; }
+.reader-body.with-footer .reader-text { height: auto; overflow: visible; }
+
+.reader-footer {
+  padding: 18px 18px calc(24px + env(safe-area-inset-bottom, 0px));
+  border-top: 0.5px solid var(--border-mid);
+  background: var(--surface, #fff);
+}
+.reader-footer-hint {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-3);
+  margin-bottom: 10px;
+}
+.reader-mark-read {
+  width: 100%;
+  height: 46px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--red);
+  color: #fff;
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.reader-mark-read:active { opacity: 0.85; transform: scale(0.99); }
+.reader-mark-read:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .action-btn.undo-btn { border-color: var(--border-mid); color: var(--text-2); width: 44px; height: 44px; }
 .action-btn.undo-btn svg { width: 20px; height: 20px; }
 .action-btn.undo-btn:active { background: var(--surface-3); transform: scale(0.9); }
@@ -642,6 +718,28 @@ html, body {
   padding: 0 16px 12px;
   flex-shrink: 0;
 }
+
+/* ── Keep Screen ──────────────────────────────────────────── */
+#keep-screen { flex-direction: column; overflow: hidden; }
+
+.keep-scroll {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.keep-intro {
+  font-size: 12px;
+  color: var(--text-2);
+  padding: 2px 6px;
+  line-height: 1.6;
+}
+
+.keep-item .email-item-subject { white-space: normal; }
 
 /* ── Bulk Screen ──────────────────────────────────────────── */
 #bulk-screen {
@@ -926,6 +1024,12 @@ html, body {
         </button>
       </div>
 
+      <div class="kept-bar" id="kept-bar" style="display:none;">
+        <span class="kept-msg" id="kept-bar-msg"></span>
+        <button onclick="reviewKept()">Review</button>
+        <button onclick="clearKept()">Reset</button>
+      </div>
+
       <div class="card-stack-area" id="card-stack-area">
         <div class="empty-swipe" id="swipe-empty">
           <div class="empty-icon">📭</div>
@@ -961,6 +1065,19 @@ html, body {
         ← mark as read &nbsp;·&nbsp; keep unread →
       </div>
 
+    </div>
+
+    <!-- KEEP SCREEN -->
+    <div id="keep-screen" class="screen" style="display:none;">
+      <div class="keep-scroll" id="keep-scroll">
+        <p class="keep-intro">Emails you swiped <strong>Keep</strong>. Tap one to read — the <strong>Mark as read</strong> button is at the very bottom of each email, so it won't be tapped by accident.</p>
+        <div class="section-card">
+          <div class="email-list-inner" id="keep-list-el" style="max-height:none;">
+            <div class="list-empty">No kept emails yet.</div>
+          </div>
+        </div>
+        <div style="height:12px;flex-shrink:0;"></div>
+      </div>
     </div>
 
     <!-- BULK SCREEN -->
@@ -1029,6 +1146,14 @@ html, body {
         </svg>
         Swipe
       </button>
+      <button class="nav-btn" id="nav-keep" onclick="switchTab('keep')">
+        <div class="nav-indicator"></div>
+        <span class="nav-badge" id="keep-badge" style="display:none;"></span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+        </svg>
+        Keep
+      </button>
       <button class="nav-btn" id="nav-bulk" onclick="switchTab('bulk')">
         <div class="nav-indicator"></div>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
@@ -1073,6 +1198,9 @@ let activeTab = 'swipe';
 let swipeMode = 'triage';
 let currentEmail = null;
 let sortMode = 'priority';
+// IDs of emails the user chose to keep unread. Persisted so they aren't
+// re-surfaced in the swipe deck on every load.
+let keptIds = new Set();
 
 // ── Colour palette for avatars ─────────────────────────────
 const AVATAR_COLORS = ['#EA4335','#1A73E8','#34A853','#FBBC04','#9334E6','#E52592','#1E8E3E','#D93025'];
@@ -1090,6 +1218,21 @@ function loadRules() {
 
 function saveRules() {
   localStorage.setItem('ic_rules', JSON.stringify(rules));
+}
+
+// ── Kept-unread tracking ───────────────────────────────────
+function loadKept() {
+  try { keptIds = new Set(JSON.parse(localStorage.getItem('ic_kept') || '[]')); }
+  catch(e) { keptIds = new Set(); }
+}
+
+function saveKept() {
+  localStorage.setItem('ic_kept', JSON.stringify([...keptIds]));
+}
+
+// Once an email is read (or blocked) there's no reason to remember it as kept.
+function forgetKept(id) {
+  if (keptIds.delete(id)) saveKept();
 }
 
 function loadClientId() {
@@ -1188,15 +1331,19 @@ function signOut() {
   document.getElementById('main-wrapper').style.display = 'none';
   renderSwipeStack();
   renderEmailList();
+  renderKeepList();
 }
 
 // ── Tab switching ──────────────────────────────────────────
 function switchTab(tab) {
   activeTab = tab;
   document.getElementById('swipe-screen').style.display = tab === 'swipe' ? 'flex' : 'none';
+  document.getElementById('keep-screen').style.display = tab === 'keep' ? 'flex' : 'none';
   document.getElementById('bulk-screen').style.display = tab === 'bulk' ? 'flex' : 'none';
   document.getElementById('nav-swipe').classList.toggle('active', tab === 'swipe');
+  document.getElementById('nav-keep').classList.toggle('active', tab === 'keep');
   document.getElementById('nav-bulk').classList.toggle('active', tab === 'bulk');
+  if (tab === 'keep') renderKeepList();
 }
 
 // ── Fetch emails ───────────────────────────────────────────
@@ -1287,11 +1434,15 @@ async function fetchEmails() {
       };
     });
 
-    swipeQueue = [...emails];
+    // Hide emails the user previously kept unread so they don't have to
+    // re-triage them. They stay in `emails` (still visible in the bulk list
+    // and reachable via "Review") but are dropped from the swipe deck.
+    swipeQueue = emails.filter(e => !keptIds.has(e.id));
     applyRulesToEmails();
     sortQueue();
     renderSwipeStack();
     renderEmailList();
+    renderKeepList();
     setStatus(false, `${emails.length} emails loaded.`);
   } catch(e) {
     console.error('fetchEmails error:', e);
@@ -1425,6 +1576,7 @@ function renderSwipeStack() {
   area.querySelectorAll('.swipe-card').forEach(c => c.remove());
 
   updateSwipeCounter();
+  updateKeptBar();
 
   if (!swipeQueue.length) {
     empty.style.display = '';
@@ -1586,9 +1738,13 @@ async function swipeCard(direction) {
       } catch(e) { toast('Error marking as read'); }
       emails = emails.filter(e => e.id !== email.id);
       selectedIds.delete(email.id);
+      forgetKept(email.id);
     } else {
       card.classList.add('fly-right');
       swipeHistory.push({ email, action: 'skip' });
+      // Remember this choice so the email isn't re-surfaced on future loads.
+      keptIds.add(email.id);
+      saveKept();
       toast('Kept unread');
     }
   } else {
@@ -1611,6 +1767,7 @@ async function swipeCard(direction) {
       } catch(e) { toast('Error marking as read'); }
       emails = emails.filter(e => e.id !== email.id);
       selectedIds.delete(email.id);
+      forgetKept(email.id);
     }
   }
 
@@ -1652,8 +1809,9 @@ async function blockSender(email) {
     // 3. Remove blocked emails from local state
     emails = emails.filter(e => e.id !== email.id && !msgs.find(m => m.id === e.id));
     swipeQueue = swipeQueue.filter(e => e.id !== email.id && !msgs.find(m => m.id === e.id));
-    msgs.forEach(m => selectedIds.delete(m.id));
+    msgs.forEach(m => { selectedIds.delete(m.id); forgetKept(m.id); });
     selectedIds.delete(email.id);
+    forgetKept(email.id);
 
     setStatus(false);
     toast(`Blocked ${addr} (${allIds.length} emails moved to spam)`);
@@ -1675,6 +1833,10 @@ async function undoSwipe() {
       });
       emails.push(last.email);
     } catch(e) {}
+    forgetKept(last.email.id);
+  } else if (last.action === 'skip') {
+    // The email was kept unread — undoing means we no longer remember it.
+    forgetKept(last.email.id);
   } else if (last.action === 'block') {
     // Can only restore the one card to the queue; spam emails stay spammed
     toast('Block cannot be fully undone — email restored to queue only');
@@ -1690,6 +1852,84 @@ async function undoSwipe() {
 function updateSwipeCounter() {
   document.getElementById('swipe-counter').textContent =
     swipeQueue.length === 0 ? 'All done' : `${swipeQueue.length} remaining`;
+}
+
+// Shows a bar when loaded emails are being hidden from the deck because they
+// were previously kept unread, with options to review or forget them.
+function updateKeptBar() {
+  const bar = document.getElementById('kept-bar');
+  const msg = document.getElementById('kept-bar-msg');
+  if (!bar) return;
+  const inDeck = new Set(swipeQueue.map(e => e.id));
+  const hidden = emails.filter(e => keptIds.has(e.id) && !inDeck.has(e.id)).length;
+  if (hidden > 0) {
+    bar.style.display = 'flex';
+    msg.textContent = `${hidden} kept unread, in the Keep tab`;
+  } else {
+    bar.style.display = 'none';
+  }
+  updateKeepBadge();
+}
+
+// Bring previously-kept emails back into the deck for this session (without
+// forgetting them — re-keeping leaves them hidden again next load).
+function reviewKept() {
+  swipeQueue = [...emails];
+  sortQueue();
+  renderSwipeStack();
+  toast('Showing kept emails');
+}
+
+// Permanently forget the kept list so those emails reappear on every load.
+function clearKept() {
+  if (!keptIds.size) { toast('No kept emails'); return; }
+  if (!confirm('Forget all kept-unread emails? They will show up in the deck again.')) return;
+  keptIds.clear();
+  saveKept();
+  swipeQueue = [...emails];
+  sortQueue();
+  renderSwipeStack();
+  renderKeepList();
+  toast('Kept list cleared');
+}
+
+// ── Keep tab ───────────────────────────────────────────────
+function renderKeepList() {
+  const el = document.getElementById('keep-list-el');
+  if (!el) return;
+  if (!emails.length) {
+    el.innerHTML = '<div class="list-empty">Load your emails from the Swipe tab,<br>then the ones you keep will appear here.</div>';
+    updateKeepBadge();
+    return;
+  }
+  const kept = emails.filter(e => keptIds.has(e.id)).sort(emailComparator('date-desc'));
+  if (!kept.length) {
+    el.innerHTML = '<div class="list-empty">No kept emails yet.<br>Swipe right on an email to keep it for later.</div>';
+    updateKeepBadge();
+    return;
+  }
+  el.innerHTML = kept.map(e => `
+    <div class="email-item keep-item" onclick="openKept('${e.id}')">
+      <div class="email-item-meta">
+        <div class="email-item-sender">${esc(e.sender)}</div>
+        <div class="email-item-subject">${esc(e.subject)}</div>
+      </div>
+      <div class="email-item-time">${formatDate(e.date)}</div>
+    </div>
+  `).join('');
+  updateKeepBadge();
+}
+
+function updateKeepBadge() {
+  const badge = document.getElementById('keep-badge');
+  if (!badge) return;
+  const n = emails.filter(e => keptIds.has(e.id)).length;
+  if (n > 0) {
+    badge.textContent = n > 99 ? '99+' : n;
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
 }
 
 function setSwipeMode(mode) {
@@ -1749,27 +1989,51 @@ async function fetchEmailBodyRich(email) {
   }
 }
 
-async function openInGmail() {
+// The email currently shown in the reader overlay.
+let readerEmail = null;
+
+// Opens the focused reader from the swipe deck (no Mark-as-read footer).
+function openInGmail() {
   if (!currentEmail) return;
+  openReader(currentEmail, {});
+}
+
+// Renders an email in the full-screen reader. When opts.markRead is set, a
+// "Mark as read" button is placed at the bottom of the scrolled content so it
+// can only be reached after reading through the whole email.
+async function openReader(email, opts = {}) {
+  if (!email) return;
+  readerEmail = email;
+  const withFooter = !!opts.markRead;
   const overlay = document.getElementById('reader-overlay');
   const subjectEl = document.getElementById('reader-subject');
   const senderEl = document.getElementById('reader-sender');
   const bodyEl = document.getElementById('reader-body');
 
   // Populate header immediately
-  subjectEl.textContent = currentEmail.subject || '(no subject)';
-  senderEl.textContent = currentEmail.sender || '';
+  subjectEl.textContent = email.subject || '(no subject)';
+  senderEl.textContent = email.sender || '';
 
   // Show overlay with a loading state
+  bodyEl.classList.toggle('with-footer', withFooter);
   bodyEl.innerHTML = '<div class="reader-text" style="color:var(--text-3);">Loading…</div>';
   overlay.classList.add('open');
   document.body.style.overflow = 'hidden';
 
   // Make sure we have rich body content
-  await fetchEmailBodyRich(currentEmail);
+  await fetchEmailBodyRich(email);
+
+  // The user may have closed the reader or opened another email while awaiting.
+  if (readerEmail !== email || !overlay.classList.contains('open')) return;
+
+  const footerHTML = withFooter ? `
+    <div class="reader-footer">
+      <div class="reader-footer-hint">Done reading?</div>
+      <button class="reader-mark-read" onclick="markReadFromReader()">Mark as read</button>
+    </div>` : '';
 
   // Prefer HTML rendering in a sandboxed iframe; fall back to plain text
-  if (currentEmail.bodyHtml) {
+  if (email.bodyHtml) {
     const wrapped = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <base target="_blank">
@@ -1781,16 +2045,64 @@ async function openInGmail() {
   pre,code{white-space:pre-wrap;word-wrap:break-word;}
   blockquote{border-left:3px solid #dadce0;margin:0;padding-left:12px;color:#5f6368;}
 </style></head>
-<body>${currentEmail.bodyHtml}</body></html>`;
+<body>${email.bodyHtml}</body></html>`;
     const iframe = document.createElement('iframe');
-    iframe.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
+    // allow-same-origin (without allow-scripts) lets us measure content height
+    // so the footer can sit below the full email; scripts in the email still
+    // never run.
+    iframe.setAttribute('sandbox', withFooter
+      ? 'allow-popups allow-popups-to-escape-sandbox allow-same-origin'
+      : 'allow-popups allow-popups-to-escape-sandbox');
+    if (withFooter) {
+      iframe.addEventListener('load', () => {
+        try {
+          const h = iframe.contentDocument.body.scrollHeight;
+          iframe.style.height = (h + 24) + 'px';
+        } catch(e) {
+          iframe.style.height = '70vh';
+        }
+      });
+    }
     iframe.srcdoc = wrapped;
     bodyEl.innerHTML = '';
     bodyEl.appendChild(iframe);
+    if (footerHTML) bodyEl.insertAdjacentHTML('beforeend', footerHTML);
   } else {
-    bodyEl.innerHTML = `<div class="reader-text"></div>`;
-    bodyEl.querySelector('.reader-text').textContent = currentEmail.bodyText || '(no content)';
+    bodyEl.innerHTML = `<div class="reader-text"></div>` + footerHTML;
+    bodyEl.querySelector('.reader-text').textContent = email.bodyText || '(no content)';
   }
+}
+
+// Opens a kept email from the Keep tab, with the bottom Mark-as-read button.
+function openKept(id) {
+  const email = emails.find(e => e.id === id);
+  if (email) openReader(email, { markRead: true });
+}
+
+async function markReadFromReader() {
+  if (!readerEmail) return;
+  const email = readerEmail;
+  const btn = document.querySelector('.reader-mark-read');
+  if (btn) { btn.disabled = true; btn.textContent = 'Marking…'; }
+  try {
+    await gapi.client.gmail.users.messages.modify({
+      userId: 'me', id: email.id,
+      resource: { removeLabelIds: ['UNREAD'] }
+    });
+  } catch(e) {
+    toast('Error marking as read');
+    if (btn) { btn.disabled = false; btn.textContent = 'Mark as read'; }
+    return;
+  }
+  emails = emails.filter(e => e.id !== email.id);
+  swipeQueue = swipeQueue.filter(e => e.id !== email.id);
+  selectedIds.delete(email.id);
+  forgetKept(email.id);
+  closeReader();
+  toast('Marked as read');
+  renderKeepList();
+  renderSwipeStack();
+  renderEmailList();
 }
 
 function closeReader() {
@@ -1798,7 +2110,10 @@ function closeReader() {
   overlay.classList.remove('open');
   document.body.style.overflow = '';
   // Clear iframe so audio/video doesn't keep playing if any was running
-  document.getElementById('reader-body').innerHTML = '';
+  const bodyEl = document.getElementById('reader-body');
+  bodyEl.classList.remove('with-footer');
+  bodyEl.innerHTML = '';
+  readerEmail = null;
 }
 
 // Keyboard shortcuts
@@ -1928,6 +2243,7 @@ async function bulkMarkRead() {
     }
 
     const done = selectedIds.size;
+    selectedIds.forEach(id => forgetKept(id));
     emails = emails.filter(e => !selectedIds.has(e.id));
     swipeQueue = swipeQueue.filter(e => !selectedIds.has(e.id));
     selectedIds.clear();
@@ -2009,6 +2325,7 @@ if ('serviceWorker' in navigator) {
 
 // ── Init ───────────────────────────────────────────────────
 loadRules();
+loadKept();
 loadClientId();
 
 // Handle OAuth redirect token on page load — deferred until gapi.js is ready
