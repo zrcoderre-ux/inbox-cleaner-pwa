@@ -288,6 +288,30 @@ html, body {
 
 .swipe-toolbar .fetch-btn:active { background: var(--surface-3); }
 
+/* Kept-unread status bar */
+.kept-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 4px;
+  font-size: 12px;
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+.kept-bar .kept-msg { flex: 1; min-width: 0; }
+.kept-bar button {
+  background: none;
+  border: none;
+  color: var(--red);
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 2px 4px;
+  flex-shrink: 0;
+}
+.kept-bar button:active { opacity: 0.6; }
+
 /* Card stack area */
 .card-stack-area {
   flex: 1;
@@ -926,6 +950,12 @@ html, body {
         </button>
       </div>
 
+      <div class="kept-bar" id="kept-bar" style="display:none;">
+        <span class="kept-msg" id="kept-bar-msg"></span>
+        <button onclick="reviewKept()">Review</button>
+        <button onclick="clearKept()">Reset</button>
+      </div>
+
       <div class="card-stack-area" id="card-stack-area">
         <div class="empty-swipe" id="swipe-empty">
           <div class="empty-icon">📭</div>
@@ -1073,6 +1103,9 @@ let activeTab = 'swipe';
 let swipeMode = 'triage';
 let currentEmail = null;
 let sortMode = 'priority';
+// IDs of emails the user chose to keep unread. Persisted so they aren't
+// re-surfaced in the swipe deck on every load.
+let keptIds = new Set();
 
 // ── Colour palette for avatars ─────────────────────────────
 const AVATAR_COLORS = ['#EA4335','#1A73E8','#34A853','#FBBC04','#9334E6','#E52592','#1E8E3E','#D93025'];
@@ -1090,6 +1123,21 @@ function loadRules() {
 
 function saveRules() {
   localStorage.setItem('ic_rules', JSON.stringify(rules));
+}
+
+// ── Kept-unread tracking ───────────────────────────────────
+function loadKept() {
+  try { keptIds = new Set(JSON.parse(localStorage.getItem('ic_kept') || '[]')); }
+  catch(e) { keptIds = new Set(); }
+}
+
+function saveKept() {
+  localStorage.setItem('ic_kept', JSON.stringify([...keptIds]));
+}
+
+// Once an email is read (or blocked) there's no reason to remember it as kept.
+function forgetKept(id) {
+  if (keptIds.delete(id)) saveKept();
 }
 
 function loadClientId() {
@@ -1287,7 +1335,10 @@ async function fetchEmails() {
       };
     });
 
-    swipeQueue = [...emails];
+    // Hide emails the user previously kept unread so they don't have to
+    // re-triage them. They stay in `emails` (still visible in the bulk list
+    // and reachable via "Review") but are dropped from the swipe deck.
+    swipeQueue = emails.filter(e => !keptIds.has(e.id));
     applyRulesToEmails();
     sortQueue();
     renderSwipeStack();
@@ -1425,6 +1476,7 @@ function renderSwipeStack() {
   area.querySelectorAll('.swipe-card').forEach(c => c.remove());
 
   updateSwipeCounter();
+  updateKeptBar();
 
   if (!swipeQueue.length) {
     empty.style.display = '';
@@ -1586,9 +1638,13 @@ async function swipeCard(direction) {
       } catch(e) { toast('Error marking as read'); }
       emails = emails.filter(e => e.id !== email.id);
       selectedIds.delete(email.id);
+      forgetKept(email.id);
     } else {
       card.classList.add('fly-right');
       swipeHistory.push({ email, action: 'skip' });
+      // Remember this choice so the email isn't re-surfaced on future loads.
+      keptIds.add(email.id);
+      saveKept();
       toast('Kept unread');
     }
   } else {
@@ -1611,6 +1667,7 @@ async function swipeCard(direction) {
       } catch(e) { toast('Error marking as read'); }
       emails = emails.filter(e => e.id !== email.id);
       selectedIds.delete(email.id);
+      forgetKept(email.id);
     }
   }
 
@@ -1652,8 +1709,9 @@ async function blockSender(email) {
     // 3. Remove blocked emails from local state
     emails = emails.filter(e => e.id !== email.id && !msgs.find(m => m.id === e.id));
     swipeQueue = swipeQueue.filter(e => e.id !== email.id && !msgs.find(m => m.id === e.id));
-    msgs.forEach(m => selectedIds.delete(m.id));
+    msgs.forEach(m => { selectedIds.delete(m.id); forgetKept(m.id); });
     selectedIds.delete(email.id);
+    forgetKept(email.id);
 
     setStatus(false);
     toast(`Blocked ${addr} (${allIds.length} emails moved to spam)`);
@@ -1675,6 +1733,10 @@ async function undoSwipe() {
       });
       emails.push(last.email);
     } catch(e) {}
+    forgetKept(last.email.id);
+  } else if (last.action === 'skip') {
+    // The email was kept unread — undoing means we no longer remember it.
+    forgetKept(last.email.id);
   } else if (last.action === 'block') {
     // Can only restore the one card to the queue; spam emails stay spammed
     toast('Block cannot be fully undone — email restored to queue only');
@@ -1690,6 +1752,43 @@ async function undoSwipe() {
 function updateSwipeCounter() {
   document.getElementById('swipe-counter').textContent =
     swipeQueue.length === 0 ? 'All done' : `${swipeQueue.length} remaining`;
+}
+
+// Shows a bar when loaded emails are being hidden from the deck because they
+// were previously kept unread, with options to review or forget them.
+function updateKeptBar() {
+  const bar = document.getElementById('kept-bar');
+  const msg = document.getElementById('kept-bar-msg');
+  if (!bar) return;
+  const inDeck = new Set(swipeQueue.map(e => e.id));
+  const hidden = emails.filter(e => keptIds.has(e.id) && !inDeck.has(e.id)).length;
+  if (hidden > 0) {
+    bar.style.display = 'flex';
+    msg.textContent = `${hidden} kept unread, hidden from the deck`;
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+// Bring previously-kept emails back into the deck for this session (without
+// forgetting them — re-keeping leaves them hidden again next load).
+function reviewKept() {
+  swipeQueue = [...emails];
+  sortQueue();
+  renderSwipeStack();
+  toast('Showing kept emails');
+}
+
+// Permanently forget the kept list so those emails reappear on every load.
+function clearKept() {
+  if (!keptIds.size) { toast('No kept emails'); return; }
+  if (!confirm('Forget all kept-unread emails? They will show up in the deck again.')) return;
+  keptIds.clear();
+  saveKept();
+  swipeQueue = [...emails];
+  sortQueue();
+  renderSwipeStack();
+  toast('Kept list cleared');
 }
 
 function setSwipeMode(mode) {
@@ -1928,6 +2027,7 @@ async function bulkMarkRead() {
     }
 
     const done = selectedIds.size;
+    selectedIds.forEach(id => forgetKept(id));
     emails = emails.filter(e => !selectedIds.has(e.id));
     swipeQueue = swipeQueue.filter(e => !selectedIds.has(e.id));
     selectedIds.clear();
@@ -2009,6 +2109,7 @@ if ('serviceWorker' in navigator) {
 
 // ── Init ───────────────────────────────────────────────────
 loadRules();
+loadKept();
 loadClientId();
 
 // Handle OAuth redirect token on page load — deferred until gapi.js is ready
