@@ -2626,6 +2626,8 @@ async function fetchEmailBodyRich(email) {
 
 // The email currently shown in the reader overlay.
 let readerEmail = null;
+// Observes the reader iframe's content so we can keep it sized as it reflows.
+let readerRO = null;
 
 // Gets the reader body, preferring a fresh fetch but falling back to the
 // offline cache when there's no connection (or the fetch yields nothing).
@@ -2678,6 +2680,7 @@ function openInGmail() {
 async function openReader(email, opts = {}) {
   if (!email) return;
   readerEmail = email;
+  if (readerRO) { readerRO.disconnect(); readerRO = null; }
   const withFooter = !!opts.markRead;
   const overlay = document.getElementById('reader-overlay');
   const subjectEl = document.getElementById('reader-subject');
@@ -2738,12 +2741,33 @@ async function openReader(email, opts = {}) {
     };
     iframe.addEventListener('load', () => {
       if (withFooter) {
+        // Size the iframe to its content — and keep resizing as images load
+        // and the layout reflows, so the email is never cut off short.
+        const sizeToContent = () => {
+          if (readerEmail !== email) return;
+          try { iframe.style.height = (iframe.contentDocument.body.scrollHeight + 24) + 'px'; }
+          catch(e) { iframe.style.height = '90vh'; }
+        };
+        sizeToContent();
         try {
-          const h = iframe.contentDocument.body.scrollHeight;
-          iframe.style.height = (h + 24) + 'px';
-        } catch(e) {
-          iframe.style.height = '70vh';
-        }
+          const doc = iframe.contentDocument;
+          // Re-measure when each image finishes loading.
+          Array.from(doc.images || []).forEach(img => {
+            if (!img.complete) {
+              img.addEventListener('load', sizeToContent);
+              img.addEventListener('error', sizeToContent);
+            }
+          });
+          // Re-measure on any further reflow (fonts, late layout, etc.).
+          if (window.ResizeObserver) {
+            if (readerRO) readerRO.disconnect();
+            readerRO = new ResizeObserver(sizeToContent);
+            readerRO.observe(doc.body);
+          }
+        } catch(e) {}
+        // Belt-and-suspenders re-measures.
+        setTimeout(sizeToContent, 400);
+        setTimeout(sizeToContent, 1500);
       }
       addFooter();
     });
@@ -2806,6 +2830,7 @@ function closeReader() {
   const overlay = document.getElementById('reader-overlay');
   overlay.classList.remove('open');
   document.body.style.overflow = '';
+  if (readerRO) { readerRO.disconnect(); readerRO = null; }
   // Clear iframe so audio/video doesn't keep playing if any was running
   const bodyEl = document.getElementById('reader-body');
   bodyEl.classList.remove('with-footer');
