@@ -1224,6 +1224,10 @@ const REFRESH_INTERVAL_MS = 60000;
 // the user closes an open email.
 let offlineMode = false;
 let pendingReload = false;
+// Cross-device sync: kept emails are tagged with this Gmail label so every
+// device on the same account shares one keep list. The label is canonical.
+const KEEP_LABEL_NAME = 'Keep';
+let keepLabelId = null;
 
 // ── Colour palette for avatars ─────────────────────────────
 const AVATAR_COLORS = ['#EA4335','#1A73E8','#34A853','#FBBC04','#9334E6','#E52592','#1E8E3E','#D93025'];
@@ -1254,10 +1258,12 @@ function saveKept() {
 }
 
 // Once an email is read (or blocked) there's no reason to remember it as kept.
+// Also drops the Gmail label so the un-keep propagates to other devices.
 function forgetKept(id) {
   if (keptIds.delete(id)) {
     saveKept();
     idbDelete(id).catch(() => {});
+    removeKeepLabel(id);
   }
 }
 
@@ -1367,16 +1373,86 @@ async function inlineImages(html) {
   } catch(e) { return html; }
 }
 
-// Backfills the cache for kept emails that aren't stored yet (e.g. kept before
-// this feature existed, or kept while offline). Runs quietly in the background.
+// Backfills the cache for any kept email whose content isn't stored yet —
+// including ones kept on another device that aren't in this load's inbox view.
+// Fetches metadata when needed so they can be displayed and read offline.
 async function backfillKeptCache() {
-  for (const e of emails) {
-    if (!keptIds.has(e.id)) continue;
+  for (const id of keptIds) {
     try {
-      if (await idbGet(e.id)) continue;
-      await cacheKeptEmail(e);
+      if (await idbGet(id)) continue;
+      let email = emails.find(e => e.id === id);
+      if (!email) {
+        const res = await gapi.client.gmail.users.messages.get({
+          userId: 'me', id, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date']
+        });
+        const h = {};
+        (res.result.payload.headers || []).forEach(x => { h[x.name] = x.value; });
+        email = { id, sender: h['From'] || '', subject: h['Subject'] || '(no subject)', date: h['Date'] || '', bodyText: null, bodyLoaded: false };
+      }
+      await cacheKeptEmail(email);
     } catch(_) {}
   }
+  renderKeepList();
+}
+
+// ── Cross-device sync (Gmail label) ────────────────────────
+async function ensureKeepLabel() {
+  if (keepLabelId) return keepLabelId;
+  const res = await gapi.client.gmail.users.labels.list({ userId: 'me' });
+  const found = (res.result.labels || []).find(l => l.name === KEEP_LABEL_NAME);
+  if (found) { keepLabelId = found.id; return keepLabelId; }
+  const created = await gapi.client.gmail.users.labels.create({
+    userId: 'me',
+    resource: { name: KEEP_LABEL_NAME, labelListVisibility: 'labelShow', messageListVisibility: 'show' }
+  });
+  keepLabelId = created.result.id;
+  return keepLabelId;
+}
+
+function addKeepLabel(id) {
+  if (!keepLabelId || typeof gapi === 'undefined' || navigator.onLine === false) return Promise.resolve();
+  return gapi.client.gmail.users.messages.modify({
+    userId: 'me', id, resource: { addLabelIds: [keepLabelId] }
+  }).then(() => {}, () => {});
+}
+
+function removeKeepLabel(id) {
+  if (!keepLabelId || typeof gapi === 'undefined' || navigator.onLine === false) return Promise.resolve();
+  return gapi.client.gmail.users.messages.modify({
+    userId: 'me', id, resource: { removeLabelIds: [keepLabelId] }
+  }).then(() => {}, () => {});
+}
+
+async function listKeepLabeledIds() {
+  const ids = [];
+  let pageToken;
+  do {
+    const res = await gapi.client.gmail.users.messages.list({
+      userId: 'me', labelIds: [keepLabelId], maxResults: 200, pageToken
+    });
+    (res.result.messages || []).forEach(m => ids.push(m.id));
+    pageToken = res.result.nextPageToken;
+  } while (pageToken && ids.length < 1000);
+  return ids;
+}
+
+// Reconciles the local kept set with the Gmail label. On the first run we push
+// any pre-existing local keeps up to the label so nothing is lost; after that
+// the label is canonical, so un-keeps made on other devices propagate here.
+async function syncKeptFromLabel() {
+  await ensureKeepLabel();
+  const migrated = localStorage.getItem('ic_keep_migrated') === '1';
+  if (!migrated) {
+    for (const id of keptIds) { await addKeepLabel(id); }
+  }
+  const serverIds = await listKeepLabeledIds();
+  if (migrated) {
+    keptIds = new Set(serverIds);
+  } else {
+    serverIds.forEach(id => keptIds.add(id));
+    localStorage.setItem('ic_keep_migrated', '1');
+  }
+  saveKept();
 }
 
 // Resolves the client ID, preferring the hardcoded constant over the saved one.
@@ -1603,6 +1679,10 @@ async function fetchEmails() {
       setTimeout(() => signIn(), 1500);
       return;
     }
+    // Reconcile the kept set with the Gmail label so it matches other devices
+    // before we decide what to hide from the deck.
+    try { await syncKeptFromLabel(); } catch(_) {}
+
     const MAX_TOTAL = 200;
     const { messages, importantIds } = await listUnreadMessages(MAX_TOTAL);
 
@@ -1611,6 +1691,7 @@ async function fetchEmails() {
       renderSwipeStack();
       renderEmailList();
       renderKeepList();
+      backfillKeptCache();
       return;
     }
 
@@ -1989,7 +2070,9 @@ async function swipeCard(direction) {
       // Remember this choice so the email isn't re-surfaced on future loads.
       keptIds.add(email.id);
       saveKept();
-      // Cache its content in the background so it's readable offline later.
+      // Tag it in Gmail so the keep syncs across devices, and cache its
+      // content locally so it's readable offline later.
+      addKeepLabel(email.id);
       cacheKeptEmail(email);
       toast('Kept unread');
     }
