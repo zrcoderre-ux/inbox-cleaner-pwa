@@ -824,6 +824,18 @@ html, body {
   border-bottom: 0.5px solid var(--border);
 }
 
+/* ── Settings ─────────────────────────────────────────────── */
+.setting-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+}
+.setting-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.setting-title { font-size: 13px; font-weight: 500; color: var(--text-1); }
+.setting-desc { font-size: 12px; color: var(--text-2); line-height: 1.5; }
+.setting-row input[type="checkbox"] { margin-top: 2px; flex-shrink: 0; width: 18px; height: 18px; accent-color: var(--red); }
+
 /* ── Bulk Screen ──────────────────────────────────────────── */
 #bulk-screen {
   flex-direction: column;
@@ -1190,6 +1202,23 @@ html, body {
     <div id="bulk-screen" class="screen" style="display:none;">
       <div class="bulk-scroll" id="bulk-scroll">
 
+        <!-- Settings -->
+        <div class="section-card" id="settings-card">
+          <div class="section-card-header" onclick="toggleSection('settings-card')">
+            <h3>Settings</h3>
+            <span class="chevron">▾</span>
+          </div>
+          <div class="section-card-body">
+            <label class="setting-row">
+              <span class="setting-text">
+                <span class="setting-title">Mark kept emails as read</span>
+                <span class="setting-desc">Swiping Keep just applies the Keep label (no longer keeps them unread). They still appear in the Keep tab.</span>
+              </span>
+              <input type="checkbox" id="keep-marks-read" onchange="setKeepMarksRead(this.checked)">
+            </label>
+          </div>
+        </div>
+
         <!-- Rules -->
         <div class="section-card" id="rules-card">
           <div class="section-card-header" onclick="toggleSection('rules-card')">
@@ -1312,6 +1341,8 @@ let sortMode = 'priority';
 let keepSortMode = 'date-desc';
 let keepSearch = '';
 let keepOfflineOnly = false;
+// When true, swiping Keep also marks the email read (label only, not unread).
+let keepMarksRead = false;
 // Background queue that caches kept emails for offline reading, most-recent
 // first, with limited concurrency so rapid keeps don't overwhelm the API.
 let cacheQueue = [];
@@ -1682,13 +1713,16 @@ async function sendReadToGmail(id) {
   } catch(e) { return false; }
 }
 
-// Tells Gmail an email is kept (adds the Keep label).
-async function sendKeepToGmail(id) {
+// Tells Gmail an email is kept (adds the Keep label). When alsoRead is set, it
+// also clears UNREAD so the email leaves the unread inbox.
+async function sendKeepToGmail(id, alsoRead) {
   if (!onlineReady()) return false;
   try {
     if (!keepLabelId) await ensureKeepLabel();
     if (!keepLabelId) return false;
-    await gapi.client.gmail.users.messages.modify({ userId: 'me', id, resource: { addLabelIds: [keepLabelId] } });
+    const resource = { addLabelIds: [keepLabelId] };
+    if (alsoRead) resource.removeLabelIds = ['UNREAD'];
+    await gapi.client.gmail.users.messages.modify({ userId: 'me', id, resource });
     return true;
   } catch(e) { return false; }
 }
@@ -1718,7 +1752,7 @@ async function flushOutbox() {
     for (const op of pendingOps) {
       let ok = false;
       if (op.type === 'read') ok = await sendReadToGmail(op.id);
-      else if (op.type === 'keep') ok = await sendKeepToGmail(op.id);
+      else if (op.type === 'keep') ok = await sendKeepToGmail(op.id, !!op.read);
       else if (op.type === 'block') ok = await blockSenderRemote(op.addr);
       else ok = true; // unknown op — drop it
       if (!ok) remaining.push(op);
@@ -2485,9 +2519,10 @@ async function doKeep(email) {
   keptIds.add(email.id);
   saveKept();
   enqueueCache(email, 0);
-  const ok = await sendKeepToGmail(email.id);
-  if (!ok) enqueueOp({ type: 'keep', id: email.id });
-  toast('Kept unread');
+  const alsoRead = keepMarksRead;
+  const ok = await sendKeepToGmail(email.id, alsoRead);
+  if (!ok) enqueueOp({ type: 'keep', id: email.id, read: alsoRead });
+  toast(alsoRead ? 'Kept' : 'Kept unread');
 }
 
 async function doBlock(email) {
@@ -2699,6 +2734,20 @@ function setKeepOfflineOnly(on) {
   renderKeepList();
 }
 
+// Restores the "mark kept as read" setting and reflects it in the toggle.
+function loadKeepMarksRead() {
+  try { keepMarksRead = localStorage.getItem('ic_keep_marks_read') === '1'; }
+  catch(e) { keepMarksRead = false; }
+  const cb = document.getElementById('keep-marks-read');
+  if (cb) cb.checked = keepMarksRead;
+}
+
+function setKeepMarksRead(on) {
+  keepMarksRead = !!on;
+  try { localStorage.setItem('ic_keep_marks_read', on ? '1' : '0'); } catch(e) {}
+  if (swipeMode === 'triage') setSwipeMode('triage'); // refresh the hint text
+}
+
 function setSwipeMode(mode) {
   swipeMode = mode;
   document.getElementById('mode-triage').classList.toggle('active', mode === 'triage');
@@ -2711,9 +2760,9 @@ function setSwipeMode(mode) {
     leftBtn.title = 'Mark as read';
     leftBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
     rightBtn.className = 'action-btn skip-btn';
-    rightBtn.title = 'Keep unread';
+    rightBtn.title = keepMarksRead ? 'Keep' : 'Keep unread';
     rightBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg>`;
-    hint.textContent = '← mark as read · keep unread →';
+    hint.textContent = keepMarksRead ? '← mark as read · keep →' : '← mark as read · keep unread →';
   } else {
     leftBtn.className = 'action-btn block-btn';
     leftBtn.title = 'Block sender';
@@ -3179,8 +3228,10 @@ loadRules();
 loadKept();
 loadKeepSort();
 loadKeepOfflineOnly();
+loadKeepMarksRead();
 loadPendingOps();
 loadClientId();
+setSwipeMode('triage'); // reflect the keep setting in the action labels/hint
 
 // Handle OAuth redirect token on page load — deferred until gapi.js is ready
 function initAfterGapi() {
