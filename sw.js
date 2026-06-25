@@ -1,4 +1,4 @@
-const CACHE_NAME = 'inbox-cleaner-v22';
+const CACHE_NAME = 'inbox-cleaner-v23';
 const ASSETS = [
   '/',
   '/index.html',
@@ -25,9 +25,31 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  // Only cache same-origin requests; pass through Google API calls
-  if (!e.request.url.startsWith(self.location.origin)) return;
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  // Only handle same-origin requests; pass through Google API calls etc.
+  if (!req.url.startsWith(self.location.origin)) return;
+
+  const isHTML = req.mode === 'navigate' ||
+    (req.headers.get('accept') || '').includes('text/html');
+
+  if (isHTML) {
+    // Network-first for the page, so new code shows up as soon as you're
+    // online; fall back to the cached shell when offline.
+    e.respondWith(
+      fetch(req).then(res => {
+        const copy = res.clone();
+        caches.open(CACHE_NAME).then(c => c.put('/', copy)).catch(() => {});
+        return res;
+      }).catch(() =>
+        caches.match(req).then(r => r || caches.match('/') || caches.match('/index.html'))
+      )
+    );
+    return;
+  }
+
+  // Cache-first for everything else (manifest, icons).
   e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request))
+    caches.match(req).then(cached => cached || fetch(req))
   );
 });
