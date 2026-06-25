@@ -765,6 +765,10 @@ html, body {
   flex-direction: column;
   gap: 10px;
 }
+/* Don't let the list card shrink to fit — it has overflow:hidden, which would
+   otherwise let flexbox clip the list (capping visible rows) instead of
+   letting .keep-scroll scroll through all of them. */
+.keep-scroll > .section-card { flex-shrink: 0; }
 
 .keep-intro {
   font-size: 12px;
@@ -831,6 +835,7 @@ html, body {
 .setting-title { font-size: 13px; font-weight: 500; color: var(--text-1); }
 .setting-desc { font-size: 12px; color: var(--text-2); line-height: 1.5; }
 .setting-row input[type="checkbox"] { margin-top: 2px; flex-shrink: 0; width: 18px; height: 18px; accent-color: var(--red); }
+.app-version { margin-top: 12px; font-size: 11px; color: var(--text-3); }
 
 /* ── Bulk Screen ──────────────────────────────────────────── */
 #bulk-screen {
@@ -1212,6 +1217,7 @@ html, body {
               </span>
               <input type="checkbox" id="keep-marks-read" onchange="setKeepMarksRead(this.checked)">
             </label>
+            <div class="app-version" id="app-version"></div>
           </div>
         </div>
 
@@ -1318,6 +1324,7 @@ html, body {
 <script>
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
+const APP_VERSION = 'v26'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3239,6 +3246,8 @@ loadKeepMarksRead();
 loadPendingOps();
 loadClientId();
 setSwipeMode('triage'); // reflect the keep setting in the action labels/hint
+const _ver = document.getElementById('app-version');
+if (_ver) _ver.textContent = 'Version ' + APP_VERSION;
 
 // Handle OAuth redirect token on page load — deferred until gapi.js is ready
 function initAfterGapi() {
