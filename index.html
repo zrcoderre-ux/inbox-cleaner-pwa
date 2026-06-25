@@ -1219,6 +1219,11 @@ let keptIds = new Set();
 let isFetching = false;
 let refreshTimer = null;
 const REFRESH_INTERVAL_MS = 60000;
+// Offline mode: started with no connection, so we skip sign-in and show the
+// locally cached kept emails. pendingReload defers a reconnect reload until
+// the user closes an open email.
+let offlineMode = false;
+let pendingReload = false;
 
 // ── Colour palette for avatars ─────────────────────────────
 const AVATAR_COLORS = ['#EA4335','#1A73E8','#34A853','#FBBC04','#9334E6','#E52592','#1E8E3E','#D93025'];
@@ -1476,6 +1481,16 @@ function showApp() {
   renderKeepList();
 }
 
+// Entered when the app opens with no connection: skip Google sign-in entirely
+// and land on the Keep tab, reading whatever was cached locally.
+function enterOfflineMode() {
+  offlineMode = true;
+  const chip = document.getElementById('user-email-short');
+  if (chip) chip.textContent = 'Offline';
+  showApp();
+  switchTab('keep');
+}
+
 function signOut() {
   if (!confirm('Sign out?')) return;
   stopAutoRefresh();
@@ -1562,6 +1577,10 @@ async function fetchMessagesMetadata(stubs, importantIds, onProgress) {
 
 async function fetchEmails() {
   if (isFetching) return;
+  if (navigator.onLine === false || typeof gapi === 'undefined') {
+    toast('You’re offline — kept emails are in the Keep tab');
+    return;
+  }
   isFetching = true;
   // Immediately update button to loading state
   const fetchBtns = document.querySelectorAll('.fetch-btn, .btn-sm[onclick*="fetchEmails"]');
@@ -2397,6 +2416,8 @@ function closeReader() {
   bodyEl.classList.remove('with-footer');
   bodyEl.innerHTML = '';
   readerEmail = null;
+  // A reconnect happened while reading — now reload into the online flow.
+  if (pendingReload) location.reload();
 }
 
 // Keyboard shortcuts
@@ -2639,11 +2660,24 @@ function initAfterGapi() {
   }
 }
 
-if (typeof gapi !== 'undefined') {
+if (navigator.onLine === false) {
+  // Offline: skip Google sign-in and go straight to the cached Keep emails.
+  enterOfflineMode();
+} else if (typeof gapi !== 'undefined') {
   initAfterGapi();
 } else {
-  document.querySelector('script[src*="api.js"]').addEventListener('load', initAfterGapi);
+  const apiScript = document.querySelector('script[src*="api.js"]');
+  if (apiScript) apiScript.addEventListener('load', initAfterGapi);
 }
+
+// If we started offline and the connection returns, reload into the normal
+// online (sign-in / load) flow — but don't interrupt an email being read.
+window.addEventListener('online', () => {
+  if (!offlineMode) return;
+  const overlay = document.getElementById('reader-overlay');
+  if (overlay && overlay.classList.contains('open')) { pendingReload = true; return; }
+  location.reload();
+});
 </script>
 </body>
 </html>
