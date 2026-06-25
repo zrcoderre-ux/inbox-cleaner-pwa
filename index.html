@@ -1324,7 +1324,11 @@ html, body {
 <script>
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
+<<<<<<< HEAD
+const APP_VERSION = 'v27'; // shown in Settings so the running build is verifiable
+=======
 const APP_VERSION = 'v26'; // shown in Settings so the running build is verifiable
+>>>>>>> origin/main
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2880,6 +2884,7 @@ async function openReader(email, opts = {}) {
   bodyEl.innerHTML = '<div class="reader-text" style="color:var(--text-3);">Loading…</div>';
   overlay.classList.add('open');
   document.body.style.overflow = 'hidden';
+  setReaderZoom(true); // allow pinch-to-zoom while reading
 
   // Make sure we have rich body content (online fetch, else offline cache)
   const ok = await ensureReaderBody(email);
@@ -3017,10 +3022,22 @@ async function markReadFromReader() {
   }
 }
 
+// Toggles pinch-to-zoom. Enabled while the reader is open; the rest of the app
+// stays locked so swiping doesn't accidentally zoom. Setting maximum-scale=1 on
+// close also snaps any zoom back to normal.
+function setReaderZoom(on) {
+  const vp = document.querySelector('meta[name="viewport"]');
+  if (!vp) return;
+  vp.setAttribute('content', on
+    ? 'width=device-width, initial-scale=1, maximum-scale=6, user-scalable=yes'
+    : 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no');
+}
+
 function closeReader() {
   const overlay = document.getElementById('reader-overlay');
   overlay.classList.remove('open');
   document.body.style.overflow = '';
+  setReaderZoom(false); // restore the no-zoom lock (and reset any zoom)
   removeReaderFooter();
   // Clear iframe so audio/video doesn't keep playing if any was running
   const bodyEl = document.getElementById('reader-body');
