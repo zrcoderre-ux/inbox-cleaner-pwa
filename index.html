@@ -192,6 +192,24 @@ html, body {
   text-align: center;
 }
 
+/* ── Boot Splash ──────────────────────────────────────────── */
+#boot-splash {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  z-index: 50;
+}
+.boot-spinner {
+  width: 28px; height: 28px;
+  border: 3px solid var(--border-mid);
+  border-top-color: var(--red);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
 /* ── Auth Screen ──────────────────────────────────────────── */
 #auth-screen {
   justify-content: center;
@@ -965,8 +983,11 @@ html, body {
 <body>
 <div id="app">
 
+  <!-- BOOT SPLASH (shown first so the sign-in screen never flashes) -->
+  <div id="boot-splash"><div class="boot-spinner"></div></div>
+
   <!-- AUTH SCREEN -->
-  <div id="auth-screen" class="screen active">
+  <div id="auth-screen" class="screen">
     <div style="display:flex;flex-direction:column;justify-content:center;align-items:center;flex:1;padding:24px;overflow-y:auto;">
       <div class="auth-card">
         <div class="auth-logo">
@@ -1192,7 +1213,7 @@ html, body {
   <div class="reader-body" id="reader-body"></div>
 </div>
 
-<script src="https://apis.google.com/js/api.js"></script>
+<script src="https://apis.google.com/js/api.js" async></script>
 <script>
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
@@ -1546,7 +1567,21 @@ async function loadUserInfo() {
   } catch(e) {}
 }
 
+function hideSplash() {
+  const s = document.getElementById('boot-splash');
+  if (s) s.style.display = 'none';
+}
+
+// Reveals the sign-in screen (and clears the boot splash).
+function showAuthScreen() {
+  hideSplash();
+  const auth = document.getElementById('auth-screen');
+  auth.style.display = 'flex';
+  auth.classList.add('active');
+}
+
 function showApp() {
+  hideSplash();
   document.getElementById('auth-screen').classList.remove('active');
   document.getElementById('auth-screen').style.display = 'none';
   const w = document.getElementById('main-wrapper');
@@ -2732,25 +2767,54 @@ function initAfterGapi() {
         fetchEmails();
       } catch(e) {
         console.error('gapi init failed:', e);
-        // If init fails, clear stored token and stay on auth screen
+        // If init fails, clear stored token and fall back to the sign-in screen
         try {
           sessionStorage.removeItem('ic_access_token');
           sessionStorage.removeItem('ic_token_expiry');
         } catch(_) {}
         accessToken = null;
+        showAuthScreen();
       }
     });
+  } else {
+    showAuthScreen();
   }
 }
 
+// Cheap synchronous check for an existing session, so we can decide what to
+// show on first paint without waiting for gapi.js to download.
+function hasUsableToken() {
+  if (location.hash && location.hash.indexOf('access_token=') !== -1) return true;
+  try {
+    const stored = sessionStorage.getItem('ic_access_token');
+    const expiry = parseInt(sessionStorage.getItem('ic_token_expiry') || '0', 10);
+    if (stored && Date.now() < expiry - 30000) return true;
+  } catch(e) {}
+  return false;
+}
+
+function whenGapiReady(fn) {
+  if (typeof gapi !== 'undefined') { fn(); return; }
+  const s = document.querySelector('script[src*="api.js"]');
+  if (s) s.addEventListener('load', fn);
+}
+
+// Boot decision. The splash is shown by default (see markup), so the sign-in
+// screen never flashes for an already-authenticated user.
 if (navigator.onLine === false) {
   // Offline: skip Google sign-in and go straight to the cached Keep emails.
   enterOfflineMode();
-} else if (typeof gapi !== 'undefined') {
-  initAfterGapi();
+} else if (hasUsableToken()) {
+  // Have a session — keep the splash up until the app is ready.
+  whenGapiReady(initAfterGapi);
+  // Safety net: if gapi.js never loads, don't strand the user on the splash.
+  setTimeout(() => {
+    const splash = document.getElementById('boot-splash');
+    if (splash && splash.style.display !== 'none') showAuthScreen();
+  }, 12000);
 } else {
-  const apiScript = document.querySelector('script[src*="api.js"]');
-  if (apiScript) apiScript.addEventListener('load', initAfterGapi);
+  // No session — show the sign-in screen right away (no need to wait for gapi).
+  showAuthScreen();
 }
 
 // If we started offline and the connection returns, reload into the normal
