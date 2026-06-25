@@ -1379,6 +1379,11 @@ function effectiveClientId() {
   return OAUTH_CLIENT_ID || localStorage.getItem('ic_client_id') || '';
 }
 
+// Resolves the client ID, preferring the hardcoded constant over the saved one.
+function effectiveClientId() {
+  return OAUTH_CLIENT_ID || localStorage.getItem('ic_client_id') || '';
+}
+
 function loadClientId() {
   if (OAUTH_CLIENT_ID) {
     // Client ID is baked in — hide the manual setup UI and enable sign-in.
