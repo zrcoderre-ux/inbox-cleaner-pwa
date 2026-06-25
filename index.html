@@ -686,6 +686,7 @@ html, body {
 }
 .reader-body {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
   position: relative;
 }
@@ -694,6 +695,7 @@ html, body {
   height: 100%;
   border: none;
   background: #fff;
+  display: block;
 }
 .reader-body .reader-text {
   width: 100%;
@@ -709,17 +711,10 @@ html, body {
   -webkit-overflow-scrolling: touch;
 }
 
-/* When the reader carries a Mark-as-read footer (Keep tab), the body itself
-   scrolls and the email content sizes to its height, so the button sits below
-   the full email and is only reachable after scrolling to the bottom. */
-.reader-body.with-footer {
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-}
-.reader-body.with-footer iframe { height: auto; display: block; }
-.reader-body.with-footer .reader-text { height: auto; overflow: visible; }
-
+/* The Mark-as-read footer (Keep tab) appears as a bar below the email once the
+   user has scrolled to the bottom; flex-shrink keeps it out of the scroll. */
 .reader-footer {
+  flex-shrink: 0;
   padding: 18px 18px calc(24px + env(safe-area-inset-bottom, 0px));
   border-top: 0.5px solid var(--border-mid);
   background: var(--surface, #fff);
@@ -2874,7 +2869,7 @@ async function openReader(email, opts = {}) {
   senderEl.textContent = email.sender || '';
 
   // Show overlay with a loading state
-  bodyEl.classList.toggle('with-footer', withFooter);
+  removeReaderFooter();
   bodyEl.innerHTML = '<div class="reader-text" style="color:var(--text-3);">Loading…</div>';
   overlay.classList.add('open');
   document.body.style.overflow = 'hidden';
@@ -2887,19 +2882,17 @@ async function openReader(email, opts = {}) {
 
   // Only offer Mark-as-read once the body has actually loaded.
   const showFooter = withFooter && ok;
-  const footerHTML = `
-    <div class="reader-footer">
-      <div class="reader-footer-hint">Done reading?</div>
-      <button class="reader-mark-read" onclick="markReadFromReader()">Mark as read</button>
-    </div>`;
 
-  // Prefer HTML rendering in a sandboxed iframe; fall back to plain text
+  // Prefer HTML rendering in a sandboxed iframe; fall back to plain text. The
+  // content scrolls natively (no height measurement), and the Mark-as-read
+  // footer is revealed once the user reaches the bottom of the email.
   if (email.bodyHtml) {
     const wrapped = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <base target="_blank">
 <style>
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:15px;line-height:1.55;color:#202124;margin:18px;word-wrap:break-word;}
+  html,body{height:100%;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:15px;line-height:1.55;color:#202124;margin:18px;word-wrap:break-word;-webkit-overflow-scrolling:touch;}
   img{max-width:100%;height:auto;}
   a{color:#1a73e8;}
   table{max-width:100%!important;}
@@ -2908,60 +2901,74 @@ async function openReader(email, opts = {}) {
 </style></head>
 <body>${email.bodyHtml}</body></html>`;
     const iframe = document.createElement('iframe');
-    // allow-same-origin (without allow-scripts) lets us measure content height
-    // so the footer can sit below the full email; scripts in the email still
-    // never run.
-    iframe.setAttribute('sandbox', withFooter
+    // allow-same-origin (without allow-scripts) lets us watch the email's scroll
+    // position to reveal the footer; scripts in the email still never run.
+    iframe.setAttribute('sandbox', showFooter
       ? 'allow-popups allow-popups-to-escape-sandbox allow-same-origin'
       : 'allow-popups allow-popups-to-escape-sandbox');
-    // Add the Mark-as-read footer only after the email body has rendered.
-    let footerAdded = false;
-    const addFooter = () => {
-      if (footerAdded || !showFooter || readerEmail !== email) return;
-      footerAdded = true;
-      bodyEl.insertAdjacentHTML('beforeend', footerHTML);
-    };
     iframe.addEventListener('load', () => {
-      if (withFooter) {
-        // Size the iframe to its content — and keep resizing as images load
-        // and the layout reflows, so the email is never cut off short.
-        const sizeToContent = () => {
-          if (readerEmail !== email) return;
-          try { iframe.style.height = (iframe.contentDocument.body.scrollHeight + 24) + 'px'; }
-          catch(e) { iframe.style.height = '90vh'; }
-        };
-        sizeToContent();
-        try {
-          const doc = iframe.contentDocument;
-          // Re-measure when each image finishes loading.
-          Array.from(doc.images || []).forEach(img => {
-            if (!img.complete) {
-              img.addEventListener('load', sizeToContent);
-              img.addEventListener('error', sizeToContent);
-            }
-          });
-          // Re-measure on any further reflow (fonts, late layout, etc.).
-          if (window.ResizeObserver) {
-            if (readerRO) readerRO.disconnect();
-            readerRO = new ResizeObserver(sizeToContent);
-            readerRO.observe(doc.body);
-          }
-        } catch(e) {}
-        // Belt-and-suspenders re-measures.
-        setTimeout(sizeToContent, 400);
-        setTimeout(sizeToContent, 1500);
+      if (!showFooter || readerEmail !== email) return;
+      try {
+        const doc = iframe.contentDocument;
+        const win = iframe.contentWindow;
+        const scroller = doc.scrollingElement || doc.documentElement || doc.body;
+        watchScrollForFooter(scroller, win, win, doc, email);
+      } catch(e) {
+        revealReaderFooter(email); // can't watch scroll — just show it
       }
-      addFooter();
     });
     iframe.srcdoc = wrapped;
     bodyEl.innerHTML = '';
     bodyEl.appendChild(iframe);
-    // Fallback in case the iframe load event never fires.
-    setTimeout(addFooter, 4000);
   } else {
-    bodyEl.innerHTML = `<div class="reader-text"></div>` + (showFooter ? footerHTML : '');
-    bodyEl.querySelector('.reader-text').textContent = email.bodyText || '(no content)';
+    bodyEl.innerHTML = `<div class="reader-text"></div>`;
+    const el = bodyEl.querySelector('.reader-text');
+    el.textContent = email.bodyText || '(no content)';
+    if (showFooter) watchScrollForFooter(el, el, window, document, email);
   }
+}
+
+// Reveals the Mark-as-read footer once the bottom of the email is reached (or
+// immediately if it already fits). Uses an IntersectionObserver on a bottom
+// sentinel (reliable on iOS) with a scroll-position fallback.
+function watchScrollForFooter(scroller, scrollTarget, owin, odoc, email) {
+  let revealed = false;
+  const reveal = () => { if (!revealed && readerEmail === email) { revealed = true; revealReaderFooter(email); } };
+  try {
+    if (owin && owin.IntersectionObserver) {
+      const sentinel = odoc.createElement('div');
+      sentinel.style.cssText = 'height:1px;width:100%;';
+      (scroller === odoc.scrollingElement ? odoc.body : scroller).appendChild(sentinel);
+      const io = new owin.IntersectionObserver(entries => {
+        if (entries.some(e => e.isIntersecting)) reveal();
+      }, { root: scroller === odoc.scrollingElement ? null : scroller, threshold: 0 });
+      io.observe(sentinel);
+    }
+  } catch(e) {}
+  const check = () => {
+    if (readerEmail !== email) return;
+    if (scroller.scrollHeight - (scroller.scrollTop + scroller.clientHeight) <= 12) reveal();
+  };
+  try { scrollTarget.addEventListener('scroll', check, { passive: true }); } catch(e) {}
+  setTimeout(check, 400);
+  setTimeout(check, 1500);
+}
+
+function revealReaderFooter(email) {
+  if (readerEmail !== email) return;
+  const overlay = document.getElementById('reader-overlay');
+  if (overlay.querySelector('.reader-footer')) return; // already shown
+  const footer = document.createElement('div');
+  footer.className = 'reader-footer';
+  footer.innerHTML = '<div class="reader-footer-hint">Done reading?</div>' +
+    '<button class="reader-mark-read" onclick="markReadFromReader()">Mark as read</button>';
+  overlay.appendChild(footer);
+}
+
+function removeReaderFooter() {
+  const overlay = document.getElementById('reader-overlay');
+  if (!overlay) return;
+  overlay.querySelectorAll('.reader-footer').forEach(f => f.remove());
 }
 
 // Opens a kept email from the Keep tab, with the bottom Mark-as-read button.
@@ -3007,10 +3014,9 @@ function closeReader() {
   const overlay = document.getElementById('reader-overlay');
   overlay.classList.remove('open');
   document.body.style.overflow = '';
-  if (readerRO) { readerRO.disconnect(); readerRO = null; }
+  removeReaderFooter();
   // Clear iframe so audio/video doesn't keep playing if any was running
   const bodyEl = document.getElementById('reader-body');
-  bodyEl.classList.remove('with-footer');
   bodyEl.innerHTML = '';
   readerEmail = null;
   // A reconnect happened while reading — now reload into the online flow.
