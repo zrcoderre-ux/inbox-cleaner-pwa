@@ -1402,19 +1402,27 @@ function idbDelete(id) {
   }));
 }
 
+// True when a cached record actually has readable content.
+function hasBody(rec) {
+  return !!(rec && (rec.bodyHtml || (rec.bodyText && rec.bodyText !== '(could not load body)')));
+}
+
 // Downloads an email's body (inlining images where CORS allows) and stores it
 // for offline reading. Safe to call repeatedly; all failures are swallowed.
+// Never caches an empty/failed body, so the cache isn't poisoned with errors.
 async function cacheKeptEmail(email) {
   try {
     await fetchEmailBodyRich(email);
+    const text = (email.bodyText && email.bodyText !== '(could not load body)') ? email.bodyText : '';
     let html = email.bodyHtml || '';
+    if (!text && !html) return; // got nothing usable — leave it for a later retry
     if (html) html = await inlineImages(html);
     await idbPut({
       id: email.id,
       sender: email.sender || '',
       subject: email.subject || '(no subject)',
       date: email.date || '',
-      bodyText: email.bodyText || '',
+      bodyText: text,
       bodyHtml: html,
       savedAt: Date.now()
     });
@@ -1452,20 +1460,31 @@ async function inlineImages(html) {
 // including ones kept on another device that aren't in this load's inbox view.
 // Fetches metadata when needed so they can be displayed and read offline.
 async function backfillKeptCache() {
+  // Collect kept emails whose cached copy is missing or has no usable body.
+  const todo = [];
   for (const id of keptIds) {
-    try {
-      if (await idbGet(id)) continue;
-      let email = emails.find(e => e.id === id);
-      if (!email) {
-        const res = await gapi.client.gmail.users.messages.get({
-          userId: 'me', id, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date']
-        });
-        const h = {};
-        (res.result.payload.headers || []).forEach(x => { h[x.name] = x.value; });
-        email = { id, sender: h['From'] || '', subject: h['Subject'] || '(no subject)', date: h['Date'] || '', bodyText: null, bodyLoaded: false };
-      }
-      await cacheKeptEmail(email);
-    } catch(_) {}
+    let rec = null;
+    try { rec = await idbGet(id); } catch(_) {}
+    if (!hasBody(rec)) todo.push(id);
+  }
+  // Cache in small concurrent batches so it finishes quickly (before the user
+  // may go offline) without hammering the API.
+  for (let i = 0; i < todo.length; i += 5) {
+    const chunk = todo.slice(i, i + 5);
+    await Promise.all(chunk.map(async id => {
+      try {
+        let email = emails.find(e => e.id === id);
+        if (!email) {
+          const res = await gapi.client.gmail.users.messages.get({
+            userId: 'me', id, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date']
+          });
+          const h = {};
+          (res.result.payload.headers || []).forEach(x => { h[x.name] = x.value; });
+          email = { id, sender: h['From'] || '', subject: h['Subject'] || '(no subject)', date: h['Date'] || '', bodyText: null, bodyLoaded: false };
+        }
+        await cacheKeptEmail(email);
+      } catch(_) {}
+    }));
   }
   renderKeepList();
 }
@@ -2521,25 +2540,40 @@ let readerEmail = null;
 // Gets the reader body, preferring a fresh fetch but falling back to the
 // offline cache when there's no connection (or the fetch yields nothing).
 async function ensureReaderBody(email) {
-  let ok = false;
-  if (navigator.onLine !== false) {
-    try {
-      await fetchEmailBodyRich(email);
-      ok = !!(email.bodyHtml || (email.bodyText && email.bodyText !== '(could not load body)'));
-    } catch(_) {}
+  const applyCache = async () => {
+    const rec = await idbGet(email.id).catch(() => null);
+    if (hasBody(rec)) {
+      email.bodyHtml = rec.bodyHtml || '';
+      email.bodyText = rec.bodyText || '';
+      email.bodyLoaded = true;
+      return true;
+    }
+    return false;
+  };
+
+  // Treat the app's own offline state as authoritative, since navigator.onLine
+  // can falsely report online (e.g. airplane mode in an installed PWA).
+  const offline = offlineMode || navigator.onLine === false;
+
+  if (offline) {
+    if (await applyCache()) return true;
+    // Not saved for offline reading — show a clear message, not a raw error.
+    email.bodyHtml = '';
+    email.bodyText = 'This email isn’t saved for offline reading yet. Reconnect to load it.';
+    email.bodyLoaded = true;
+    return false;
   }
-  if (!ok) {
-    try {
-      const rec = await idbGet(email.id);
-      if (rec) {
-        email.bodyHtml = rec.bodyHtml || '';
-        email.bodyText = rec.bodyText || email.bodyText || '';
-        email.bodyLoaded = true;
-        ok = true;
-      }
-    } catch(_) {}
-  }
-  return ok;
+
+  // Online: fetch fresh, but fall back to the cache if the request fails.
+  try {
+    await fetchEmailBodyRich(email);
+    if (email.bodyHtml || (email.bodyText && email.bodyText !== '(could not load body)')) return true;
+  } catch(_) {}
+  if (await applyCache()) return true;
+  email.bodyHtml = '';
+  email.bodyText = 'Couldn’t load this email. Check your connection and try again.';
+  email.bodyLoaded = true;
+  return false;
 }
 
 // Opens the focused reader from the swipe deck (no Mark-as-read footer).
