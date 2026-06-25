@@ -75,7 +75,7 @@ html, body {
   background: var(--surface-2);
 }
 
-.screen { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+.screen { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 .screen.active { display: flex; }
 
 /* ── Header ───────────────────────────────────────────────── */
@@ -757,6 +757,7 @@ html, body {
 
 .keep-scroll {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 12px 12px 0;
@@ -1153,7 +1154,7 @@ html, body {
               </select>
             </div>
           </div>
-          <div class="email-list-inner" id="keep-list-el" style="max-height:none;">
+          <div class="email-list-inner" id="keep-list-el" style="max-height:none;overflow:visible;">
             <div class="list-empty">No kept emails yet.</div>
           </div>
         </div>
