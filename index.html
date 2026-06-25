@@ -1318,9 +1318,10 @@ let cacheQueue = [];
 let cacheWorkers = 0;
 const MAX_CACHE_WORKERS = 3;
 let keepRenderTimer = null;
-// Offline outbox: ids marked read while offline, flushed to Gmail on reconnect.
-let pendingReads = [];
-let flushingReads = false;
+// Offline outbox: swipe actions (read/keep/block) made offline, flushed to
+// Gmail on reconnect.
+let pendingOps = [];
+let flushingOps = false;
 // IDs of emails the user chose to keep unread. Persisted so they aren't
 // re-surfaced in the swipe deck on every load.
 let keptIds = new Set();
@@ -1463,13 +1464,15 @@ async function cacheKeptEmail(email) {
   } catch(e) { /* best-effort */ }
 }
 
-// Queues an email to be cached for offline reading, prioritizing the most
-// recent emails first. Silent and best-effort.
-function enqueueCache(email) {
+// Queues an email to be cached for offline reading. priority 0 = kept emails
+// (saved first), 1 = swipe-deck emails (saved after all keeps). Within a
+// priority, newest first.
+function enqueueCache(email, priority = 0) {
   if (!email || !email.id) return;
-  if (cacheQueue.some(e => e.id === email.id)) return;
-  cacheQueue.push(email);
-  cacheQueue.sort((a, b) => dateMs(b) - dateMs(a)); // newest first
+  const existing = cacheQueue.find(q => q.email.id === email.id);
+  if (existing) { if (priority < existing.priority) existing.priority = priority; }
+  else cacheQueue.push({ email, priority });
+  cacheQueue.sort((a, b) => (a.priority - b.priority) || (dateMs(b.email) - dateMs(a.email)));
   pumpCacheQueue();
 }
 
@@ -1481,7 +1484,7 @@ function dateMs(email) {
 function pumpCacheQueue() {
   while (cacheWorkers < MAX_CACHE_WORKERS && cacheQueue.length) {
     if (navigator.onLine === false) return; // can't fetch offline; leave queued
-    const email = cacheQueue.shift();
+    const email = cacheQueue.shift().email;
     cacheWorkers++;
     (async () => {
       try {
@@ -1554,6 +1557,15 @@ async function backfillKeptCache() {
   renderKeepList();
 }
 
+// Caches the swipe-deck emails for offline reading, at lower priority than
+// kept emails (so all keeps are saved first).
+function cacheDeckBodies() {
+  for (const e of emails) {
+    if (keptIds.has(e.id)) continue; // keeps are handled at higher priority
+    enqueueCache(e, 1);
+  }
+}
+
 // ── Cross-device sync (Gmail label) ────────────────────────
 async function ensureKeepLabel() {
   if (keepLabelId) return keepLabelId;
@@ -1614,20 +1626,41 @@ async function syncKeptFromLabel() {
   saveKept();
 }
 
-// ── Offline outbox (mark-as-read) ──────────────────────────
-// Marking read removes the email locally right away; the Gmail update (clear
-// UNREAD + the Keep label) is queued and flushed when connectivity returns.
-function loadPendingReads() {
-  try { pendingReads = JSON.parse(localStorage.getItem('ic_pending_reads') || '[]'); }
-  catch(e) { pendingReads = []; }
+// ── Offline outbox (read / keep / block) ───────────────────
+// Swipe actions apply locally right away; the matching Gmail change is queued
+// here and flushed when connectivity returns. Ops: {type:'read'|'keep'|'block',
+// id?, addr?}.
+function onlineReady() {
+  return navigator.onLine !== false && typeof gapi !== 'undefined' && gapi.client && gapi.client.gmail;
 }
 
-function savePendingReads() {
-  localStorage.setItem('ic_pending_reads', JSON.stringify(pendingReads));
+function loadPendingOps() {
+  try { pendingOps = JSON.parse(localStorage.getItem('ic_pending_ops') || '[]'); }
+  catch(e) { pendingOps = []; }
+  // Migrate the older read-only outbox, if present.
+  try {
+    const old = JSON.parse(localStorage.getItem('ic_pending_reads') || '[]');
+    if (old.length) {
+      old.forEach(id => { if (!pendingOps.some(o => o.type === 'read' && o.id === id)) pendingOps.push({ type: 'read', id }); });
+      localStorage.removeItem('ic_pending_reads');
+      savePendingOps();
+    }
+  } catch(e) {}
 }
 
-function enqueuePendingRead(id) {
-  if (!pendingReads.includes(id)) { pendingReads.push(id); savePendingReads(); }
+function savePendingOps() {
+  localStorage.setItem('ic_pending_ops', JSON.stringify(pendingOps));
+}
+
+function enqueueOp(op) {
+  const dup = pendingOps.some(o => o.type === op.type && o.id === op.id && o.addr === op.addr);
+  if (!dup) { pendingOps.push(op); savePendingOps(); }
+}
+
+function removeOps(pred) {
+  const before = pendingOps.length;
+  pendingOps = pendingOps.filter(o => !pred(o));
+  if (pendingOps.length !== before) savePendingOps();
 }
 
 // Removes a kept email from all local state (list + offline cache).
@@ -1637,10 +1670,9 @@ function dropKeptLocally(id) {
   idbDelete(id).catch(() => {});
 }
 
-// Tells Gmail an email is read (clears UNREAD and the Keep label). Returns
-// false when offline / unavailable so the caller can queue it for later.
+// Tells Gmail an email is read (clears UNREAD and the Keep label).
 async function sendReadToGmail(id) {
-  if (navigator.onLine === false || typeof gapi === 'undefined' || !gapi.client || !gapi.client.gmail) return false;
+  if (!onlineReady()) return false;
   try {
     const remove = ['UNREAD'];
     if (!keepLabelId) { try { await ensureKeepLabel(); } catch(_) {} }
@@ -1650,21 +1682,51 @@ async function sendReadToGmail(id) {
   } catch(e) { return false; }
 }
 
-// Flushes any queued mark-as-read operations to Gmail.
-async function flushPendingReads() {
-  if (flushingReads || !pendingReads.length) return;
-  if (navigator.onLine === false || typeof gapi === 'undefined' || !gapi.client || !gapi.client.gmail) return;
-  flushingReads = true;
+// Tells Gmail an email is kept (adds the Keep label).
+async function sendKeepToGmail(id) {
+  if (!onlineReady()) return false;
+  try {
+    if (!keepLabelId) await ensureKeepLabel();
+    if (!keepLabelId) return false;
+    await gapi.client.gmail.users.messages.modify({ userId: 'me', id, resource: { addLabelIds: [keepLabelId] } });
+    return true;
+  } catch(e) { return false; }
+}
+
+// Moves every unread message from a sender to spam (the network half of block).
+async function blockSenderRemote(addr) {
+  if (!onlineReady()) return false;
+  try {
+    const listRes = await gapi.client.gmail.users.messages.list({ userId: 'me', q: `from:${addr} is:unread`, maxResults: 100 });
+    const ids = (listRes.result.messages || []).map(m => m.id);
+    for (let i = 0; i < ids.length; i += 10) {
+      const chunk = ids.slice(i, i + 10);
+      await Promise.all(chunk.map(id => gapi.client.gmail.users.messages.modify({
+        userId: 'me', id, resource: { addLabelIds: ['SPAM'], removeLabelIds: ['UNREAD', 'INBOX'] }
+      })));
+    }
+    return true;
+  } catch(e) { return false; }
+}
+
+// Flushes any queued operations to Gmail, keeping ones that still fail.
+async function flushOutbox() {
+  if (flushingOps || !pendingOps.length || !onlineReady()) return;
+  flushingOps = true;
   try {
     const remaining = [];
-    for (const id of pendingReads) {
-      const ok = await sendReadToGmail(id);
-      if (!ok) remaining.push(id);
+    for (const op of pendingOps) {
+      let ok = false;
+      if (op.type === 'read') ok = await sendReadToGmail(op.id);
+      else if (op.type === 'keep') ok = await sendKeepToGmail(op.id);
+      else if (op.type === 'block') ok = await blockSenderRemote(op.addr);
+      else ok = true; // unknown op — drop it
+      if (!ok) remaining.push(op);
     }
-    pendingReads = remaining;
-    savePendingReads();
+    pendingOps = remaining;
+    savePendingOps();
   } finally {
-    flushingReads = false;
+    flushingOps = false;
   }
 }
 
@@ -1835,7 +1897,18 @@ function enterOfflineMode() {
   offlineMode = true;
   const chip = document.getElementById('user-email-short');
   if (chip) chip.textContent = 'Offline';
+  // Rebuild the swipe deck from the saved snapshot so it can be swiped offline
+  // (bodies load from the IndexedDB cache). Kept emails are excluded from the
+  // deck and shown in the Keep tab as usual.
+  emails = loadDeckSnapshot().map(e => ({
+    id: e.id, sender: e.sender, subject: e.subject, date: e.date,
+    important: !!e.important, bodyText: null, bodyLoaded: false
+  }));
+  swipeQueue = emails.filter(e => !keptIds.has(e.id));
+  sortQueue();
   showApp();
+  renderSwipeStack();
+  renderEmailList();
   switchTab('keep');
 }
 
@@ -1947,9 +2020,9 @@ async function fetchEmails() {
       setTimeout(() => signIn(), 1500);
       return;
     }
-    // Flush any offline mark-as-reads first, so the Keep-label sync below
-    // doesn't re-add an email we already marked read locally.
-    await flushPendingReads();
+    // Flush queued offline actions first, so the Keep-label sync below doesn't
+    // re-add an email we already marked read locally.
+    await flushOutbox();
     // Reconcile the kept set with the Gmail label so it matches other devices
     // before we decide what to hide from the deck.
     try { await syncKeptFromLabel(); } catch(_) {}
@@ -1981,7 +2054,11 @@ async function fetchEmails() {
     renderKeepList();
     setStatus(false, `${emails.length} emails loaded.`);
     startAutoRefresh();
-    backfillKeptCache();
+    saveDeckSnapshot();
+    // Cache all kept emails first, then the rest of the deck (lower priority),
+    // so the whole inbox becomes swipeable offline. Chained (not awaited) so it
+    // doesn't hold up load completion.
+    backfillKeptCache().then(cacheDeckBodies);
   } catch(e) {
     console.error('fetchEmails error:', e);
     // Detect auth failures specifically — 401 means token expired
@@ -2031,8 +2108,8 @@ async function silentRefresh() {
       const ok = await silentRenew();
       if (ok && gapi.client) gapi.client.setToken({ access_token: accessToken });
     }
-    // Flush any mark-as-reads queued while offline.
-    flushPendingReads();
+    // Flush any actions queued while offline.
+    flushOutbox();
     const { messages, importantIds } = await listUnreadMessages(200);
     const known = new Set(emails.map(e => e.id));
     const newStubs = messages.filter(m => !known.has(m.id));
@@ -2045,6 +2122,8 @@ async function silentRefresh() {
     // Newly-arrived emails join the deck unless they were previously kept.
     const toDeck = fresh.filter(e => !keptIds.has(e.id));
     swipeQueue.push(...toDeck);
+    // Cache the new deck emails for offline use (lower priority than keeps).
+    toDeck.forEach(e => enqueueCache(e, 1));
 
     if (deckWasEmpty) {
       // No card on screen to disturb — safe to re-sort and render fresh.
@@ -2056,6 +2135,7 @@ async function silentRefresh() {
     }
     renderEmailList();
     renderKeepList();
+    saveDeckSnapshot();
   } catch(e) {
     // Stay quiet on transient errors; only react to an expired token.
     const status = e?.status || e?.result?.error?.code;
@@ -2174,6 +2254,25 @@ function renderRules() {
   `).join('');
 }
 
+// ── Offline swipe-deck snapshot ────────────────────────────
+// Persists the loaded deck's metadata so the deck can be rebuilt and swiped
+// offline (bodies come from the IndexedDB cache).
+let deckSnapTimer = null;
+function saveDeckSnapshot() {
+  try {
+    localStorage.setItem('ic_deck', JSON.stringify(
+      emails.map(e => ({ id: e.id, sender: e.sender, subject: e.subject, date: e.date, important: !!e.important }))
+    ));
+  } catch(e) {}
+}
+function scheduleDeckSnapshot() {
+  if (deckSnapTimer) return;
+  deckSnapTimer = setTimeout(() => { deckSnapTimer = null; saveDeckSnapshot(); }, 800);
+}
+function loadDeckSnapshot() {
+  try { return JSON.parse(localStorage.getItem('ic_deck') || '[]'); } catch(e) { return []; }
+}
+
 // ── Swipe UI ───────────────────────────────────────────────
 let dragState = null;
 
@@ -2188,6 +2287,7 @@ function renderSwipeStack() {
 
   updateSwipeCounter();
   updateKeptBar();
+  scheduleDeckSnapshot();
 
   if (!swipeQueue.length) {
     empty.style.display = '';
@@ -2255,7 +2355,8 @@ function buildCard(email, isFront) {
 }
 
 async function loadCardBody(card, email) {
-  await fetchEmailBody(email);
+  // Cache-aware: fetches when online, falls back to the offline cache.
+  await ensureReaderBody(email);
   const bodyEl = document.getElementById('cb-' + email.id);
   if (!bodyEl) return;
   bodyEl.innerHTML = `<div class="card-body-text">${esc(email.bodyText || '')}</div>`;
@@ -2328,7 +2429,9 @@ function attachDrag(card, email) {
   window.addEventListener('mouseup', onEnd);
 }
 
-async function swipeCard(direction) {
+// Swipe actions apply locally immediately (so they work offline) and sync to
+// Gmail in the background via the outbox.
+function swipeCard(direction) {
   if (!swipeQueue.length) return;
   const email = swipeQueue[0];
   const card = document.querySelector('.swipe-card.front');
@@ -2340,49 +2443,21 @@ async function swipeCard(direction) {
     if (direction === 'left') {
       card.classList.add('fly-left');
       swipeHistory.push({ email, action: 'read' });
-      try {
-        await gapi.client.gmail.users.messages.modify({
-          userId: 'me', id: email.id,
-          resource: { removeLabelIds: ['UNREAD'] }
-        });
-        toast('Marked as read');
-      } catch(e) { toast('Error marking as read'); }
-      emails = emails.filter(e => e.id !== email.id);
-      selectedIds.delete(email.id);
-      forgetKept(email.id);
+      doRead(email);
     } else {
       card.classList.add('fly-right');
       swipeHistory.push({ email, action: 'skip' });
-      // Remember this choice so the email isn't re-surfaced on future loads.
-      keptIds.add(email.id);
-      saveKept();
-      // Tag it in Gmail so the keep syncs across devices, and queue its
-      // content to be cached locally (newest-first) for offline reading.
-      addKeepLabel(email.id);
-      enqueueCache(email);
-      toast('Kept unread');
+      doKeep(email);
     }
   } else {
-    // Block mode
     if (direction === 'left') {
-      // Block: spam + mark all from sender as read
       card.classList.add('fly-left');
       swipeHistory.push({ email, action: 'block' });
-      await blockSender(email);
+      doBlock(email);
     } else {
-      // Right in block mode = mark as read
       card.classList.add('fly-right');
       swipeHistory.push({ email, action: 'read' });
-      try {
-        await gapi.client.gmail.users.messages.modify({
-          userId: 'me', id: email.id,
-          resource: { removeLabelIds: ['UNREAD'] }
-        });
-        toast('Marked as read');
-      } catch(e) { toast('Error marking as read'); }
-      emails = emails.filter(e => e.id !== email.id);
-      selectedIds.delete(email.id);
-      forgetKept(email.id);
+      doRead(email);
     }
   }
 
@@ -2396,44 +2471,35 @@ async function swipeCard(direction) {
   }, 360);
 }
 
-async function blockSender(email) {
+async function doRead(email) {
+  emails = emails.filter(e => e.id !== email.id);
+  selectedIds.delete(email.id);
+  dropKeptLocally(email.id);
+  const ok = await sendReadToGmail(email.id);
+  if (ok) toast('Marked as read');
+  else { enqueueOp({ type: 'read', id: email.id }); toast('Marked read — will sync'); }
+}
+
+async function doKeep(email) {
+  // Remember the choice and cache its content (high priority) for offline use.
+  keptIds.add(email.id);
+  saveKept();
+  enqueueCache(email, 0);
+  const ok = await sendKeepToGmail(email.id);
+  if (!ok) enqueueOp({ type: 'keep', id: email.id });
+  toast('Kept unread');
+}
+
+async function doBlock(email) {
   const { addr } = parseSender(email.sender);
   if (!addr) { toast('Could not parse sender'); return; }
-  setStatus(true, `Blocking ${addr}…`);
-  try {
-    // 1. Find all unread messages from this sender
-    const listRes = await gapi.client.gmail.users.messages.list({
-      userId: 'me',
-      q: `from:${addr} is:unread`,
-      maxResults: 100
-    });
-    const msgs = listRes.result.messages || [];
-
-    // 2. Move all to spam + mark read (in batches)
-    const allIds = [...new Set([email.id, ...msgs.map(m => m.id)])];
-    for (let i = 0; i < allIds.length; i += 10) {
-      const chunk = allIds.slice(i, i + 10);
-      await Promise.all(chunk.map(id =>
-        gapi.client.gmail.users.messages.modify({
-          userId: 'me', id,
-          resource: { addLabelIds: ['SPAM'], removeLabelIds: ['UNREAD', 'INBOX'] }
-        })
-      ));
-    }
-
-    // 3. Remove blocked emails from local state
-    emails = emails.filter(e => e.id !== email.id && !msgs.find(m => m.id === e.id));
-    swipeQueue = swipeQueue.filter(e => e.id !== email.id && !msgs.find(m => m.id === e.id));
-    msgs.forEach(m => { selectedIds.delete(m.id); forgetKept(m.id); });
-    selectedIds.delete(email.id);
-    forgetKept(email.id);
-
-    setStatus(false);
-    toast(`Blocked ${addr} (${allIds.length} emails moved to spam)`);
-  } catch(e) {
-    console.error(e);
-    setStatus(false, 'Error blocking sender');
-  }
+  // Remove this sender's currently-loaded unread emails locally right away.
+  emails = emails.filter(e => parseSender(e.sender).addr !== addr);
+  swipeQueue = swipeQueue.filter(e => parseSender(e.sender).addr !== addr);
+  dropKeptLocally(email.id);
+  const ok = await blockSenderRemote(addr);
+  if (ok) toast(`Blocked ${addr}`);
+  else { enqueueOp({ type: 'block', addr }); toast(`Blocked ${addr} — will sync`); }
 }
 
 async function undoSwipe() {
@@ -2441,16 +2507,20 @@ async function undoSwipe() {
   const last = swipeHistory.pop();
 
   if (last.action === 'read') {
-    try {
-      await gapi.client.gmail.users.messages.modify({
-        userId: 'me', id: last.email.id,
-        resource: { addLabelIds: ['UNREAD'] }
-      });
-      emails.push(last.email);
-    } catch(e) {}
-    forgetKept(last.email.id);
+    // Cancel a not-yet-synced read; otherwise re-mark it unread on Gmail.
+    removeOps(o => o.type === 'read' && o.id === last.email.id);
+    if (onlineReady()) {
+      try {
+        await gapi.client.gmail.users.messages.modify({
+          userId: 'me', id: last.email.id,
+          resource: { addLabelIds: ['UNREAD'] }
+        });
+      } catch(e) {}
+    }
+    emails.push(last.email);
   } else if (last.action === 'skip') {
     // The email was kept unread — undoing means we no longer remember it.
+    removeOps(o => o.type === 'keep' && o.id === last.email.id);
     forgetKept(last.email.id);
   } else if (last.action === 'block') {
     // Can only restore the one card to the queue; spam emails stay spammed
@@ -2878,7 +2948,7 @@ async function markReadFromReader() {
   if (ok) {
     toast('Marked as read');
   } else {
-    enqueuePendingRead(id);
+    enqueueOp({ type: 'read', id });
     toast('Marked as read — will sync when online');
   }
 }
@@ -3109,7 +3179,7 @@ loadRules();
 loadKept();
 loadKeepSort();
 loadKeepOfflineOnly();
-loadPendingReads();
+loadPendingOps();
 loadClientId();
 
 // Handle OAuth redirect token on page load — deferred until gapi.js is ready
@@ -3201,9 +3271,9 @@ if (isSilentFrame) {
 // online (sign-in / load) flow — but don't interrupt an email being read.
 window.addEventListener('online', () => {
   if (!offlineMode) {
-    // Connection returned mid-session — flush queued mark-as-reads, then
-    // re-enqueue and resume caching every kept email that isn't fully saved.
-    flushPendingReads();
+    // Connection returned mid-session — flush queued offline actions, then
+    // re-enqueue and resume caching everything not fully saved.
+    flushOutbox();
     if (typeof gapi !== 'undefined' && gapi.client && gapi.client.gmail) backfillKeptCache();
     pumpCacheQueue();
     return;
