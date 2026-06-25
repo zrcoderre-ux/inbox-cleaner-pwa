@@ -741,6 +741,15 @@ html, body {
 
 .keep-item .email-item-subject { white-space: normal; }
 
+.keep-offline {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--orange);
+  background: var(--orange-light);
+  padding: 8px 16px;
+  border-bottom: 0.5px solid var(--border);
+}
+
 /* ── Bulk Screen ──────────────────────────────────────────── */
 #bulk-screen {
   flex-direction: column;
@@ -1241,7 +1250,133 @@ function saveKept() {
 
 // Once an email is read (or blocked) there's no reason to remember it as kept.
 function forgetKept(id) {
-  if (keptIds.delete(id)) saveKept();
+  if (keptIds.delete(id)) {
+    saveKept();
+    idbDelete(id).catch(() => {});
+  }
+}
+
+// ── Offline cache (IndexedDB) ──────────────────────────────
+// Kept emails are cached here (metadata + body) so they stay readable with no
+// connection. All of this is best-effort: if IndexedDB is unavailable the app
+// simply falls back to online-only behaviour.
+const IDB_NAME = 'inbox-cleaner';
+const IDB_STORE = 'keptEmails';
+let _dbPromise = null;
+
+function openDB() {
+  if (_dbPromise) return _dbPromise;
+  _dbPromise = new Promise((resolve, reject) => {
+    let req;
+    try { req = indexedDB.open(IDB_NAME, 1); }
+    catch(e) { reject(e); return; }
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE, { keyPath: 'id' });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return _dbPromise;
+}
+
+function idbPut(record) {
+  return openDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).put(record);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+
+function idbGet(id) {
+  return openDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).get(id);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  }));
+}
+
+function idbGetAll() {
+  return openDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  }));
+}
+
+function idbDelete(id) {
+  return openDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+
+// Downloads an email's body (inlining images where CORS allows) and stores it
+// for offline reading. Safe to call repeatedly; all failures are swallowed.
+async function cacheKeptEmail(email) {
+  try {
+    await fetchEmailBodyRich(email);
+    let html = email.bodyHtml || '';
+    if (html) html = await inlineImages(html);
+    await idbPut({
+      id: email.id,
+      sender: email.sender || '',
+      subject: email.subject || '(no subject)',
+      date: email.date || '',
+      bodyText: email.bodyText || '',
+      bodyHtml: html,
+      savedAt: Date.now()
+    });
+  } catch(e) { /* best-effort */ }
+}
+
+// Replaces remote <img> sources with data URLs so images survive offline.
+// Best-effort: images blocked by CORS keep their original URL.
+async function inlineImages(html) {
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const imgs = [...doc.querySelectorAll('img')]
+      .filter(i => /^https?:/i.test(i.getAttribute('src') || ''))
+      .slice(0, 40);
+    await Promise.all(imgs.map(async img => {
+      try {
+        const res = await fetch(img.getAttribute('src'), { mode: 'cors' });
+        if (!res.ok) return;
+        const blob = await res.blob();
+        if (blob.size > 2000000) return; // skip very large images
+        const dataUrl = await new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(fr.result);
+          fr.onerror = () => reject(fr.error);
+          fr.readAsDataURL(blob);
+        });
+        img.setAttribute('src', dataUrl);
+      } catch(e) { /* leave the remote URL in place */ }
+    }));
+    return doc.body.innerHTML;
+  } catch(e) { return html; }
+}
+
+// Backfills the cache for kept emails that aren't stored yet (e.g. kept before
+// this feature existed, or kept while offline). Runs quietly in the background.
+async function backfillKeptCache() {
+  for (const e of emails) {
+    if (!keptIds.has(e.id)) continue;
+    try {
+      if (await idbGet(e.id)) continue;
+      await cacheKeptEmail(e);
+    } catch(_) {}
+  }
+}
+
+// Resolves the client ID, preferring the hardcoded constant over the saved one.
+function effectiveClientId() {
+  return OAUTH_CLIENT_ID || localStorage.getItem('ic_client_id') || '';
 }
 
 // Resolves the client ID, preferring the hardcoded constant over the saved one.
@@ -1335,6 +1470,10 @@ function showApp() {
   document.getElementById('auth-screen').style.display = 'none';
   const w = document.getElementById('main-wrapper');
   w.style.display = 'flex';
+  // Reflect persisted/cached kept emails right away, even before (or without)
+  // a network load — so the Keep tab works offline.
+  updateKeepBadge();
+  renderKeepList();
 }
 
 function signOut() {
@@ -1471,6 +1610,7 @@ async function fetchEmails() {
     renderKeepList();
     setStatus(false, `${emails.length} emails loaded.`);
     startAutoRefresh();
+    backfillKeptCache();
   } catch(e) {
     console.error('fetchEmails error:', e);
     // Detect auth failures specifically — 401 means token expired
@@ -1830,6 +1970,8 @@ async function swipeCard(direction) {
       // Remember this choice so the email isn't re-surfaced on future loads.
       keptIds.add(email.id);
       saveKept();
+      // Cache its content in the background so it's readable offline later.
+      cacheKeptEmail(email);
       toast('Kept unread');
     }
   } else {
@@ -1969,8 +2111,10 @@ function reviewKept() {
 function clearKept() {
   if (!keptIds.size) { toast('No kept emails'); return; }
   if (!confirm('Forget all kept-unread emails? They will show up in the deck again.')) return;
+  const ids = [...keptIds];
   keptIds.clear();
   saveKept();
+  ids.forEach(id => idbDelete(id).catch(() => {}));
   swipeQueue = [...emails];
   sortQueue();
   renderSwipeStack();
@@ -1979,21 +2123,40 @@ function clearKept() {
 }
 
 // ── Keep tab ───────────────────────────────────────────────
-function renderKeepList() {
+// Merges in-memory kept emails with the offline cache so the list works even
+// with no connection or before a load has run.
+async function renderKeepList() {
   const el = document.getElementById('keep-list-el');
   if (!el) return;
-  if (!emails.length) {
-    el.innerHTML = '<div class="list-empty">Load your emails from the Swipe tab,<br>then the ones you keep will appear here.</div>';
-    updateKeepBadge();
-    return;
+  updateKeepBadge();
+
+  let cached = [];
+  try { cached = await idbGetAll(); } catch(_) {}
+  const cacheMap = new Map(cached.map(r => [r.id, r]));
+
+  const items = [];
+  for (const id of keptIds) {
+    const mem = emails.find(e => e.id === id);
+    const rec = cacheMap.get(id);
+    if (!mem && !rec) continue;
+    items.push({
+      id,
+      sender: (mem && mem.sender) || (rec && rec.sender) || '',
+      subject: (mem && mem.subject) || (rec && rec.subject) || '(no subject)',
+      date: (mem && mem.date) || (rec && rec.date) || ''
+    });
   }
-  const kept = emails.filter(e => keptIds.has(e.id)).sort(emailComparator('date-desc'));
-  if (!kept.length) {
+  items.sort(emailComparator('date-desc'));
+
+  if (!items.length) {
     el.innerHTML = '<div class="list-empty">No kept emails yet.<br>Swipe right on an email to keep it for later.</div>';
-    updateKeepBadge();
     return;
   }
-  el.innerHTML = kept.map(e => `
+
+  const offlineBanner = (navigator.onLine === false)
+    ? '<div class="keep-offline">Offline — showing saved copies.</div>'
+    : '';
+  el.innerHTML = offlineBanner + items.map(e => `
     <div class="email-item keep-item" onclick="openKept('${e.id}')">
       <div class="email-item-meta">
         <div class="email-item-sender">${esc(e.sender)}</div>
@@ -2002,13 +2165,12 @@ function renderKeepList() {
       <div class="email-item-time">${formatDate(e.date)}</div>
     </div>
   `).join('');
-  updateKeepBadge();
 }
 
 function updateKeepBadge() {
   const badge = document.getElementById('keep-badge');
   if (!badge) return;
-  const n = emails.filter(e => keptIds.has(e.id)).length;
+  const n = keptIds.size;
   if (n > 0) {
     badge.textContent = n > 99 ? '99+' : n;
     badge.style.display = '';
@@ -2077,6 +2239,30 @@ async function fetchEmailBodyRich(email) {
 // The email currently shown in the reader overlay.
 let readerEmail = null;
 
+// Gets the reader body, preferring a fresh fetch but falling back to the
+// offline cache when there's no connection (or the fetch yields nothing).
+async function ensureReaderBody(email) {
+  let ok = false;
+  if (navigator.onLine !== false) {
+    try {
+      await fetchEmailBodyRich(email);
+      ok = !!(email.bodyHtml || (email.bodyText && email.bodyText !== '(could not load body)'));
+    } catch(_) {}
+  }
+  if (!ok) {
+    try {
+      const rec = await idbGet(email.id);
+      if (rec) {
+        email.bodyHtml = rec.bodyHtml || '';
+        email.bodyText = rec.bodyText || email.bodyText || '';
+        email.bodyLoaded = true;
+        ok = true;
+      }
+    } catch(_) {}
+  }
+  return ok;
+}
+
 // Opens the focused reader from the swipe deck (no Mark-as-read footer).
 function openInGmail() {
   if (!currentEmail) return;
@@ -2105,8 +2291,8 @@ async function openReader(email, opts = {}) {
   overlay.classList.add('open');
   document.body.style.overflow = 'hidden';
 
-  // Make sure we have rich body content
-  await fetchEmailBodyRich(email);
+  // Make sure we have rich body content (online fetch, else offline cache)
+  await ensureReaderBody(email);
 
   // The user may have closed the reader or opened another email while awaiting.
   if (readerEmail !== email || !overlay.classList.contains('open')) return;
@@ -2159,13 +2345,25 @@ async function openReader(email, opts = {}) {
 }
 
 // Opens a kept email from the Keep tab, with the bottom Mark-as-read button.
-function openKept(id) {
-  const email = emails.find(e => e.id === id);
+// Falls back to the offline cache when the email isn't loaded in memory.
+async function openKept(id) {
+  let email = emails.find(e => e.id === id);
+  if (!email) {
+    try {
+      const rec = await idbGet(id);
+      if (rec) email = {
+        id: rec.id, sender: rec.sender, subject: rec.subject, date: rec.date,
+        bodyText: rec.bodyText, bodyHtml: rec.bodyHtml, bodyLoaded: true
+      };
+    } catch(_) {}
+  }
   if (email) openReader(email, { markRead: true });
+  else toast('Email not available offline');
 }
 
 async function markReadFromReader() {
   if (!readerEmail) return;
+  if (navigator.onLine === false) { toast('Can’t mark as read while offline'); return; }
   const email = readerEmail;
   const btn = document.querySelector('.reader-mark-read');
   if (btn) { btn.disabled = true; btn.textContent = 'Marking…'; }
