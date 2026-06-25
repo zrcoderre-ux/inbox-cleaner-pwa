@@ -791,6 +791,24 @@ html, body {
 }
 .keep-search:focus { border-color: var(--red); }
 
+.keep-filter {
+  font-size: 12px;
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.keep-filter input { accent-color: var(--red); }
+
+.keep-offline-status {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 6px 16px;
+  border-bottom: 0.5px solid var(--border);
+}
+.keep-offline-status:empty { display: none; }
+
 .keep-item .email-item-subject { white-space: normal; }
 
 .keep-offline {
@@ -1144,6 +1162,7 @@ html, body {
           <div class="list-toolbar">
             <div class="toolbar-left">
               <span class="sel-count" id="keep-count-label"></span>
+              <label class="keep-filter"><input type="checkbox" id="keep-offline-only" onchange="setKeepOfflineOnly(this.checked)"> Offline only</label>
             </div>
             <div class="toolbar-right">
               <select class="sort-select" id="keep-sort-select" onchange="setKeepSort(this.value)" aria-label="Sort kept emails">
@@ -1154,6 +1173,7 @@ html, body {
               </select>
             </div>
           </div>
+          <div class="keep-offline-status" id="keep-offline-status"></div>
           <div class="email-list-inner" id="keep-list-el" style="max-height:none;overflow:visible;">
             <div class="list-empty">No kept emails yet.</div>
           </div>
@@ -1287,6 +1307,13 @@ let currentEmail = null;
 let sortMode = 'priority';
 let keepSortMode = 'date-desc';
 let keepSearch = '';
+let keepOfflineOnly = false;
+// Background queue that caches kept emails for offline reading, most-recent
+// first, with limited concurrency so rapid keeps don't overwhelm the API.
+let cacheQueue = [];
+let cacheWorkers = 0;
+const MAX_CACHE_WORKERS = 3;
+let keepRenderTimer = null;
 // IDs of emails the user chose to keep unread. Persisted so they aren't
 // re-surfaced in the swipe deck on every load.
 let keptIds = new Set();
@@ -1429,6 +1456,44 @@ async function cacheKeptEmail(email) {
   } catch(e) { /* best-effort */ }
 }
 
+// Queues an email to be cached for offline reading, prioritizing the most
+// recent emails first. Silent and best-effort.
+function enqueueCache(email) {
+  if (!email || !email.id) return;
+  if (cacheQueue.some(e => e.id === email.id)) return;
+  cacheQueue.push(email);
+  cacheQueue.sort((a, b) => dateMs(b) - dateMs(a)); // newest first
+  pumpCacheQueue();
+}
+
+function dateMs(email) {
+  const t = new Date(email && email.date).getTime();
+  return isNaN(t) ? 0 : t;
+}
+
+function pumpCacheQueue() {
+  while (cacheWorkers < MAX_CACHE_WORKERS && cacheQueue.length) {
+    if (navigator.onLine === false) return; // can't fetch offline; leave queued
+    const email = cacheQueue.shift();
+    cacheWorkers++;
+    (async () => {
+      try {
+        const rec = await idbGet(email.id).catch(() => null);
+        if (!hasBody(rec)) await cacheKeptEmail(email);
+      } catch(_) {}
+      cacheWorkers--;
+      scheduleKeepRender(); // refresh the offline indicator as items land
+      pumpCacheQueue();
+    })();
+  }
+}
+
+// Coalesces Keep-list re-renders triggered by the background cache queue.
+function scheduleKeepRender() {
+  if (keepRenderTimer) return;
+  keepRenderTimer = setTimeout(() => { keepRenderTimer = null; renderKeepList(); }, 500);
+}
+
 // Replaces remote <img> sources with data URLs so images survive offline.
 // Best-effort: images blocked by CORS keep their original URL.
 async function inlineImages(html) {
@@ -1460,31 +1525,24 @@ async function inlineImages(html) {
 // including ones kept on another device that aren't in this load's inbox view.
 // Fetches metadata when needed so they can be displayed and read offline.
 async function backfillKeptCache() {
-  // Collect kept emails whose cached copy is missing or has no usable body.
-  const todo = [];
+  // Enqueue kept emails whose cached copy is missing or has no usable body.
+  // The queue caches them newest-first with limited concurrency.
   for (const id of keptIds) {
     let rec = null;
     try { rec = await idbGet(id); } catch(_) {}
-    if (!hasBody(rec)) todo.push(id);
-  }
-  // Cache in small concurrent batches so it finishes quickly (before the user
-  // may go offline) without hammering the API.
-  for (let i = 0; i < todo.length; i += 5) {
-    const chunk = todo.slice(i, i + 5);
-    await Promise.all(chunk.map(async id => {
+    if (hasBody(rec)) continue;
+    let email = emails.find(e => e.id === id);
+    if (!email) {
       try {
-        let email = emails.find(e => e.id === id);
-        if (!email) {
-          const res = await gapi.client.gmail.users.messages.get({
-            userId: 'me', id, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date']
-          });
-          const h = {};
-          (res.result.payload.headers || []).forEach(x => { h[x.name] = x.value; });
-          email = { id, sender: h['From'] || '', subject: h['Subject'] || '(no subject)', date: h['Date'] || '', bodyText: null, bodyLoaded: false };
-        }
-        await cacheKeptEmail(email);
-      } catch(_) {}
-    }));
+        const res = await gapi.client.gmail.users.messages.get({
+          userId: 'me', id, format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date']
+        });
+        const h = {};
+        (res.result.payload.headers || []).forEach(x => { h[x.name] = x.value; });
+        email = { id, sender: h['From'] || '', subject: h['Subject'] || '(no subject)', date: h['Date'] || '', bodyText: null, bodyLoaded: false };
+      } catch(_) { continue; }
+    }
+    enqueueCache(email);
   }
   renderKeepList();
 }
@@ -2232,10 +2290,10 @@ async function swipeCard(direction) {
       // Remember this choice so the email isn't re-surfaced on future loads.
       keptIds.add(email.id);
       saveKept();
-      // Tag it in Gmail so the keep syncs across devices, and cache its
-      // content locally so it's readable offline later.
+      // Tag it in Gmail so the keep syncs across devices, and queue its
+      // content to be cached locally (newest-first) for offline reading.
       addKeepLabel(email.id);
-      cacheKeptEmail(email);
+      enqueueCache(email);
       toast('Kept unread');
     }
   } else {
@@ -2407,11 +2465,24 @@ async function renderKeepList() {
       id,
       sender: (mem && mem.sender) || (rec && rec.sender) || '',
       subject: (mem && mem.subject) || (rec && rec.subject) || '(no subject)',
-      date: (mem && mem.date) || (rec && rec.date) || ''
+      date: (mem && mem.date) || (rec && rec.date) || '',
+      saved: hasBody(rec) // available to read offline
     });
   }
 
   const total = items.length;
+  const savedCount = items.filter(i => i.saved).length;
+  const pending = total - savedCount;
+
+  // Offline-availability indicator.
+  const statusEl = document.getElementById('keep-offline-status');
+  if (statusEl) {
+    if (!total) statusEl.textContent = '';
+    else if (pending === 0) statusEl.textContent = `✓ All ${savedCount} saved offline`;
+    else statusEl.textContent = `✓ ${savedCount} saved · ${pending} not saved yet`;
+  }
+
+  if (keepOfflineOnly) items = items.filter(i => i.saved);
   const q = keepSearch.trim().toLowerCase();
   if (q) {
     items = items.filter(e =>
@@ -2419,16 +2490,17 @@ async function renderKeepList() {
   }
   items.sort(emailComparator(keepSortMode));
 
+  const filtering = q || keepOfflineOnly;
   const countLabel = document.getElementById('keep-count-label');
   if (countLabel) countLabel.textContent = !total ? ''
-    : (q ? `${items.length} of ${total}` : `${total} kept`);
+    : (filtering ? `${items.length} of ${total}` : `${total} kept`);
 
   if (!total) {
     el.innerHTML = '<div class="list-empty">No kept emails yet.<br>Swipe right on an email to keep it for later.</div>';
     return;
   }
   if (!items.length) {
-    el.innerHTML = '<div class="list-empty">No kept emails match your search.</div>';
+    el.innerHTML = `<div class="list-empty">${keepOfflineOnly ? 'No kept emails are saved for offline yet.' : 'No kept emails match your search.'}</div>`;
     return;
   }
 
@@ -2474,6 +2546,20 @@ function setKeepSort(mode) {
 
 function setKeepSearch(q) {
   keepSearch = q || '';
+  renderKeepList();
+}
+
+// Restores the "Offline only" filter preference and reflects it in the checkbox.
+function loadKeepOfflineOnly() {
+  try { keepOfflineOnly = localStorage.getItem('ic_keep_offline_only') === '1'; }
+  catch(e) { keepOfflineOnly = false; }
+  const cb = document.getElementById('keep-offline-only');
+  if (cb) cb.checked = keepOfflineOnly;
+}
+
+function setKeepOfflineOnly(on) {
+  keepOfflineOnly = !!on;
+  try { localStorage.setItem('ic_keep_offline_only', on ? '1' : '0'); } catch(e) {}
   renderKeepList();
 }
 
@@ -2605,16 +2691,18 @@ async function openReader(email, opts = {}) {
   document.body.style.overflow = 'hidden';
 
   // Make sure we have rich body content (online fetch, else offline cache)
-  await ensureReaderBody(email);
+  const ok = await ensureReaderBody(email);
 
   // The user may have closed the reader or opened another email while awaiting.
   if (readerEmail !== email || !overlay.classList.contains('open')) return;
 
-  const footerHTML = withFooter ? `
+  // Only offer Mark-as-read once the body has actually loaded.
+  const showFooter = withFooter && ok;
+  const footerHTML = `
     <div class="reader-footer">
       <div class="reader-footer-hint">Done reading?</div>
       <button class="reader-mark-read" onclick="markReadFromReader()">Mark as read</button>
-    </div>` : '';
+    </div>`;
 
   // Prefer HTML rendering in a sandboxed iframe; fall back to plain text
   if (email.bodyHtml) {
@@ -2637,22 +2725,31 @@ async function openReader(email, opts = {}) {
     iframe.setAttribute('sandbox', withFooter
       ? 'allow-popups allow-popups-to-escape-sandbox allow-same-origin'
       : 'allow-popups allow-popups-to-escape-sandbox');
-    if (withFooter) {
-      iframe.addEventListener('load', () => {
+    // Add the Mark-as-read footer only after the email body has rendered.
+    let footerAdded = false;
+    const addFooter = () => {
+      if (footerAdded || !showFooter || readerEmail !== email) return;
+      footerAdded = true;
+      bodyEl.insertAdjacentHTML('beforeend', footerHTML);
+    };
+    iframe.addEventListener('load', () => {
+      if (withFooter) {
         try {
           const h = iframe.contentDocument.body.scrollHeight;
           iframe.style.height = (h + 24) + 'px';
         } catch(e) {
           iframe.style.height = '70vh';
         }
-      });
-    }
+      }
+      addFooter();
+    });
     iframe.srcdoc = wrapped;
     bodyEl.innerHTML = '';
     bodyEl.appendChild(iframe);
-    if (footerHTML) bodyEl.insertAdjacentHTML('beforeend', footerHTML);
+    // Fallback in case the iframe load event never fires.
+    setTimeout(addFooter, 4000);
   } else {
-    bodyEl.innerHTML = `<div class="reader-text"></div>` + footerHTML;
+    bodyEl.innerHTML = `<div class="reader-text"></div>` + (showFooter ? footerHTML : '');
     bodyEl.querySelector('.reader-text').textContent = email.bodyText || '(no content)';
   }
 }
@@ -2925,6 +3022,7 @@ if ('serviceWorker' in navigator) {
 loadRules();
 loadKept();
 loadKeepSort();
+loadKeepOfflineOnly();
 loadClientId();
 
 // Handle OAuth redirect token on page load — deferred until gapi.js is ready
@@ -3015,7 +3113,13 @@ if (isSilentFrame) {
 // If we started offline and the connection returns, reload into the normal
 // online (sign-in / load) flow — but don't interrupt an email being read.
 window.addEventListener('online', () => {
-  if (!offlineMode) return;
+  if (!offlineMode) {
+    // Connection returned mid-session — re-enqueue and resume caching every
+    // kept email that isn't fully saved yet.
+    if (typeof gapi !== 'undefined' && gapi.client && gapi.client.gmail) backfillKeptCache();
+    pumpCacheQueue();
+    return;
+  }
   const overlay = document.getElementById('reader-overlay');
   if (overlay && overlay.classList.contains('open')) { pendingReload = true; return; }
   location.reload();
