@@ -72,9 +72,11 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   max-width: 480px;
   margin: 0 auto;
   background: var(--surface-2);
+  overflow: hidden;
 }
 
 .screen { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
@@ -1077,7 +1079,7 @@ html, body {
   </div>
 
   <!-- MAIN WRAPPER (header + screens + nav) -->
-  <div id="main-wrapper" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
+  <div id="main-wrapper" style="display:none;flex-direction:column;flex:1;min-height:0;overflow:hidden;">
 
     <div class="app-header">
       <div class="logo">
