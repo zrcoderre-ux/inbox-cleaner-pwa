@@ -3114,7 +3114,9 @@ if (isSilentFrame) {
 // online (sign-in / load) flow — but don't interrupt an email being read.
 window.addEventListener('online', () => {
   if (!offlineMode) {
-    // Connection returned mid-session — resume caching any pending kept emails.
+    // Connection returned mid-session — re-enqueue and resume caching every
+    // kept email that isn't fully saved yet.
+    if (typeof gapi !== 'undefined' && gapi.client && gapi.client.gmail) backfillKeptCache();
     pumpCacheQueue();
     return;
   }
