@@ -1481,11 +1481,6 @@ function effectiveClientId() {
   return OAUTH_CLIENT_ID || localStorage.getItem('ic_client_id') || '';
 }
 
-// Resolves the client ID, preferring the hardcoded constant over the saved one.
-function effectiveClientId() {
-  return OAUTH_CLIENT_ID || localStorage.getItem('ic_client_id') || '';
-}
-
 function loadClientId() {
   if (OAUTH_CLIENT_ID) {
     // Client ID is baked in — hide the manual setup UI and enable sign-in.
@@ -1510,19 +1505,75 @@ document.getElementById('client-id-input').addEventListener('input', function() 
   document.getElementById('signin-btn').disabled = !v;
 });
 
-function signIn() {
-  const clientId = effectiveClientId();
-  if (!clientId) return;
-  // Redirect-based OAuth — works on all mobile browsers and standalone PWA mode
-  const redirectUri = location.origin + '/';
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
+// Token storage lives in localStorage so the session survives app restarts
+// (until the token's ~1h expiry), instead of being lost with the tab session.
+function storeToken(token, expiresInSec) {
+  accessToken = token;
+  try {
+    localStorage.setItem('ic_access_token', token);
+    localStorage.setItem('ic_token_expiry', String(Date.now() + (expiresInSec || 3600) * 1000));
+  } catch(e) {}
+}
+
+function clearToken() {
+  accessToken = null;
+  try {
+    localStorage.removeItem('ic_access_token');
+    localStorage.removeItem('ic_token_expiry');
+  } catch(e) {}
+}
+
+function tokenExpiry() {
+  try { return parseInt(localStorage.getItem('ic_token_expiry') || '0', 10); } catch(e) { return 0; }
+}
+
+function buildAuthUrl(extra) {
+  const params = new URLSearchParams(Object.assign({
+    client_id: effectiveClientId(),
+    redirect_uri: location.origin + '/',
     response_type: 'token',
-    scope: SCOPES,
-    prompt: 'select_account'
+    scope: SCOPES
+  }, extra));
+  return 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
+}
+
+function signIn() {
+  if (!effectiveClientId()) return;
+  // Redirect-based OAuth — works on all mobile browsers and standalone PWA mode
+  location.href = buildAuthUrl({ prompt: 'select_account' });
+}
+
+// Attempts to silently obtain a fresh token via a hidden iframe (prompt=none).
+// Works when there's an active Google session and consent was already granted;
+// otherwise resolves false and the caller falls back to an interactive sign-in.
+function silentRenew() {
+  return new Promise(resolve => {
+    if (!effectiveClientId() || navigator.onLine === false) { resolve(false); return; }
+    let done = false;
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    const finish = ok => {
+      if (done) return;
+      done = true;
+      window.removeEventListener('message', onMsg);
+      if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+      resolve(ok);
+    };
+    const onMsg = e => {
+      if (e.origin !== location.origin || !e.data || e.data.type !== 'ic_silent_token') return;
+      if (e.data.access_token) {
+        storeToken(e.data.access_token, parseInt(e.data.expires_in || '3600', 10));
+        if (typeof gapi !== 'undefined' && gapi.client) gapi.client.setToken({ access_token: accessToken });
+        finish(true);
+      } else {
+        finish(false);
+      }
+    };
+    window.addEventListener('message', onMsg);
+    iframe.src = buildAuthUrl({ prompt: 'none', state: 'ic_silent' });
+    document.body.appendChild(iframe);
+    setTimeout(() => finish(false), 8000);
   });
-  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
 }
 
 function handleOAuthRedirect() {
@@ -1531,29 +1582,19 @@ function handleOAuthRedirect() {
   if (hash) {
     const params = new URLSearchParams(hash);
     const token = params.get('access_token');
-    const expiresIn = parseInt(params.get('expires_in') || '3600', 10);
     if (token) {
       history.replaceState(null, '', location.pathname);
-      accessToken = token;
-      try {
-        sessionStorage.setItem('ic_access_token', token);
-        sessionStorage.setItem('ic_token_expiry', String(Date.now() + expiresIn * 1000));
-      } catch(e) {}
+      storeToken(token, parseInt(params.get('expires_in') || '3600', 10));
       return true;
     }
   }
-  // No fresh redirect — try to restore a still-valid token from sessionStorage
-  try {
-    const stored = sessionStorage.getItem('ic_access_token');
-    const expiry = parseInt(sessionStorage.getItem('ic_token_expiry') || '0', 10);
-    if (stored && Date.now() < expiry - 30000) { // 30s safety margin
-      accessToken = stored;
-      return true;
-    }
-    // Expired — clean up
-    sessionStorage.removeItem('ic_access_token');
-    sessionStorage.removeItem('ic_token_expiry');
-  } catch(e) {}
+  // No fresh redirect — try to restore a still-valid token
+  const stored = (() => { try { return localStorage.getItem('ic_access_token'); } catch(e) { return null; } })();
+  if (stored && Date.now() < tokenExpiry() - 30000) { // 30s safety margin
+    accessToken = stored;
+    return true;
+  }
+  clearToken();
   return false;
 }
 
@@ -1605,11 +1646,7 @@ function enterOfflineMode() {
 function signOut() {
   if (!confirm('Sign out?')) return;
   stopAutoRefresh();
-  accessToken = null;
-  try {
-    sessionStorage.removeItem('ic_access_token');
-    sessionStorage.removeItem('ic_token_expiry');
-  } catch(e) {}
+  clearToken();
   emails = [];
   swipeQueue = [];
   swipeHistory = [];
@@ -1751,12 +1788,18 @@ async function fetchEmails() {
     // Detect auth failures specifically — 401 means token expired
     const status = e?.status || e?.result?.error?.code;
     if (status === 401) {
-      setStatus(false, 'Session expired. Please sign in again.');
-      try {
-        sessionStorage.removeItem('ic_access_token');
-        sessionStorage.removeItem('ic_token_expiry');
-      } catch(_) {}
-      setTimeout(() => signIn(), 1500);
+      // Token expired — try a silent renewal first; reload only if that fails.
+      setStatus(true, 'Refreshing session…');
+      const ok = await silentRenew();
+      if (ok && gapi.client) {
+        gapi.client.setToken({ access_token: accessToken });
+        setStatus(false, 'Session refreshed — loading…');
+        setTimeout(() => fetchEmails(), 0); // runs after this call's finally
+      } else {
+        clearToken();
+        setStatus(false, 'Session expired. Please sign in again.');
+        setTimeout(() => signIn(), 1500);
+      }
     } else {
       const msg = e?.result?.error?.message || e?.message || 'Unknown error';
       setStatus(false, 'Error: ' + msg);
@@ -1782,6 +1825,13 @@ async function silentRefresh() {
   if (document.querySelector('.swipe-card.is-dragging')) return;
   isFetching = true;
   try {
+    // Proactively renew the token if it's within 10 minutes of expiring, so
+    // the session refreshes in the background instead of failing on a request.
+    const exp = tokenExpiry();
+    if (exp && exp - Date.now() < 600000) {
+      const ok = await silentRenew();
+      if (ok && gapi.client) gapi.client.setToken({ access_token: accessToken });
+    }
     const { messages, importantIds } = await listUnreadMessages(200);
     const known = new Set(emails.map(e => e.id));
     const newStubs = messages.filter(m => !known.has(m.id));
@@ -2752,8 +2802,8 @@ loadClientId();
 
 // Handle OAuth redirect token on page load — deferred until gapi.js is ready
 function initAfterGapi() {
-  // handleOAuthRedirect now also restores a still-valid token from sessionStorage,
-  // so this runs on every page load that has a usable token — not just fresh redirects.
+  // handleOAuthRedirect restores a still-valid token from localStorage too, so
+  // this runs on every page load that has a usable token — not just redirects.
   if (handleOAuthRedirect()) {
     gapi.load('client', async () => {
       try {
@@ -2768,11 +2818,7 @@ function initAfterGapi() {
       } catch(e) {
         console.error('gapi init failed:', e);
         // If init fails, clear stored token and fall back to the sign-in screen
-        try {
-          sessionStorage.removeItem('ic_access_token');
-          sessionStorage.removeItem('ic_token_expiry');
-        } catch(_) {}
-        accessToken = null;
+        clearToken();
         showAuthScreen();
       }
     });
@@ -2786,9 +2832,8 @@ function initAfterGapi() {
 function hasUsableToken() {
   if (location.hash && location.hash.indexOf('access_token=') !== -1) return true;
   try {
-    const stored = sessionStorage.getItem('ic_access_token');
-    const expiry = parseInt(sessionStorage.getItem('ic_token_expiry') || '0', 10);
-    if (stored && Date.now() < expiry - 30000) return true;
+    const stored = localStorage.getItem('ic_access_token');
+    if (stored && Date.now() < tokenExpiry() - 30000) return true;
   } catch(e) {}
   return false;
 }
@@ -2799,21 +2844,39 @@ function whenGapiReady(fn) {
   if (s) s.addEventListener('load', fn);
 }
 
-// Boot decision. The splash is shown by default (see markup), so the sign-in
-// screen never flashes for an already-authenticated user.
-if (navigator.onLine === false) {
-  // Offline: skip Google sign-in and go straight to the cached Keep emails.
-  enterOfflineMode();
-} else if (hasUsableToken()) {
-  // Have a session — keep the splash up until the app is ready.
+function bootWithSession() {
   whenGapiReady(initAfterGapi);
   // Safety net: if gapi.js never loads, don't strand the user on the splash.
   setTimeout(() => {
     const splash = document.getElementById('boot-splash');
     if (splash && splash.style.display !== 'none') showAuthScreen();
   }, 12000);
+}
+
+// Boot decision. The splash is shown by default (see markup), so the sign-in
+// screen never flashes for an already-authenticated user.
+const isSilentFrame = window.parent !== window && location.hash.indexOf('ic_silent') !== -1;
+if (isSilentFrame) {
+  // Loaded inside the silent-renewal iframe: hand the token back and stop.
+  try {
+    const p = new URLSearchParams(location.hash.substring(1));
+    parent.postMessage({
+      type: 'ic_silent_token',
+      access_token: p.get('access_token') || '',
+      expires_in: p.get('expires_in') || ''
+    }, location.origin);
+  } catch(e) {}
+} else if (navigator.onLine === false) {
+  // Offline: skip Google sign-in and go straight to the cached Keep emails.
+  enterOfflineMode();
+} else if (hasUsableToken()) {
+  // Have a session — keep the splash up until the app is ready.
+  bootWithSession();
+} else if (effectiveClientId()) {
+  // No valid token, but we know the client — try a silent (no-UI) renewal
+  // before dropping to the sign-in screen. Splash stays up meanwhile.
+  silentRenew().then(ok => ok ? bootWithSession() : showAuthScreen());
 } else {
-  // No session — show the sign-in screen right away (no need to wait for gapi).
   showAuthScreen();
 }
 
