@@ -277,6 +277,21 @@ html, body {
 .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-primary:not(:disabled):active { opacity: 0.85; transform: scale(0.99); }
 
+.btn-secondary {
+  width: 100%;
+  height: 44px;
+  background: var(--surface-2);
+  color: var(--text-1);
+  border: 0.5px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 10px;
+}
+.btn-secondary:active { background: var(--surface-3); transform: scale(0.99); }
+
 .setup-steps {
   margin-top: 20px;
   background: var(--surface-2);
@@ -1006,6 +1021,8 @@ html, body {
 
         <button class="btn-primary" id="signin-btn" onclick="signIn()" disabled>Sign in with Google</button>
 
+        <button class="btn-secondary" id="offline-keep-btn" onclick="enterOfflineMode()" style="display:none;">View saved emails (offline)</button>
+
         <div class="setup-steps" id="setup-steps">
           <p>One-time setup (5 min)</p>
           <ol>
@@ -1613,12 +1630,16 @@ function hideSplash() {
   if (s) s.style.display = 'none';
 }
 
-// Reveals the sign-in screen (and clears the boot splash).
+// Reveals the sign-in screen (and clears the boot splash). When there are
+// kept emails cached locally, also offer an offline escape hatch so the user
+// can always reach them even if sign-in/network is unavailable.
 function showAuthScreen() {
   hideSplash();
   const auth = document.getElementById('auth-screen');
   auth.style.display = 'flex';
   auth.classList.add('active');
+  const ob = document.getElementById('offline-keep-btn');
+  if (ob) ob.style.display = keptIds.size > 0 ? 'block' : 'none';
 }
 
 function showApp() {
@@ -2838,19 +2859,24 @@ function hasUsableToken() {
   return false;
 }
 
-function whenGapiReady(fn) {
+function whenGapiReady(fn, onFail) {
   if (typeof gapi !== 'undefined') { fn(); return; }
   const s = document.querySelector('script[src*="api.js"]');
-  if (s) s.addEventListener('load', fn);
+  if (!s) { if (onFail) onFail(); return; }
+  s.addEventListener('load', fn);
+  // gapi.js fails to load when offline — fall back instead of hanging.
+  s.addEventListener('error', () => { if (onFail) onFail(); });
 }
 
 function bootWithSession() {
-  whenGapiReady(initAfterGapi);
-  // Safety net: if gapi.js never loads, don't strand the user on the splash.
+  whenGapiReady(initAfterGapi, showAuthScreen);
+  // Safety net: if gapi.js never loads (e.g. offline with a stale onLine flag),
+  // don't strand the user on the splash — drop to the sign-in screen, which
+  // offers the offline escape hatch when there are cached kept emails.
   setTimeout(() => {
     const splash = document.getElementById('boot-splash');
-    if (splash && splash.style.display !== 'none') showAuthScreen();
-  }, 12000);
+    if (splash && splash.style.display !== 'none' && !offlineMode) showAuthScreen();
+  }, 6000);
 }
 
 // Boot decision. The splash is shown by default (see markup), so the sign-in
