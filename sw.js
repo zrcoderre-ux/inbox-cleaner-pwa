@@ -1,4 +1,4 @@
-const CACHE_NAME = 'inbox-cleaner-v27';
+const CACHE_NAME = 'inbox-cleaner-v28';
 const ASSETS = [
   '/',
   '/index.html',
