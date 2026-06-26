@@ -1,4 +1,4 @@
-const CACHE_NAME = 'inbox-cleaner-v28';
+const CACHE_NAME = 'inbox-cleaner-v29';
 const ASSETS = [
   '/',
   '/index.html',
@@ -34,17 +34,10 @@ self.addEventListener('fetch', e => {
     (req.headers.get('accept') || '').includes('text/html');
 
   if (isHTML) {
-    // Network-first for the page, so new code shows up as soon as you're
-    // online; fall back to the cached shell when offline.
-    e.respondWith(
-      fetch(req).then(res => {
-        const copy = res.clone();
-        caches.open(CACHE_NAME).then(c => c.put('/', copy)).catch(() => {});
-        return res;
-      }).catch(() =>
-        caches.match(req).then(r => r || caches.match('/') || caches.match('/index.html'))
-      )
-    );
+    // Network-first for the page so new code shows up when online — but with a
+    // short timeout so a slow/spotty connection falls back to the cached shell
+    // instead of hanging (which made the app "never load").
+    e.respondWith(htmlStrategy(req));
     return;
   }
 
@@ -53,3 +46,28 @@ self.addEventListener('fetch', e => {
     caches.match(req).then(cached => cached || fetch(req))
   );
 });
+
+async function cachedShell(req) {
+  return (await caches.match(req)) ||
+         (await caches.match('/')) ||
+         (await caches.match('/index.html'));
+}
+
+async function htmlStrategy(req) {
+  let cached;
+  try { cached = await cachedShell(req); } catch (e) {}
+  try {
+    const net = await Promise.race([
+      fetch(req),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500))
+    ]);
+    if (net && net.ok) {
+      caches.open(CACHE_NAME).then(c => c.put('/', net.clone())).catch(() => {});
+      return net;
+    }
+    return cached || net;
+  } catch (e) {
+    // Timed out or offline — serve the cached shell; last resort is a raw fetch.
+    return cached || fetch(req);
+  }
+}
