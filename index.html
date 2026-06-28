@@ -135,6 +135,42 @@ html, body {
   font-weight: 500;
   display: flex; align-items: center; justify-content: center;
 }
+.user-chip .chip-caret { width: 12px; height: 12px; flex-shrink: 0; }
+
+/* Account switcher menu */
+.account-menu {
+  position: absolute;
+  top: calc(var(--header-h) - 6px);
+  right: 12px;
+  z-index: 1200;
+  background: var(--surface);
+  border: 0.5px solid var(--border-mid);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card-lifted);
+  padding: 6px;
+  min-width: 220px;
+  max-width: 86vw;
+}
+.acct-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 10px;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--text-1);
+  cursor: pointer;
+}
+.acct-row:active { background: var(--surface-3); }
+.acct-row.active { font-weight: 500; }
+.acct-check { width: 14px; flex-shrink: 0; color: var(--red); }
+.acct-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-action { color: var(--text-2); border-top: 0.5px solid var(--border); margin-top: 4px; }
 
 /* ── Bottom Nav ───────────────────────────────────────────── */
 .bottom-nav {
@@ -1103,10 +1139,12 @@ html, body {
       </div>
       <h1>Inbox Cleaner</h1>
       <div class="header-right">
-        <div class="user-chip" onclick="signOut()">
+        <div class="user-chip" onclick="toggleAccountMenu()">
           <div class="avatar" id="user-initial">?</div>
           <span id="user-email-short">—</span>
+          <svg class="chip-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
         </div>
+        <div class="account-menu" id="account-menu" style="display:none;"></div>
       </div>
     </div>
 
@@ -1324,7 +1362,7 @@ html, body {
 <script>
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
-const APP_VERSION = 'v29'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v30'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1332,6 +1370,11 @@ const APP_VERSION = 'v29'; // shown in Settings so the running build is verifiab
 const OAUTH_CLIENT_ID = '348956142337-6g3l76tuaqsl0f20rdbd0u5bhuag2c4g.apps.googleusercontent.com';
 let accessToken = null;
 let tokenClient = null;
+// Multiple Google accounts: one active at a time. Each account has its own
+// token and its own namespaced data (keep list, deck, outbox).
+let accounts = [];        // [{ email, token, expiry }]
+let activeEmail = null;   // the active account's email
+let pendingToken = null;  // a fresh redirect token, adopted once we know its email
 let emails = [];
 let swipeQueue = [];
 let swipeHistory = [];
@@ -1391,14 +1434,20 @@ function saveRules() {
   localStorage.setItem('ic_rules', JSON.stringify(rules));
 }
 
+// Per-account localStorage key: data is namespaced by the active account's
+// email so accounts don't share keep lists, decks, or outboxes.
+function nsKey(base) {
+  return activeEmail ? base + '::' + activeEmail : base;
+}
+
 // ── Kept-unread tracking ───────────────────────────────────
 function loadKept() {
-  try { keptIds = new Set(JSON.parse(localStorage.getItem('ic_kept') || '[]')); }
+  try { keptIds = new Set(JSON.parse(localStorage.getItem(nsKey('ic_kept')) || '[]')); }
   catch(e) { keptIds = new Set(); }
 }
 
 function saveKept() {
-  localStorage.setItem('ic_kept', JSON.stringify([...keptIds]));
+  localStorage.setItem(nsKey('ic_kept'), JSON.stringify([...keptIds]));
 }
 
 // Once an email is read (or blocked) there's no reason to remember it as kept.
@@ -1646,7 +1695,7 @@ async function listKeepLabeledIds() {
 // the label is canonical, so un-keeps made on other devices propagate here.
 async function syncKeptFromLabel() {
   await ensureKeepLabel();
-  const migrated = localStorage.getItem('ic_keep_migrated') === '1';
+  const migrated = localStorage.getItem(nsKey('ic_keep_migrated')) === '1';
   if (!migrated) {
     for (const id of keptIds) { await addKeepLabel(id); }
   }
@@ -1655,7 +1704,7 @@ async function syncKeptFromLabel() {
     keptIds = new Set(serverIds);
   } else {
     serverIds.forEach(id => keptIds.add(id));
-    localStorage.setItem('ic_keep_migrated', '1');
+    localStorage.setItem(nsKey('ic_keep_migrated'), '1');
   }
   saveKept();
 }
@@ -1669,21 +1718,12 @@ function onlineReady() {
 }
 
 function loadPendingOps() {
-  try { pendingOps = JSON.parse(localStorage.getItem('ic_pending_ops') || '[]'); }
+  try { pendingOps = JSON.parse(localStorage.getItem(nsKey('ic_pending_ops')) || '[]'); }
   catch(e) { pendingOps = []; }
-  // Migrate the older read-only outbox, if present.
-  try {
-    const old = JSON.parse(localStorage.getItem('ic_pending_reads') || '[]');
-    if (old.length) {
-      old.forEach(id => { if (!pendingOps.some(o => o.type === 'read' && o.id === id)) pendingOps.push({ type: 'read', id }); });
-      localStorage.removeItem('ic_pending_reads');
-      savePendingOps();
-    }
-  } catch(e) {}
 }
 
 function savePendingOps() {
-  localStorage.setItem('ic_pending_ops', JSON.stringify(pendingOps));
+  localStorage.setItem(nsKey('ic_pending_ops'), JSON.stringify(pendingOps));
 }
 
 function enqueueOp(op) {
@@ -1796,27 +1836,62 @@ document.getElementById('client-id-input').addEventListener('input', function() 
   document.getElementById('signin-btn').disabled = !v;
 });
 
-// Token storage lives in localStorage so the session survives app restarts
-// (until the token's ~1h expiry), instead of being lost with the tab session.
-function storeToken(token, expiresInSec) {
-  accessToken = token;
+// ── Accounts ───────────────────────────────────────────────
+function loadAccounts() {
+  try { accounts = JSON.parse(localStorage.getItem('ic_accounts') || '[]'); } catch(e) { accounts = []; }
+  activeEmail = localStorage.getItem('ic_active_account') || (accounts[0] ? accounts[0].email : null);
+  // Migrate a pre-multi-account single token (adopted as an account after the
+  // profile fetch tells us its email).
+  if (!accounts.length) {
+    try {
+      const t = localStorage.getItem('ic_access_token');
+      const exp = parseInt(localStorage.getItem('ic_token_expiry') || '0', 10);
+      if (t && Date.now() < exp - 30000) { pendingToken = { token: t, expiry: exp, legacy: true }; accessToken = t; }
+    } catch(e) {}
+  }
+}
+
+function saveAccounts() {
   try {
-    localStorage.setItem('ic_access_token', token);
-    localStorage.setItem('ic_token_expiry', String(Date.now() + (expiresInSec || 3600) * 1000));
+    localStorage.setItem('ic_accounts', JSON.stringify(accounts));
+    if (activeEmail) localStorage.setItem('ic_active_account', activeEmail);
   } catch(e) {}
 }
 
-function clearToken() {
-  accessToken = null;
-  try {
-    localStorage.removeItem('ic_access_token');
-    localStorage.removeItem('ic_token_expiry');
-  } catch(e) {}
+function activeAccount() { return accounts.find(a => a.email === activeEmail) || null; }
+
+function upsertAccount(email, token, expiry) {
+  let a = accounts.find(x => x.email === email);
+  if (a) { a.token = token; a.expiry = expiry; } else { a = { email, token, expiry }; accounts.push(a); }
+  return a;
 }
 
-function tokenExpiry() {
-  try { return parseInt(localStorage.getItem('ic_token_expiry') || '0', 10); } catch(e) { return 0; }
+// One-time copy of legacy (global) data into the namespaced keys for an email.
+function migrateGlobalDataTo(email) {
+  ['ic_kept', 'ic_deck', 'ic_pending_ops', 'ic_keep_migrated'].forEach(base => {
+    const ns = base + '::' + email;
+    const g = localStorage.getItem(base);
+    if (g != null && localStorage.getItem(ns) == null) localStorage.setItem(ns, g);
+  });
 }
+
+// Records the account for a freshly-authorized email and makes it active.
+function adoptAccount(email, token, expiry, legacy) {
+  const isNew = !accounts.find(a => a.email === email);
+  upsertAccount(email, token, expiry);
+  activeEmail = email;
+  if (legacy && isNew) migrateGlobalDataTo(email);
+  saveAccounts();
+}
+
+// (Re)loads the active account's namespaced data and resets its Keep label.
+function loadAccountData() {
+  keepLabelId = null;
+  loadKept();
+  loadPendingOps();
+}
+
+function tokenExpiry() { const a = activeAccount(); return a ? a.expiry : 0; }
 
 function buildAuthUrl(extra) {
   const params = new URLSearchParams(Object.assign({
@@ -1828,15 +1903,29 @@ function buildAuthUrl(extra) {
   return 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
 }
 
+// Interactive sign-in / add-account: always shows the account chooser so a new
+// account can be added alongside existing ones.
 function signIn() {
   if (!effectiveClientId()) return;
-  // Redirect-based OAuth — works on all mobile browsers and standalone PWA mode
   location.href = buildAuthUrl({ prompt: 'select_account' });
 }
+const addAccount = signIn;
 
-// Attempts to silently obtain a fresh token via a hidden iframe (prompt=none).
-// Works when there's an active Google session and consent was already granted;
-// otherwise resolves false and the caller falls back to an interactive sign-in.
+// Applies a freshly-obtained token to the active account (or holds it as
+// pending until we learn the email).
+function applyActiveToken(token, expiry) {
+  if (activeEmail) {
+    upsertAccount(activeEmail, token, expiry);
+    saveAccounts();
+  } else {
+    pendingToken = { token, expiry };
+  }
+  accessToken = token;
+  if (typeof gapi !== 'undefined' && gapi.client) gapi.client.setToken({ access_token: token });
+}
+
+// Attempts to silently obtain a fresh token via a hidden iframe (prompt=none),
+// targeting the active account via login_hint.
 function silentRenew() {
   return new Promise(resolve => {
     if (!effectiveClientId() || navigator.onLine === false) { resolve(false); return; }
@@ -1853,18 +1942,25 @@ function silentRenew() {
     const onMsg = e => {
       if (e.origin !== location.origin || !e.data || e.data.type !== 'ic_silent_token') return;
       if (e.data.access_token) {
-        storeToken(e.data.access_token, parseInt(e.data.expires_in || '3600', 10));
-        if (typeof gapi !== 'undefined' && gapi.client) gapi.client.setToken({ access_token: accessToken });
+        applyActiveToken(e.data.access_token, Date.now() + parseInt(e.data.expires_in || '3600', 10) * 1000);
         finish(true);
       } else {
         finish(false);
       }
     };
     window.addEventListener('message', onMsg);
-    iframe.src = buildAuthUrl({ prompt: 'none', state: 'ic_silent' });
+    const extra = { prompt: 'none', state: 'ic_silent' };
+    if (activeEmail) extra.login_hint = activeEmail;
+    iframe.src = buildAuthUrl(extra);
     document.body.appendChild(iframe);
     setTimeout(() => finish(false), 8000);
   });
+}
+
+function clearToken() {
+  accessToken = null;
+  const a = activeAccount();
+  if (a) { a.token = null; a.expiry = 0; saveAccounts(); }
 }
 
 function handleOAuthRedirect() {
@@ -1875,17 +1971,18 @@ function handleOAuthRedirect() {
     const token = params.get('access_token');
     if (token) {
       history.replaceState(null, '', location.pathname);
-      storeToken(token, parseInt(params.get('expires_in') || '3600', 10));
+      pendingToken = { token, expiry: Date.now() + parseInt(params.get('expires_in') || '3600', 10) * 1000 };
+      accessToken = token;
       return true;
     }
   }
-  // No fresh redirect — try to restore a still-valid token
-  const stored = (() => { try { return localStorage.getItem('ic_access_token'); } catch(e) { return null; } })();
-  if (stored && Date.now() < tokenExpiry() - 30000) { // 30s safety margin
-    accessToken = stored;
-    return true;
+  // No fresh redirect — restore the active account's still-valid token
+  const a = activeAccount();
+  if (a && a.token && Date.now() < a.expiry - 30000) { accessToken = a.token; return true; }
+  // Legacy single-token (pre multi-account) awaiting adoption.
+  if (pendingToken && pendingToken.token && Date.now() < pendingToken.expiry - 30000) {
+    accessToken = pendingToken.token; return true;
   }
-  clearToken();
   return false;
 }
 
@@ -1893,10 +1990,96 @@ async function loadUserInfo() {
   try {
     const res = await gapi.client.gmail.users.getProfile({ userId: 'me' });
     const email = res.result.emailAddress || '';
-    document.getElementById('user-initial').textContent = email.charAt(0).toUpperCase();
-    const short = email.length > 20 ? email.split('@')[0] : email;
-    document.getElementById('user-email-short').textContent = short;
-  } catch(e) {}
+    updateAccountChip(email);
+    return email;
+  } catch(e) { return ''; }
+}
+
+// Updates the header account chip to reflect the given (or active) email.
+function updateAccountChip(email) {
+  email = email || activeEmail || '';
+  const initEl = document.getElementById('user-initial');
+  const shortEl = document.getElementById('user-email-short');
+  if (initEl) initEl.textContent = email ? email.charAt(0).toUpperCase() : '?';
+  if (shortEl) shortEl.textContent = email ? (email.length > 20 ? email.split('@')[0] : email) : '—';
+}
+
+// ── Account switcher menu ──────────────────────────────────
+function toggleAccountMenu() {
+  const m = document.getElementById('account-menu');
+  if (!m) return;
+  if (m.style.display === 'block') { m.style.display = 'none'; return; }
+  renderAccountMenu();
+  m.style.display = 'block';
+}
+
+function closeAccountMenu() {
+  const m = document.getElementById('account-menu');
+  if (m) m.style.display = 'none';
+}
+
+function renderAccountMenu() {
+  const m = document.getElementById('account-menu');
+  if (!m) return;
+  const rows = accounts.map(a => `
+    <button class="acct-row${a.email === activeEmail ? ' active' : ''}" onclick="switchAccount('${esc(a.email)}')">
+      <span class="acct-check">${a.email === activeEmail ? '✓' : ''}</span>
+      <span class="acct-email">${esc(a.email)}</span>
+    </button>`).join('');
+  m.innerHTML = rows +
+    '<button class="acct-row acct-action" onclick="addAccount()">＋ Add account</button>' +
+    (activeEmail ? '<button class="acct-row acct-action" onclick="signOutActive()">Sign out ' + esc(shortEmail(activeEmail)) + '</button>' : '');
+}
+
+function shortEmail(e) { return e && e.length > 22 ? e.split('@')[0] : (e || ''); }
+
+function switchAccount(email) {
+  closeAccountMenu();
+  if (email === activeEmail || !accounts.find(a => a.email === email)) return;
+  stopAutoRefresh();
+  activeEmail = email;
+  saveAccounts();
+  // Reset to the new account's data + a clean deck, then load it.
+  loadAccountData();
+  emails = []; swipeQueue = []; swipeHistory = []; selectedIds.clear();
+  updateAccountChip();
+  renderSwipeStack(); renderEmailList(); renderKeepList();
+  const a = activeAccount();
+  accessToken = a ? a.token : null;
+  const gapiReady = typeof gapi !== 'undefined' && gapi.client && gapi.client.gmail;
+  if (a && a.token && Date.now() < a.expiry - 30000 && gapiReady) {
+    gapi.client.setToken({ access_token: a.token });
+    loadUserInfo();
+    fetchEmails();
+  } else if (navigator.onLine !== false) {
+    // Token missing/expired (or gapi not ready) — renew silently, else sign in.
+    silentRenew().then(ok => {
+      if (ok && typeof gapi !== 'undefined' && gapi.client) { loadUserInfo(); fetchEmails(); }
+      else signIn();
+    });
+  }
+}
+
+function signOutActive() {
+  closeAccountMenu();
+  const a = activeAccount();
+  if (!a) return;
+  if (!confirm('Sign out ' + a.email + '?')) return;
+  accounts = accounts.filter(x => x.email !== a.email);
+  activeEmail = accounts[0] ? accounts[0].email : null;
+  saveAccounts();
+  stopAutoRefresh();
+  if (activeEmail) {
+    // Fall through to another signed-in account.
+    const next = activeEmail; activeEmail = null; switchAccount(next);
+  } else {
+    accessToken = null;
+    emails = []; swipeQueue = []; swipeHistory = []; selectedIds.clear();
+    loadAccountData();
+    document.getElementById('main-wrapper').style.display = 'none';
+    renderSwipeStack(); renderEmailList(); renderKeepList();
+    showAuthScreen();
+  }
 }
 
 function hideSplash() {
@@ -1947,22 +2130,6 @@ function enterOfflineMode() {
   renderSwipeStack();
   renderEmailList();
   switchTab('keep');
-}
-
-function signOut() {
-  if (!confirm('Sign out?')) return;
-  stopAutoRefresh();
-  clearToken();
-  emails = [];
-  swipeQueue = [];
-  swipeHistory = [];
-  selectedIds.clear();
-  document.getElementById('auth-screen').style.display = 'flex';
-  document.getElementById('auth-screen').classList.add('active');
-  document.getElementById('main-wrapper').style.display = 'none';
-  renderSwipeStack();
-  renderEmailList();
-  renderKeepList();
 }
 
 // ── Tab switching ──────────────────────────────────────────
@@ -2297,7 +2464,7 @@ function renderRules() {
 let deckSnapTimer = null;
 function saveDeckSnapshot() {
   try {
-    localStorage.setItem('ic_deck', JSON.stringify(
+    localStorage.setItem(nsKey('ic_deck'), JSON.stringify(
       emails.map(e => ({ id: e.id, sender: e.sender, subject: e.subject, date: e.date, important: !!e.important }))
     ));
   } catch(e) {}
@@ -2307,7 +2474,7 @@ function scheduleDeckSnapshot() {
   deckSnapTimer = setTimeout(() => { deckSnapTimer = null; saveDeckSnapshot(); }, 800);
 }
 function loadDeckSnapshot() {
-  try { return JSON.parse(localStorage.getItem('ic_deck') || '[]'); } catch(e) { return []; }
+  try { return JSON.parse(localStorage.getItem(nsKey('ic_deck')) || '[]'); } catch(e) { return []; }
 }
 
 // ── Swipe UI ───────────────────────────────────────────────
@@ -3261,13 +3428,21 @@ if ('serviceWorker' in navigator) {
 
 // ── Init ───────────────────────────────────────────────────
 loadRules();
-loadKept();
+loadAccounts();
+loadAccountData(); // keptIds + outbox for the active account
 loadKeepSort();
 loadKeepOfflineOnly();
 loadKeepMarksRead();
-loadPendingOps();
 loadClientId();
 setSwipeMode('triage'); // reflect the keep setting in the action labels/hint
+updateAccountChip();
+// Close the account menu when tapping outside it.
+document.addEventListener('click', e => {
+  const menu = document.getElementById('account-menu');
+  if (!menu || menu.style.display !== 'block') return;
+  if (e.target.closest('.account-menu') || e.target.closest('.user-chip')) return;
+  menu.style.display = 'none';
+});
 const _ver = document.getElementById('app-version');
 if (_ver) _ver.textContent = 'Version ' + APP_VERSION;
 
@@ -3281,7 +3456,19 @@ function initAfterGapi() {
         await gapi.client.init({});
         await gapi.client.load('https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest');
         gapi.client.setToken({ access_token: accessToken });
-        await loadUserInfo();
+        const email = await loadUserInfo();
+        if (email) {
+          // Record / refresh this account, then load its namespaced data.
+          if (pendingToken) {
+            adoptAccount(email, pendingToken.token, pendingToken.expiry, pendingToken.legacy);
+            pendingToken = null;
+          } else {
+            activeEmail = email;
+            saveAccounts();
+          }
+          loadAccountData();
+          updateAccountChip(email);
+        }
         showApp();
         // Auto-load the inbox on open so the user lands straight on cards,
         // then keep it fresh in the background.
@@ -3302,11 +3489,9 @@ function initAfterGapi() {
 // show on first paint without waiting for gapi.js to download.
 function hasUsableToken() {
   if (location.hash && location.hash.indexOf('access_token=') !== -1) return true;
-  try {
-    const stored = localStorage.getItem('ic_access_token');
-    if (stored && Date.now() < tokenExpiry() - 30000) return true;
-  } catch(e) {}
-  return false;
+  if (pendingToken && pendingToken.token && Date.now() < pendingToken.expiry - 30000) return true;
+  const a = activeAccount();
+  return !!(a && a.token && Date.now() < a.expiry - 30000);
 }
 
 function whenGapiReady(fn, onFail) {
