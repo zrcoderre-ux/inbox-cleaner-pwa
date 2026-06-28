@@ -1378,7 +1378,7 @@ if (window.parent !== window && location.hash.indexOf('ic_silent') !== -1) {
 
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
-const APP_VERSION = 'v32'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v33'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2528,18 +2528,31 @@ function renderSwipeStack() {
   updateKeptBar();
   scheduleDeckSnapshot();
 
+  const leftBtn = document.getElementById('left-action-btn');
+  const rightBtn = document.getElementById('right-action-btn');
+
   if (!swipeQueue.length) {
     empty.style.display = '';
-    actions.style.display = 'none';
     hint.style.display = 'none';
     currentEmail = null;
     updateOpenGmailBtn(null);
     if (emails.length > 0) empty.querySelector('div:last-child').textContent = "You're all done! 🎉";
+    // Keep Undo reachable after the last card — show the actions row with only
+    // the Undo button when there's something to undo.
+    if (swipeHistory.length) {
+      actions.style.display = 'flex';
+      leftBtn.style.display = 'none';
+      rightBtn.style.display = 'none';
+    } else {
+      actions.style.display = 'none';
+    }
     return;
   }
 
   empty.style.display = 'none';
   actions.style.display = 'flex';
+  leftBtn.style.display = '';
+  rightBtn.style.display = '';
   hint.style.display = '';
 
   // Render top 2 cards (behind first, front second so it's on top)
@@ -2899,7 +2912,7 @@ function updateKeepBadge() {
   if (!badge) return;
   const n = keptIds.size;
   if (n > 0) {
-    badge.textContent = n > 99 ? '99+' : n;
+    badge.textContent = n > 999 ? '999+' : n;
     badge.style.display = '';
   } else {
     badge.style.display = 'none';
