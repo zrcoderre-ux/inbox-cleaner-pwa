@@ -1378,7 +1378,7 @@ if (window.parent !== window && location.hash.indexOf('ic_silent') !== -1) {
 
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
-const APP_VERSION = 'v33'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v34'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1527,6 +1527,27 @@ function idbGetAll() {
   }));
 }
 
+// Lightweight metadata for every cached record via a cursor, so we don't pull
+// all the (large) email bodies into memory at once just to render the list.
+function idbGetAllMeta() {
+  return openDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const out = [];
+    const req = tx.objectStore(IDB_STORE).openCursor();
+    req.onsuccess = () => {
+      const c = req.result;
+      if (!c) { resolve(out); return; }
+      const r = c.value;
+      out.push({
+        id: r.id, sender: r.sender, subject: r.subject, date: r.date,
+        hasBody: !!(r.bodyHtml || (r.bodyText && r.bodyText !== '(could not load body)'))
+      });
+      c.continue();
+    };
+    req.onerror = () => reject(req.error);
+  }));
+}
+
 function idbDelete(id) {
   return openDB().then(db => new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, 'readwrite');
@@ -1541,21 +1562,27 @@ function hasBody(rec) {
   return !!(rec && (rec.bodyHtml || (rec.bodyText && rec.bodyText !== '(could not load body)')));
 }
 
-// Downloads an email's body (inlining images where CORS allows) and stores it
-// for offline reading. Safe to call repeatedly; all failures are swallowed.
-// Never caches an empty/failed body, so the cache isn't poisoned with errors.
+// Downloads an email's body and stores it for offline reading. Works on a
+// throwaway copy so the (potentially large) body isn't retained on the shared
+// in-memory email object — important when caching the whole deck. Remote image
+// URLs are kept as-is (not inlined) to keep memory/storage bounded; offline,
+// text/layout is readable even if images don't load. Best-effort; never caches
+// an empty/failed body so the cache isn't poisoned with errors.
 async function cacheKeptEmail(email) {
   try {
-    await fetchEmailBodyRich(email);
-    const text = (email.bodyText && email.bodyText !== '(could not load body)') ? email.bodyText : '';
-    let html = email.bodyHtml || '';
+    const work = {
+      id: email.id, sender: email.sender, subject: email.subject, date: email.date,
+      bodyText: email.bodyText, bodyHtml: email.bodyHtml, bodyLoaded: email.bodyLoaded
+    };
+    await fetchEmailBodyRich(work);
+    const text = (work.bodyText && work.bodyText !== '(could not load body)') ? work.bodyText : '';
+    const html = work.bodyHtml || '';
     if (!text && !html) return; // got nothing usable — leave it for a later retry
-    if (html) html = await inlineImages(html);
     await idbPut({
-      id: email.id,
-      sender: email.sender || '',
-      subject: email.subject || '(no subject)',
-      date: email.date || '',
+      id: work.id,
+      sender: work.sender || '',
+      subject: work.subject || '(no subject)',
+      date: work.date || '',
       bodyText: text,
       bodyHtml: html,
       savedAt: Date.now()
@@ -1601,33 +1628,6 @@ function pumpCacheQueue() {
 function scheduleKeepRender() {
   if (keepRenderTimer) return;
   keepRenderTimer = setTimeout(() => { keepRenderTimer = null; renderKeepList(); }, 500);
-}
-
-// Replaces remote <img> sources with data URLs so images survive offline.
-// Best-effort: images blocked by CORS keep their original URL.
-async function inlineImages(html) {
-  try {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    const imgs = [...doc.querySelectorAll('img')]
-      .filter(i => /^https?:/i.test(i.getAttribute('src') || ''))
-      .slice(0, 40);
-    await Promise.all(imgs.map(async img => {
-      try {
-        const res = await fetch(img.getAttribute('src'), { mode: 'cors' });
-        if (!res.ok) return;
-        const blob = await res.blob();
-        if (blob.size > 2000000) return; // skip very large images
-        const dataUrl = await new Promise((resolve, reject) => {
-          const fr = new FileReader();
-          fr.onload = () => resolve(fr.result);
-          fr.onerror = () => reject(fr.error);
-          fr.readAsDataURL(blob);
-        });
-        img.setAttribute('src', dataUrl);
-      } catch(e) { /* leave the remote URL in place */ }
-    }));
-    return doc.body.innerHTML;
-  } catch(e) { return html; }
 }
 
 // Backfills the cache for any kept email whose content isn't stored yet —
@@ -2842,7 +2842,7 @@ async function renderKeepList() {
   updateKeepBadge();
 
   let cached = [];
-  try { cached = await idbGetAll(); } catch(_) {}
+  try { cached = await idbGetAllMeta(); } catch(_) {}
   const cacheMap = new Map(cached.map(r => [r.id, r]));
 
   let items = [];
@@ -2855,7 +2855,7 @@ async function renderKeepList() {
       sender: (mem && mem.sender) || (rec && rec.sender) || '',
       subject: (mem && mem.subject) || (rec && rec.subject) || '(no subject)',
       date: (mem && mem.date) || (rec && rec.date) || '',
-      saved: hasBody(rec) // available to read offline
+      saved: !!(rec && rec.hasBody) // available to read offline
     });
   }
 
