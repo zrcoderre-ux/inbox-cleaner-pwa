@@ -849,7 +849,8 @@ body {
 /* Don't let the list card shrink to fit — it has overflow:hidden, which would
    otherwise let flexbox clip the list (capping visible rows) instead of
    letting .keep-scroll scroll through all of them. */
-.keep-scroll > .section-card { flex-shrink: 0; }
+.keep-scroll > .section-card,
+.bulk-scroll > .section-card { flex-shrink: 0; }
 
 .keep-intro {
   font-size: 12px;
@@ -1426,7 +1427,7 @@ if (window.parent !== window && location.hash.indexOf('ic_silent') !== -1) {
 
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
-const APP_VERSION = 'v36'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v37'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
