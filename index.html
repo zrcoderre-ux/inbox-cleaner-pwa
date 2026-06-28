@@ -1430,7 +1430,7 @@ if (window.parent !== window && location.hash.indexOf('ic_silent') !== -1) {
 
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
-const APP_VERSION = 'v40'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v41'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2133,6 +2133,18 @@ function silentRenew() {
   });
 }
 
+// Silent renewal can flake (slow iframe, transient network, a race with the
+// Google session). Try a couple of times with a short gap before giving up and
+// dropping the user to the sign-in screen — this alone avoids many needless
+// re-sign-ins on spotty connections.
+async function silentRenewRetry(tries = 2) {
+  for (let i = 0; i < tries; i++) {
+    if (await silentRenew()) return true;
+    if (i < tries - 1) await new Promise(r => setTimeout(r, 600));
+  }
+  return false;
+}
+
 function clearToken() {
   accessToken = null;
   const a = activeAccount();
@@ -2248,7 +2260,7 @@ function switchAccount(email) {
     fetchEmails();
   } else if (navigator.onLine !== false) {
     // Token missing/expired (or gapi not ready) — renew silently, else sign in.
-    silentRenew().then(ok => {
+    silentRenewRetry().then(ok => {
       if (ok && typeof gapi !== 'undefined' && gapi.client) { loadUserInfo(); fetchEmails(); }
       else signIn();
     });
@@ -2464,7 +2476,7 @@ async function fetchEmails() {
     if (status === 401) {
       // Token expired — try a silent renewal first; reload only if that fails.
       setStatus(true, 'Refreshing session…');
-      const ok = await silentRenew();
+      const ok = await silentRenewRetry();
       if (ok && gapi.client) {
         gapi.client.setToken({ access_token: accessToken });
         setStatus(false, 'Session refreshed — loading…');
@@ -2553,8 +2565,24 @@ function stopAutoRefresh() {
 }
 
 // Refresh as soon as the user returns to the app after it was backgrounded.
+// iOS suspends PWAs aggressively, so the access token is often expired on
+// resume. Renew it silently *before* doing anything so the user isn't bounced
+// to the sign-in screen — even if the stored token was already cleared.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && accessToken) silentRefresh();
+  if (document.visibilityState !== 'visible') return;
+  if (offlineMode || navigator.onLine === false) return;
+  const exp = tokenExpiry();
+  const stale = !accessToken || !exp || Date.now() > exp - 60000;
+  if (stale) {
+    silentRenewRetry().then(ok => {
+      if (ok && typeof gapi !== 'undefined' && gapi.client) {
+        gapi.client.setToken({ access_token: accessToken });
+        silentRefresh();
+      }
+    });
+  } else {
+    silentRefresh();
+  }
 });
 
 // ── Body fetching ──────────────────────────────────────────
@@ -3694,7 +3722,7 @@ if (navigator.onLine === false) {
 } else if (effectiveClientId()) {
   // No valid token, but we know the client — try a silent (no-UI) renewal
   // before dropping to the sign-in screen. Splash stays up meanwhile.
-  silentRenew().then(ok => ok ? bootWithSession() : showAuthScreen());
+  silentRenewRetry().then(ok => ok ? bootWithSession() : showAuthScreen());
 } else {
   showAuthScreen();
 }
