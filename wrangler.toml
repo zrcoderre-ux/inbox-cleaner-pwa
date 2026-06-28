@@ -1,0 +1,22 @@
+# Cloudflare Worker config for Inbox Cleaner.
+#
+# This deploys worker.js (which serves the static files AND the OAuth
+# refresh-token endpoints). See AUTH-SETUP.md for the one-time setup.
+
+name = "inbox-cleaner-pwa"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+
+# Serve the repo's static files (index.html, sw.js, manifest.json, icons)
+# through the Worker. Requests that don't match the OAuth API fall through to
+# these assets.
+[assets]
+directory = "."
+binding = "ASSETS"
+
+# Optional: override the OAuth client ID without editing code.
+# [vars]
+# GOOGLE_CLIENT_ID = "xxxxx.apps.googleusercontent.com"
+
+# The client SECRET is set as an encrypted secret, NOT here:
+#   npx wrangler secret put GOOGLE_CLIENT_SECRET

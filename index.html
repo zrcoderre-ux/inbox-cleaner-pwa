@@ -1430,7 +1430,18 @@ if (window.parent !== window && location.hash.indexOf('ic_silent') !== -1) {
 
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
-const APP_VERSION = 'v41'; // shown in Settings so the running build is verifiable
+// Auth-code (refresh-token) flow. When true, the app authenticates via the
+// Cloudflare Worker (worker.js) and renews tokens from a server-held refresh
+// token instead of a 1-hour implicit token + hidden iframe — which eliminates
+// the recurring sign-in prompts (and works on iOS, where the iframe is blocked).
+// Leave false until you've deployed worker.js with GOOGLE_CLIENT_SECRET set
+// (see AUTH-SETUP.md). When false the app uses the original implicit flow, so
+// this is safe to ship before the backend is live.
+const USE_REFRESH_BACKEND = false;
+// Scopes for the auth-code flow need openid+email so the Worker can key the
+// refresh token to an account.
+const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
+const APP_VERSION = 'v42'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2079,10 +2090,27 @@ function buildAuthUrl(extra) {
   return 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
 }
 
+// Auth-code flow URL: asks Google for a one-time code (handed to the Worker for
+// a refresh token) instead of a short-lived token. access_type=offline +
+// prompt=consent ensure a refresh token is actually returned.
+function buildCodeAuthUrl(extra) {
+  const params = new URLSearchParams(Object.assign({
+    client_id: effectiveClientId(),
+    redirect_uri: location.origin + '/',
+    response_type: 'code',
+    scope: CODE_FLOW_SCOPES,
+    access_type: 'offline',
+    include_granted_scopes: 'true',
+    prompt: 'consent select_account'
+  }, extra));
+  return 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
+}
+
 // Interactive sign-in / add-account: always shows the account chooser so a new
 // account can be added alongside existing ones.
 function signIn() {
   if (!effectiveClientId()) return;
+  if (USE_REFRESH_BACKEND) { location.href = buildCodeAuthUrl(); return; }
   location.href = buildAuthUrl({ prompt: 'select_account' });
 }
 const addAccount = signIn;
@@ -2100,9 +2128,60 @@ function applyActiveToken(token, expiry) {
   if (typeof gapi !== 'undefined' && gapi.client) gapi.client.setToken({ access_token: token });
 }
 
-// Attempts to silently obtain a fresh token via a hidden iframe (prompt=none),
+// Mints a fresh access token from the server-held refresh token (no iframe, no
+// UI). Same-origin fetch, so iOS tracking prevention doesn't block it.
+async function backendRefresh(email) {
+  if (navigator.onLine === false) return false;
+  try {
+    const res = await fetch('/api/oauth/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ email: email || activeEmail || '' })
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (!data || !data.access_token) return false;
+    applyActiveToken(data.access_token, Date.now() + parseInt(data.expires_in || '3600', 10) * 1000);
+    return true;
+  } catch (e) { return false; }
+}
+
+// Exchanges the ?code= from an auth-code redirect for tokens via the Worker,
+// which stashes the refresh token in an httpOnly cookie. Sets up the account
+// and returns true on success.
+async function exchangeCodeFromUrl() {
+  const code = new URLSearchParams(location.search).get('code');
+  if (!code) return false;
+  history.replaceState(null, '', location.pathname); // don't re-exchange on reload
+  try {
+    const res = await fetch('/api/oauth/exchange', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ code, redirect_uri: location.origin + '/' })
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (!data || !data.access_token) return false;
+    const expiry = Date.now() + parseInt(data.expires_in || '3600', 10) * 1000;
+    accessToken = data.access_token;
+    if (data.email) {
+      activeEmail = data.email;
+      upsertAccount(data.email, data.access_token, expiry);
+      saveAccounts();
+    } else {
+      pendingToken = { token: data.access_token, expiry };
+    }
+    return true;
+  } catch (e) { return false; }
+}
+
+// Attempts to silently obtain a fresh token. With the refresh-token backend it's
+// a same-origin fetch; otherwise it falls back to a hidden prompt=none iframe
 // targeting the active account via login_hint.
 function silentRenew() {
+  if (USE_REFRESH_BACKEND) return backendRefresh(activeEmail);
   return new Promise(resolve => {
     if (!effectiveClientId() || navigator.onLine === false) { resolve(false); return; }
     let done = false;
@@ -2272,6 +2351,15 @@ function signOutActive() {
   const a = activeAccount();
   if (!a) return;
   if (!confirm('Sign out ' + a.email + '?')) return;
+  // Drop the server-side refresh token for this account too, if any.
+  if (USE_REFRESH_BACKEND) {
+    fetch('/api/oauth/logout', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ email: a.email })
+    }).catch(() => {});
+  }
   accounts = accounts.filter(x => x.email !== a.email);
   activeEmail = accounts[0] ? accounts[0].email : null;
   saveAccounts();
@@ -3713,19 +3801,29 @@ function bootWithSession() {
 // Boot decision. The splash is shown by default (see markup), so the sign-in
 // screen never flashes for an already-authenticated user. (Silent-renewal
 // iframes were already short-circuited at the very top of the script.)
-if (navigator.onLine === false) {
-  // Offline: skip Google sign-in and go straight to the cached Keep emails.
-  enterOfflineMode();
-} else if (hasUsableToken()) {
-  // Have a session — keep the splash up until the app is ready.
-  bootWithSession();
-} else if (effectiveClientId()) {
-  // No valid token, but we know the client — try a silent (no-UI) renewal
-  // before dropping to the sign-in screen. Splash stays up meanwhile.
-  silentRenewRetry().then(ok => ok ? bootWithSession() : showAuthScreen());
-} else {
-  showAuthScreen();
+async function boot() {
+  // Returning from an auth-code sign-in: exchange the code for tokens (and a
+  // server-side refresh token) before deciding anything else.
+  if (USE_REFRESH_BACKEND && location.search.indexOf('code=') !== -1) {
+    if (await exchangeCodeFromUrl()) { bootWithSession(); return; }
+    // Exchange failed — fall through to the normal decision below.
+  }
+  if (navigator.onLine === false) {
+    // Offline: skip Google sign-in and go straight to the cached Keep emails.
+    enterOfflineMode();
+  } else if (hasUsableToken()) {
+    // Have a session — keep the splash up until the app is ready.
+    bootWithSession();
+  } else if (effectiveClientId()) {
+    // No valid token, but we know the client — try a silent (no-UI) renewal
+    // (refresh-token backend or iframe) before dropping to the sign-in screen.
+    const ok = await silentRenewRetry();
+    ok ? bootWithSession() : showAuthScreen();
+  } else {
+    showAuthScreen();
+  }
 }
+boot();
 
 // If we started offline and the connection returns, reload into the normal
 // online (sign-in / load) flow — but don't interrupt an email being read.
