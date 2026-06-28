@@ -1362,9 +1362,23 @@ html, body {
 
 <script src="https://apis.google.com/js/api.js" async></script>
 <script>
+// Silent-renewal iframe: if we're loaded inside one, hand the token back to the
+// opener and stop — don't register the SW, run init, or boot the app here.
+if (window.parent !== window && location.hash.indexOf('ic_silent') !== -1) {
+  try {
+    const p = new URLSearchParams(location.hash.substring(1));
+    parent.postMessage({
+      type: 'ic_silent_token',
+      access_token: p.get('access_token') || '',
+      expires_in: p.get('expires_in') || ''
+    }, location.origin);
+  } catch(e) {}
+  throw new Error('ic-silent-frame'); // abort the rest of the script in this frame
+}
+
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
-const APP_VERSION = 'v31'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v32'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3434,17 +3448,10 @@ function esc(str) {
 }
 
 // ── Service Worker ─────────────────────────────────────────
+// Register only; we deliberately do NOT auto-reload on controllerchange, which
+// can cause reload loops. Network-first already serves fresh code on next open.
 if ('serviceWorker' in navigator) {
-  const hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW error:', e));
-  // When an updated SW takes control, reload once so the latest code is used.
-  // Guarded so the very first install (no prior controller) doesn't reload.
-  let _reloading = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (!hadController || _reloading) return;
-    _reloading = true;
-    location.reload();
-  });
 }
 
 // ── Init ───────────────────────────────────────────────────
@@ -3536,19 +3543,9 @@ function bootWithSession() {
 }
 
 // Boot decision. The splash is shown by default (see markup), so the sign-in
-// screen never flashes for an already-authenticated user.
-const isSilentFrame = window.parent !== window && location.hash.indexOf('ic_silent') !== -1;
-if (isSilentFrame) {
-  // Loaded inside the silent-renewal iframe: hand the token back and stop.
-  try {
-    const p = new URLSearchParams(location.hash.substring(1));
-    parent.postMessage({
-      type: 'ic_silent_token',
-      access_token: p.get('access_token') || '',
-      expires_in: p.get('expires_in') || ''
-    }, location.origin);
-  } catch(e) {}
-} else if (navigator.onLine === false) {
+// screen never flashes for an already-authenticated user. (Silent-renewal
+// iframes were already short-circuited at the very top of the script.)
+if (navigator.onLine === false) {
   // Offline: skip Google sign-in and go straight to the cached Keep emails.
   enterOfflineMode();
 } else if (hasUsableToken()) {
