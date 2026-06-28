@@ -168,8 +168,10 @@ html, body {
 }
 .acct-row:active { background: var(--surface-3); }
 .acct-row.active { font-weight: 500; }
-.acct-check { width: 14px; flex-shrink: 0; color: var(--red); }
+.acct-check { width: 14px; flex-shrink: 0; color: var(--red); align-self: flex-start; margin-top: 1px; }
+.acct-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
 .acct-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-counts { font-size: 11px; font-weight: 400; color: var(--text-3); }
 .acct-action { color: var(--text-2); border-top: 0.5px solid var(--border); margin-top: 4px; }
 
 /* ── Bottom Nav ───────────────────────────────────────────── */
@@ -1362,7 +1364,7 @@ html, body {
 <script>
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
-const APP_VERSION = 'v30'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v31'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2018,14 +2020,33 @@ function closeAccountMenu() {
   if (m) m.style.display = 'none';
 }
 
+// Per-account unread (deck) and kept counts, read from each account's saved
+// data (no network). The active account uses its live in-memory counts.
+function accountCounts(email) {
+  if (email === activeEmail) {
+    return { unread: swipeQueue.length, kept: keptIds.size };
+  }
+  let kept = [], deck = [];
+  try { kept = JSON.parse(localStorage.getItem('ic_kept::' + email) || '[]'); } catch(e) {}
+  try { deck = JSON.parse(localStorage.getItem('ic_deck::' + email) || '[]'); } catch(e) {}
+  const keptSet = new Set(kept);
+  return { unread: deck.filter(e => e && !keptSet.has(e.id)).length, kept: kept.length };
+}
+
 function renderAccountMenu() {
   const m = document.getElementById('account-menu');
   if (!m) return;
-  const rows = accounts.map(a => `
+  const rows = accounts.map(a => {
+    const c = accountCounts(a.email);
+    return `
     <button class="acct-row${a.email === activeEmail ? ' active' : ''}" onclick="switchAccount('${esc(a.email)}')">
       <span class="acct-check">${a.email === activeEmail ? '✓' : ''}</span>
-      <span class="acct-email">${esc(a.email)}</span>
-    </button>`).join('');
+      <span class="acct-text">
+        <span class="acct-email">${esc(a.email)}</span>
+        <span class="acct-counts">${c.unread} unread · ${c.kept} kept</span>
+      </span>
+    </button>`;
+  }).join('');
   m.innerHTML = rows +
     '<button class="acct-row acct-action" onclick="addAccount()">＋ Add account</button>' +
     (activeEmail ? '<button class="acct-row acct-action" onclick="signOutActive()">Sign out ' + esc(shortEmail(activeEmail)) + '</button>' : '');
