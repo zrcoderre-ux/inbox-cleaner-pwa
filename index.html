@@ -971,46 +971,61 @@ body {
 
 .section-card-body { padding: 14px 16px; }
 
-.rule-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 12px; }
+.suggest-list { display: flex; flex-direction: column; gap: 8px; }
 
-.rule-row {
+.suggest-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   background: var(--surface-2);
-  border-radius: 8px;
-  padding: 8px 10px;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.suggest-meta { flex: 1; min-width: 0; }
+.suggest-name {
   font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.suggest-addr {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.suggest-count { font-size: 11px; color: var(--orange); font-weight: 500; margin-top: 2px; }
 
-.rule-tag {
-  font-size: 10px;
+.suggest-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.suggest-block-btn {
+  height: 32px;
+  padding: 0 14px;
+  background: var(--orange);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-family: var(--sans);
+  font-size: 13px;
   font-weight: 600;
-  padding: 2px 7px;
-  border-radius: 20px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  flex-shrink: 0;
+  cursor: pointer;
 }
-
-.rule-tag.sender { background: #E8F0FE; color: #1A73E8; }
-.rule-tag.subject { background: #E6F4EA; color: #137333; }
-
-@media (prefers-color-scheme: dark) {
-  .rule-tag.sender { background: #1A2744; color: #8AB4F8; }
-  .rule-tag.subject { background: #0D2B18; color: #81C995; }
+.suggest-block-btn:active { opacity: 0.85; }
+.suggest-dismiss-btn {
+  background: none;
+  border: none;
+  color: var(--text-3);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
 }
+.suggest-dismiss-btn:active { color: var(--text-1); }
 
-.rule-val { flex: 1; font-family: var(--mono); font-size: 12px; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.rule-del { background: none; border: none; color: var(--text-3); font-size: 18px; cursor: pointer; padding: 0 2px; line-height: 1; }
-.rule-del:hover { color: var(--red); }
-
-.add-rule-row { display: flex; gap: 6px; }
-.add-rule-row select { width: 100px; flex-shrink: 0; font-size: 13px; font-family: var(--sans); height: 36px; border: 0.5px solid var(--border-mid); border-radius: 8px; background: var(--surface-2); color: var(--text-1); padding: 0 8px; }
-.add-rule-row input { flex: 1; height: 36px; border: 0.5px solid var(--border-mid); border-radius: 8px; background: var(--surface-2); color: var(--text-1); font-family: var(--sans); font-size: 13px; padding: 0 10px; outline: none; }
-.add-rule-row input:focus { border-color: var(--red); }
-.add-rule-row .add-btn { height: 36px; padding: 0 14px; background: var(--red); color: white; border: none; border-radius: 8px; font-family: var(--sans); font-size: 13px; font-weight: 500; cursor: pointer; flex-shrink: 0; }
+.suggest-empty { font-size: 12px; color: var(--text-3); padding: 4px 0; line-height: 1.6; }
 
 /* Email list card */
 .list-toolbar {
@@ -1081,7 +1096,6 @@ body {
 
 .email-item:last-child { border-bottom: none; }
 .email-item:hover, .email-item:active { background: var(--surface-2); }
-.email-item.auto { background: rgba(234,67,53,0.04); }
 
 .email-item input[type="checkbox"] { margin-top: 3px; flex-shrink: 0; accent-color: var(--red); }
 
@@ -1089,9 +1103,6 @@ body {
 .email-item-sender { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .email-item-subject { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
 .email-item-time { font-size: 11px; color: var(--text-3); flex-shrink: 0; margin-top: 2px; }
-
-.auto-badge { font-size: 10px; font-weight: 500; background: #FDE7E5; color: #C5221F; border-radius: 20px; padding: 1px 6px; margin-left: 5px; vertical-align: middle; }
-@media (prefers-color-scheme: dark) { .auto-badge { background: #3B1210; color: #F28B82; } }
 
 .list-empty { padding: 2.5rem 1rem; text-align: center; color: var(--text-3); font-size: 13px; line-height: 1.8; }
 
@@ -1310,23 +1321,15 @@ body {
           </div>
         </div>
 
-        <!-- Rules -->
-        <div class="section-card" id="rules-card">
-          <div class="section-card-header" onclick="toggleSection('rules-card')">
-            <h3>Auto-select rules <span class="pill red" id="rule-count">0</span></h3>
+        <!-- Suggested blocks -->
+        <div class="section-card" id="suggest-card">
+          <div class="section-card-header" onclick="toggleSection('suggest-card')">
+            <h3>Suggested blocks <span class="pill red" id="suggest-count">0</span></h3>
             <span class="chevron">▾</span>
           </div>
           <div class="section-card-body">
-            <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Emails matching any rule are pre-checked automatically.</p>
-            <div class="rule-list" id="rule-list-el"></div>
-            <div class="add-rule-row">
-              <select id="rule-type-sel">
-                <option value="sender">Sender</option>
-                <option value="subject">Subject</option>
-              </select>
-              <input type="text" id="rule-val-input" placeholder="e.g. noreply@ or Newsletter" />
-              <button class="add-btn" onclick="addRule()">Add</button>
-            </div>
+            <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Senders you keep marking as read without ever opening. Tap <strong>Block</strong> to send their unread mail to spam.</p>
+            <div class="suggest-list" id="suggest-list-el"></div>
           </div>
         </div>
 
@@ -1427,7 +1430,7 @@ if (window.parent !== window && location.hash.indexOf('ic_silent') !== -1) {
 
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
-const APP_VERSION = 'v37'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v38'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1443,7 +1446,17 @@ let pendingToken = null;  // a fresh redirect token, adopted once we know its em
 let emails = [];
 let swipeQueue = [];
 let swipeHistory = [];
-let rules = [];
+// Per-sender engagement history, used to suggest senders to block. For each
+// sender address we track how many times the user marked their mail read
+// WITHOUT opening it (`dismiss`) versus opened/kept it (`engage`). A sender
+// the user repeatedly dismisses and never engages with becomes a block
+// suggestion on the Bulk tab.
+let senderStats = {};
+// Sender addresses the user has explicitly dismissed from suggestions (or
+// already blocked) so we stop suggesting them.
+let blockIgnore = {};
+// How many no-open "mark read" actions before a sender is suggested.
+const BLOCK_SUGGEST_THRESHOLD = 3;
 let selectedIds = new Set();
 let activeTab = 'swipe';
 let swipeMode = 'triage';
@@ -1490,19 +1503,101 @@ function avatarColor(str) {
 }
 
 // ── Persistence ────────────────────────────────────────────
-function loadRules() {
-  try { rules = JSON.parse(localStorage.getItem('ic_rules') || '[]'); } catch(e) { rules = []; }
-  renderRules();
-}
-
-function saveRules() {
-  localStorage.setItem('ic_rules', JSON.stringify(rules));
-}
+// (Sender stats are loaded per-account in loadAccountData, below.)
 
 // Per-account localStorage key: data is namespaced by the active account's
 // email so accounts don't share keep lists, decks, or outboxes.
 function nsKey(base) {
   return activeEmail ? base + '::' + activeEmail : base;
+}
+
+// ── Suggested-block tracking ───────────────────────────────
+function loadSenderStats() {
+  try { senderStats = JSON.parse(localStorage.getItem(nsKey('ic_sender_stats')) || '{}'); }
+  catch(e) { senderStats = {}; }
+  try { blockIgnore = JSON.parse(localStorage.getItem(nsKey('ic_block_ignore')) || '{}'); }
+  catch(e) { blockIgnore = {}; }
+}
+
+function saveSenderStats() {
+  try { localStorage.setItem(nsKey('ic_sender_stats'), JSON.stringify(senderStats)); } catch(e) {}
+}
+
+function saveBlockIgnore() {
+  try { localStorage.setItem(nsKey('ic_block_ignore'), JSON.stringify(blockIgnore)); } catch(e) {}
+}
+
+// Record an interaction with a sender. kind === 'dismiss' means the user marked
+// the mail read without opening it; 'engage' means they opened or kept it.
+function recordSenderEvent(email, kind) {
+  if (!email) return;
+  const { name, addr } = parseSender(email.sender || '');
+  if (!addr) return;
+  const key = addr.toLowerCase();
+  const s = senderStats[key] || (senderStats[key] = { name: name || addr, dismiss: 0, engage: 0 });
+  if (name && (!s.name || s.name === addr)) s.name = name;
+  if (kind === 'engage') s.engage = (s.engage || 0) + 1;
+  else s.dismiss = (s.dismiss || 0) + 1;
+  if (email.subject) s.last = email.subject;
+  saveSenderStats();
+}
+
+// Senders the user repeatedly marks read but never opens or keeps.
+function blockSuggestions() {
+  return Object.keys(senderStats)
+    .filter(addr => !blockIgnore[addr])
+    .map(addr => ({ addr, ...senderStats[addr] }))
+    .filter(s => (s.dismiss || 0) >= BLOCK_SUGGEST_THRESHOLD && (s.engage || 0) === 0)
+    .sort((a, b) => (b.dismiss || 0) - (a.dismiss || 0));
+}
+
+function renderBlockSuggestions() {
+  const el = document.getElementById('suggest-list-el');
+  if (!el) return;
+  const sugg = blockSuggestions();
+  const countEl = document.getElementById('suggest-count');
+  if (countEl) countEl.textContent = sugg.length;
+  if (!sugg.length) {
+    el.innerHTML = '<div class="suggest-empty">No suggestions yet. As you mark senders as read without opening them, they\'ll show up here so you can block them in one tap.</div>';
+    return;
+  }
+  el.innerHTML = sugg.map(s => `
+    <div class="suggest-row">
+      <div class="suggest-meta">
+        <div class="suggest-name">${esc(s.name || s.addr)}</div>
+        <div class="suggest-addr">${esc(s.addr)}</div>
+        <div class="suggest-count">Marked read ${s.dismiss}× without opening</div>
+      </div>
+      <div class="suggest-actions">
+        <button class="suggest-block-btn" onclick="blockSuggestion('${esc(s.addr)}')">Block</button>
+        <button class="suggest-dismiss-btn" title="Not spam — stop suggesting" onclick="dismissSuggestion('${esc(s.addr)}')">×</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function blockSuggestion(addr) {
+  if (!addr) return;
+  const key = addr.toLowerCase();
+  // Stop suggesting and remove this sender's loaded mail locally right away.
+  blockIgnore[key] = true;
+  saveBlockIgnore();
+  emails = emails.filter(e => parseSender(e.sender).addr.toLowerCase() !== key);
+  swipeQueue = swipeQueue.filter(e => parseSender(e.sender).addr.toLowerCase() !== key);
+  renderBlockSuggestions();
+  renderEmailList();
+  renderSwipeStack();
+  const ok = await blockSenderRemote(addr);
+  if (ok) toast(`Blocked ${addr}`);
+  else { enqueueOp({ type: 'block', addr }); toast(`Blocked ${addr} — will sync`); }
+}
+
+function dismissSuggestion(addr) {
+  if (!addr) return;
+  blockIgnore[addr.toLowerCase()] = true;
+  saveBlockIgnore();
+  renderBlockSuggestions();
+  toast('Won\'t suggest that sender again');
 }
 
 // ── Kept-unread tracking ───────────────────────────────────
@@ -1954,6 +2049,8 @@ function loadAccountData() {
   keepLabelId = null;
   loadKept();
   loadPendingOps();
+  loadSenderStats();
+  renderBlockSuggestions();
 }
 
 function tokenExpiry() { const a = activeAccount(); return a ? a.expiry : 0; }
@@ -2335,7 +2432,6 @@ async function fetchEmails() {
     // re-triage them. They stay in `emails` (still visible in the bulk list
     // and reachable via "Review") but are dropped from the swipe deck.
     swipeQueue = emails.filter(e => !keptIds.has(e.id));
-    applyRulesToEmails();
     sortQueue();
     renderSwipeStack();
     renderEmailList();
@@ -2495,53 +2591,6 @@ function htmlToText(html) {
 }
 
 // ── Rules ──────────────────────────────────────────────────
-function addRule() {
-  const type = document.getElementById('rule-type-sel').value;
-  const val = document.getElementById('rule-val-input').value.trim();
-  if (!val) return;
-  rules.push({ type, val });
-  saveRules();
-  renderRules();
-  document.getElementById('rule-val-input').value = '';
-  if (emails.length) { applyRulesToEmails(); renderEmailList(); }
-}
-
-function removeRule(i) {
-  rules.splice(i, 1);
-  saveRules();
-  renderRules();
-  if (emails.length) { applyRulesToEmails(); renderEmailList(); }
-}
-
-function matchesRules(email) {
-  return rules.some(r => {
-    if (r.type === 'sender') return email.sender.toLowerCase().includes(r.val.toLowerCase());
-    if (r.type === 'subject') return email.subject.toLowerCase().includes(r.val.toLowerCase());
-    return false;
-  });
-}
-
-function applyRulesToEmails() {
-  selectedIds.clear();
-  emails.forEach(e => { if (matchesRules(e)) selectedIds.add(e.id); });
-}
-
-function renderRules() {
-  const el = document.getElementById('rule-list-el');
-  document.getElementById('rule-count').textContent = rules.length;
-  if (!rules.length) {
-    el.innerHTML = '<div style="font-size:12px;color:var(--text-3);padding:4px 0;">No rules yet.</div>';
-    return;
-  }
-  el.innerHTML = rules.map((r, i) => `
-    <div class="rule-row">
-      <span class="rule-tag ${r.type}">${r.type}</span>
-      <span class="rule-val">${esc(r.val)}</span>
-      <button class="rule-del" onclick="removeRule(${i})">×</button>
-    </div>
-  `).join('');
-}
-
 // ── Offline swipe-deck snapshot ────────────────────────────
 // Persists the loaded deck's metadata so the deck can be rebuilt and swiped
 // offline (bodies come from the IndexedDB cache).
@@ -2773,6 +2822,10 @@ function swipeCard(direction) {
 }
 
 async function doRead(email) {
+  // Marking read straight from the deck means the user dismissed it without
+  // opening — the signal that drives block suggestions.
+  recordSenderEvent(email, 'dismiss');
+  renderBlockSuggestions();
   emails = emails.filter(e => e.id !== email.id);
   selectedIds.delete(email.id);
   dropKeptLocally(email.id);
@@ -2782,6 +2835,9 @@ async function doRead(email) {
 }
 
 async function doKeep(email) {
+  // Keeping is engagement — never suggest blocking a sender the user keeps.
+  recordSenderEvent(email, 'engage');
+  renderBlockSuggestions();
   // Remember the choice and cache its content (high priority) for offline use.
   keptIds.add(email.id);
   saveKept();
@@ -3131,6 +3187,9 @@ function openInGmail() {
 // can only be reached after reading through the whole email.
 async function openReader(email, opts = {}) {
   if (!email) return;
+  // Opening to read is engagement — it keeps the sender out of block suggestions.
+  recordSenderEvent(email, 'engage');
+  renderBlockSuggestions();
   readerEmail = email;
   if (readerRO) { readerRO.disconnect(); readerRO = null; }
   const withFooter = !!opts.markRead;
@@ -3385,13 +3444,12 @@ function renderEmailList() {
     return;
   }
   el.innerHTML = sortedEmails().map(e => {
-    const auto = matchesRules(e);
     const checked = selectedIds.has(e.id);
     return `
-      <div class="email-item${auto ? ' auto' : ''}" onclick="toggleEmailCheck('${e.id}', event)">
+      <div class="email-item" onclick="toggleEmailCheck('${e.id}', event)">
         <input type="checkbox" ${checked ? 'checked' : ''} onclick="event.stopPropagation();toggleEmailCheck('${e.id}',event)">
         <div class="email-item-meta">
-          <div class="email-item-sender">${esc(e.sender)}${auto ? '<span class="auto-badge">rule</span>' : ''}</div>
+          <div class="email-item-sender">${esc(e.sender)}</div>
           <div class="email-item-subject">${esc(e.subject)}</div>
         </div>
         <div class="email-item-time">${formatDate(e.date)}</div>
@@ -3438,12 +3496,15 @@ async function bulkMarkRead() {
     }
 
     const done = selectedIds.size;
+    // Bulk mark-read is dismiss-without-opening too — feed it to suggestions.
+    emails.forEach(e => { if (selectedIds.has(e.id)) recordSenderEvent(e, 'dismiss'); });
     selectedIds.forEach(id => forgetKept(id));
     emails = emails.filter(e => !selectedIds.has(e.id));
     swipeQueue = swipeQueue.filter(e => !selectedIds.has(e.id));
     selectedIds.clear();
     renderEmailList();
     renderSwipeStack();
+    renderBlockSuggestions();
     setStatus(false, `Marked ${done} as read.`);
     toast(`Marked ${done} as read`);
   } catch(e) {
@@ -3521,7 +3582,6 @@ if ('serviceWorker' in navigator) {
 }
 
 // ── Init ───────────────────────────────────────────────────
-loadRules();
 loadAccounts();
 loadAccountData(); // keptIds + outbox for the active account
 loadKeepSort();
