@@ -61,11 +61,24 @@
 
 html, body {
   height: 100%;
+  width: 100%;
   overflow: hidden;
+  overscroll-behavior: none;        /* no rubber-band/scroll chaining to the page */
   font-family: var(--sans);
   background: var(--surface-2);
   color: var(--text-1);
   -webkit-font-smoothing: antialiased;
+}
+/* Lock the app shell so dragging up/down can't shift it and reveal the
+   background behind it (iOS standalone overscroll). */
+body {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+}
+/* Keep each scroll area's bounce to itself. */
+.keep-scroll, .bulk-scroll, .email-list-inner, .card-body,
+.reader-body, .reader-body .reader-text {
+  overscroll-behavior: contain;
 }
 
 /* ── Layout Shell ─────────────────────────────────────────── */
@@ -1378,7 +1391,7 @@ if (window.parent !== window && location.hash.indexOf('ic_silent') !== -1) {
 
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
-const APP_VERSION = 'v34'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v35'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
