@@ -1430,7 +1430,7 @@ if (window.parent !== window && location.hash.indexOf('ic_silent') !== -1) {
 
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
-const APP_VERSION = 'v38'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v39'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1455,8 +1455,12 @@ let senderStats = {};
 // Sender addresses the user has explicitly dismissed from suggestions (or
 // already blocked) so we stop suggesting them.
 let blockIgnore = {};
-// How many no-open "mark read" actions before a sender is suggested.
+// How many no-open "mark read" actions before a never-engaged sender is
+// suggested.
 const BLOCK_SUGGEST_THRESHOLD = 3;
+// Consecutive no-open "mark read" actions that trigger a suggestion even for a
+// sender you've previously opened or kept (the streak resets on any engagement).
+const BLOCK_SUGGEST_STREAK = 10;
 let selectedIds = new Set();
 let activeTab = 'swipe';
 let swipeMode = 'triage';
@@ -1536,19 +1540,24 @@ function recordSenderEvent(email, kind) {
   const key = addr.toLowerCase();
   const s = senderStats[key] || (senderStats[key] = { name: name || addr, dismiss: 0, engage: 0 });
   if (name && (!s.name || s.name === addr)) s.name = name;
-  if (kind === 'engage') s.engage = (s.engage || 0) + 1;
-  else s.dismiss = (s.dismiss || 0) + 1;
+  if (kind === 'engage') { s.engage = (s.engage || 0) + 1; s.streak = 0; }
+  else { s.dismiss = (s.dismiss || 0) + 1; s.streak = (s.streak || 0) + 1; }
   if (email.subject) s.last = email.subject;
   saveSenderStats();
 }
 
-// Senders the user repeatedly marks read but never opens or keeps.
+// Senders worth suggesting to block: either never opened/kept and dismissed a
+// few times, OR dismissed many times in a row even if previously engaged.
 function blockSuggestions() {
   return Object.keys(senderStats)
     .filter(addr => !blockIgnore[addr])
     .map(addr => ({ addr, ...senderStats[addr] }))
-    .filter(s => (s.dismiss || 0) >= BLOCK_SUGGEST_THRESHOLD && (s.engage || 0) === 0)
-    .sort((a, b) => (b.dismiss || 0) - (a.dismiss || 0));
+    .filter(s => {
+      const neverEngaged = (s.engage || 0) === 0 && (s.dismiss || 0) >= BLOCK_SUGGEST_THRESHOLD;
+      const longStreak = (s.streak || 0) >= BLOCK_SUGGEST_STREAK;
+      return neverEngaged || longStreak;
+    })
+    .sort((a, b) => (b.streak || 0) - (a.streak || 0) || (b.dismiss || 0) - (a.dismiss || 0));
 }
 
 function renderBlockSuggestions() {
@@ -1561,19 +1570,24 @@ function renderBlockSuggestions() {
     el.innerHTML = '<div class="suggest-empty">No suggestions yet. As you mark senders as read without opening them, they\'ll show up here so you can block them in one tap.</div>';
     return;
   }
-  el.innerHTML = sugg.map(s => `
+  el.innerHTML = sugg.map(s => {
+    const reason = (s.engage || 0) === 0
+      ? `Marked read ${s.dismiss}× without opening`
+      : `Marked read ${s.streak}× in a row`;
+    return `
     <div class="suggest-row">
       <div class="suggest-meta">
         <div class="suggest-name">${esc(s.name || s.addr)}</div>
         <div class="suggest-addr">${esc(s.addr)}</div>
-        <div class="suggest-count">Marked read ${s.dismiss}× without opening</div>
+        <div class="suggest-count">${reason}</div>
       </div>
       <div class="suggest-actions">
         <button class="suggest-block-btn" onclick="blockSuggestion('${esc(s.addr)}')">Block</button>
         <button class="suggest-dismiss-btn" title="Not spam — stop suggesting" onclick="dismissSuggestion('${esc(s.addr)}')">×</button>
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 async function blockSuggestion(addr) {
