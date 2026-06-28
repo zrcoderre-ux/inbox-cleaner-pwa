@@ -660,6 +660,36 @@ body {
   transition: background 0.15s, color 0.15s;
 }
 .mode-btn.active { background: var(--surface); color: var(--text-1); }
+/* When block mode is on, make the Block toggle loud so it's unmistakable. */
+#swipe-screen.block-mode .swipe-mode-toggle { background: var(--orange-light); }
+#swipe-screen.block-mode #mode-block.active {
+  background: var(--orange);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(242,153,0,0.5);
+}
+
+/* Prominent warning banner shown only while in block mode. */
+.block-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px 6px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--orange-light);
+  border: 1px solid var(--orange);
+  color: var(--orange);
+  font-size: 12.5px;
+  line-height: 1.35;
+  flex-shrink: 0;
+}
+.block-banner svg { width: 18px; height: 18px; flex-shrink: 0; }
+.block-banner strong { font-weight: 700; }
+
+/* Tint the whole swipe surface so the active mode is obvious at a glance. */
+#swipe-screen.block-mode { background: var(--orange-light); }
+#swipe-screen.block-mode .card-stack-area { box-shadow: inset 0 0 0 2px var(--orange); border-radius: 16px; margin: 0 8px; }
+#swipe-screen.block-mode .action-hint { color: var(--orange); font-weight: 600; }
 
 .open-gmail-btn {
   display: flex;
@@ -1178,6 +1208,11 @@ body {
         </button>
       </div>
 
+      <div class="block-banner" id="block-banner" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span><strong>Block mode</strong> — swiping left sends this sender's unread mail to spam</span>
+      </div>
+
       <div class="kept-bar" id="kept-bar" style="display:none;">
         <span class="kept-msg" id="kept-bar-msg"></span>
         <button onclick="reviewKept()">Review</button>
@@ -1391,7 +1426,7 @@ if (window.parent !== window && location.hash.indexOf('ic_silent') !== -1) {
 
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
-const APP_VERSION = 'v35'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v36'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2983,6 +3018,10 @@ function setSwipeMode(mode) {
   swipeMode = mode;
   document.getElementById('mode-triage').classList.toggle('active', mode === 'triage');
   document.getElementById('mode-block').classList.toggle('active', mode === 'block');
+  const swipeScreen = document.getElementById('swipe-screen');
+  if (swipeScreen) swipeScreen.classList.toggle('block-mode', mode === 'block');
+  const blockBanner = document.getElementById('block-banner');
+  if (blockBanner) blockBanner.style.display = mode === 'block' ? 'flex' : 'none';
   const leftBtn = document.getElementById('left-action-btn');
   const rightBtn = document.getElementById('right-action-btn');
   const hint = document.getElementById('swipe-hint');
