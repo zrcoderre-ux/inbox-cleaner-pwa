@@ -661,11 +661,11 @@ body {
 }
 .mode-btn.active { background: var(--surface); color: var(--text-1); }
 /* When block mode is on, make the Block toggle loud so it's unmistakable. */
-#swipe-screen.block-mode .swipe-mode-toggle { background: var(--orange-light); }
+#swipe-screen.block-mode .swipe-mode-toggle { background: var(--red-light); }
 #swipe-screen.block-mode #mode-block.active {
-  background: var(--orange);
+  background: var(--red);
   color: #fff;
-  box-shadow: 0 1px 4px rgba(242,153,0,0.5);
+  box-shadow: 0 1px 4px rgba(234,67,53,0.5);
 }
 
 /* Prominent warning banner shown only while in block mode. */
@@ -676,9 +676,9 @@ body {
   margin: 0 16px 6px;
   padding: 9px 12px;
   border-radius: 10px;
-  background: var(--orange-light);
-  border: 1px solid var(--orange);
-  color: var(--orange);
+  background: var(--red-light);
+  border: 1px solid var(--red);
+  color: var(--red);
   font-size: 12.5px;
   line-height: 1.35;
   flex-shrink: 0;
@@ -687,9 +687,9 @@ body {
 .block-banner strong { font-weight: 700; }
 
 /* Tint the whole swipe surface so the active mode is obvious at a glance. */
-#swipe-screen.block-mode { background: var(--orange-light); }
-#swipe-screen.block-mode .card-stack-area { box-shadow: inset 0 0 0 2px var(--orange); border-radius: 16px; margin: 0 8px; }
-#swipe-screen.block-mode .action-hint { color: var(--orange); font-weight: 600; }
+#swipe-screen.block-mode { background: var(--red-light); }
+#swipe-screen.block-mode .card-stack-area { box-shadow: inset 0 0 0 2px var(--red); border-radius: 16px; margin: 0 8px; }
+#swipe-screen.block-mode .action-hint { color: var(--red); font-weight: 600; }
 
 .open-gmail-btn {
   display: flex;
@@ -1430,7 +1430,7 @@ if (window.parent !== window && location.hash.indexOf('ic_silent') !== -1) {
 
 // ── State ──────────────────────────────────────────────────
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
-const APP_VERSION = 'v39'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v40'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
