@@ -1472,7 +1472,7 @@ const USE_REFRESH_BACKEND = false;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v44'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v45'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3476,6 +3476,11 @@ async function openReader(email, opts = {}) {
   // Only offer Mark-as-read once the body has actually loaded.
   const showFooter = withFooter && ok;
 
+  // Offline, links can't load — disable them so a tap doesn't navigate away
+  // from the cached email into a dead page. (navigator.onLine is unreliable in
+  // installed PWAs, so trust the app's offline state too.)
+  const offline = offlineMode || navigator.onLine === false;
+
   // Prefer HTML rendering in a sandboxed iframe; fall back to plain text. The
   // content scrolls natively (no height measurement), and the Mark-as-read
   // footer is revealed once the user reaches the bottom of the email.
@@ -3491,23 +3496,36 @@ async function openReader(email, opts = {}) {
   table{max-width:100%!important;}
   pre,code{white-space:pre-wrap;word-wrap:break-word;}
   blockquote{border-left:3px solid #dadce0;margin:0;padding-left:12px;color:#5f6368;}
+  ${offline ? 'a{pointer-events:none;cursor:default;}' : ''}
 </style></head>
 <body>${email.bodyHtml}</body></html>`;
     const iframe = document.createElement('iframe');
     // allow-same-origin (without allow-scripts) lets us watch the email's scroll
     // position to reveal the footer; scripts in the email still never run.
-    iframe.setAttribute('sandbox', showFooter
-      ? 'allow-popups allow-popups-to-escape-sandbox allow-same-origin'
-      : 'allow-popups allow-popups-to-escape-sandbox');
+    // Offline: omit allow-popups so links (target=_blank) can't open at all.
+    const sb = ['allow-popups-to-escape-sandbox'];
+    if (!offline) sb.push('allow-popups');
+    if (showFooter) sb.push('allow-same-origin');
+    iframe.setAttribute('sandbox', sb.join(' '));
     iframe.addEventListener('load', () => {
-      if (!showFooter || readerEmail !== email) return;
+      if (readerEmail !== email) return;
       try {
         const doc = iframe.contentDocument;
         const win = iframe.contentWindow;
-        const scroller = doc.scrollingElement || doc.documentElement || doc.body;
-        watchScrollForFooter(scroller, win, win, doc, email);
+        // Belt-and-suspenders: block link taps from the parent when offline and
+        // let the user know why nothing happened.
+        if (offline && doc) {
+          doc.addEventListener('click', ev => {
+            const a = ev.target && ev.target.closest && ev.target.closest('a');
+            if (a) { ev.preventDefault(); ev.stopPropagation(); toast('Offline — links can’t open'); }
+          }, true);
+        }
+        if (showFooter) {
+          const scroller = doc.scrollingElement || doc.documentElement || doc.body;
+          watchScrollForFooter(scroller, win, win, doc, email);
+        }
       } catch(e) {
-        revealReaderFooter(email); // can't watch scroll — just show it
+        if (showFooter) revealReaderFooter(email); // can't watch scroll — just show it
       }
     });
     iframe.srcdoc = wrapped;
