@@ -1441,7 +1441,7 @@ const USE_REFRESH_BACKEND = false;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v42'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v43'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3306,10 +3306,12 @@ async function ensureReaderBody(email) {
   return false;
 }
 
-// Opens the focused reader from the swipe deck (no Mark-as-read footer).
+// Opens the focused reader from the swipe deck. Shows the Mark-as-read button
+// at the very bottom of the email, so after reading it through you can mark it
+// read without swiping back to the deck.
 function openInGmail() {
   if (!currentEmail) return;
-  openReader(currentEmail, {});
+  openReader(currentEmail, { markRead: true });
 }
 
 // Renders an email in the full-screen reader. When opts.markRead is set, a
