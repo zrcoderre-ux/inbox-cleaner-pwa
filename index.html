@@ -897,6 +897,37 @@ body {
 
 .keep-item .email-item-subject { white-space: normal; }
 
+/* Swipe-left-to-mark-read on Keep rows (iOS-Mail style). The row slides left to
+   reveal a red "Mark read" action behind it. */
+.keep-row { position: relative; overflow: hidden; }
+.keep-row .keep-item {
+  position: relative;
+  background: var(--surface);
+  transition: transform 0.2s ease;
+  will-change: transform;
+  z-index: 1;
+}
+.keep-row.kr-dragging .keep-item { transition: none; }
+.keep-row-action {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  display: flex;
+  align-items: stretch;
+  z-index: 0;
+}
+.keep-row-mark {
+  border: none;
+  background: var(--red);
+  color: #fff;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 22px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.keep-row-mark:active { background: #C5221F; }
+
 .keep-offline {
   font-size: 12px;
   font-weight: 500;
@@ -1441,7 +1472,7 @@ const USE_REFRESH_BACKEND = false;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v43'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v44'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3132,14 +3163,109 @@ async function renderKeepList() {
     ? '<div class="keep-offline">Offline — showing saved copies.</div>'
     : '';
   el.innerHTML = offlineBanner + items.map(e => `
-    <div class="email-item keep-item" onclick="openKept('${e.id}')">
-      <div class="email-item-meta">
-        <div class="email-item-sender">${esc(e.sender)}</div>
-        <div class="email-item-subject">${esc(e.subject)}</div>
+    <div class="keep-row" data-id="${e.id}">
+      <div class="keep-row-action"><button class="keep-row-mark" onclick="markKeptRead('${e.id}')">Mark read</button></div>
+      <div class="email-item keep-item" onclick="openKept('${e.id}')">
+        <div class="email-item-meta">
+          <div class="email-item-sender">${esc(e.sender)}</div>
+          <div class="email-item-subject">${esc(e.subject)}</div>
+        </div>
+        <div class="email-item-time">${formatDate(e.date)}</div>
       </div>
-      <div class="email-item-time">${formatDate(e.date)}</div>
     </div>
   `).join('');
+}
+
+// Marks a kept email as read without opening it (used by the Keep-row swipe and
+// its revealed button). Removes it from the Keep list and syncs to Gmail.
+async function markKeptRead(id) {
+  dropKeptLocally(id);
+  emails = emails.filter(e => e.id !== id);
+  swipeQueue = swipeQueue.filter(e => e.id !== id);
+  const ok = await sendReadToGmail(id);
+  if (!ok) enqueueOp({ type: 'read', id });
+  renderKeepList();
+  renderSwipeStack();
+  toast(ok ? 'Marked as read' : 'Marked read — will sync');
+}
+
+// ── Keep-row swipe-to-reveal ───────────────────────────────
+let keepSwipe = null;       // active drag state
+let keepClickGuardTs = 0;   // suppresses the row's open-tap right after a swipe
+
+function closeKeepRow(row) {
+  if (!row) return;
+  const item = row.querySelector('.keep-item');
+  if (item) item.style.transform = '';
+  row.classList.remove('kr-dragging', 'kr-open');
+}
+function closeAnyOpenKeepRow(except) {
+  document.querySelectorAll('.keep-row.kr-open').forEach(r => { if (r !== except) closeKeepRow(r); });
+}
+
+// Delegated touch handlers on the (persistent) list container, so they survive
+// re-renders that replace the rows.
+function initKeepSwipe() {
+  const list = document.getElementById('keep-list-el');
+  if (!list || list._krBound) return;
+  list._krBound = true;
+
+  list.addEventListener('touchstart', e => {
+    if (e.target.closest('.keep-row-mark')) return; // let the button handle taps
+    const row = e.target.closest('.keep-row');
+    closeAnyOpenKeepRow(row);
+    if (!row) { keepSwipe = null; return; }
+    const t = e.touches[0];
+    const action = row.querySelector('.keep-row-action');
+    keepSwipe = {
+      row, item: row.querySelector('.keep-item'),
+      startX: t.clientX, startY: t.clientY, axis: null, dx: 0,
+      w: action ? action.offsetWidth : 100,
+      wasOpen: row.classList.contains('kr-open')
+    };
+  }, { passive: true });
+
+  list.addEventListener('touchmove', e => {
+    if (!keepSwipe) return;
+    const t = e.touches[0];
+    let dx = t.clientX - keepSwipe.startX;
+    const dy = t.clientY - keepSwipe.startY;
+    if (!keepSwipe.axis) {
+      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+      keepSwipe.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      if (keepSwipe.axis === 'x') keepSwipe.row.classList.add('kr-dragging');
+    }
+    if (keepSwipe.axis !== 'x') return;
+    e.preventDefault(); // we own the horizontal gesture; don't scroll vertically
+    if (keepSwipe.wasOpen) dx -= keepSwipe.w; // continue from the revealed offset
+    dx = Math.min(0, Math.max(dx, -keepSwipe.w - 40)); // left-only, small overscroll
+    keepSwipe.dx = dx;
+    keepSwipe.item.style.transform = `translateX(${dx}px)`;
+  }, { passive: false });
+
+  const end = () => {
+    if (!keepSwipe) return;
+    const ks = keepSwipe;
+    keepSwipe = null;
+    ks.row.classList.remove('kr-dragging');
+    if (ks.axis !== 'x') return;
+    keepClickGuardTs = Date.now();
+    const id = ks.row.getAttribute('data-id');
+    const commit = ks.w + 24;  // dragged well past the button → mark read
+    const reveal = ks.w * 0.5; // past half the button → snap open
+    if (-ks.dx >= commit) {
+      ks.item.style.transform = 'translateX(-110%)';
+      setTimeout(() => markKeptRead(id), 160);
+    } else if (-ks.dx >= reveal) {
+      ks.item.style.transform = `translateX(-${ks.w}px)`;
+      ks.row.classList.add('kr-open');
+    } else {
+      ks.item.style.transform = '';
+      ks.row.classList.remove('kr-open');
+    }
+  };
+  list.addEventListener('touchend', end);
+  list.addEventListener('touchcancel', end);
 }
 
 function updateKeepBadge() {
@@ -3441,6 +3567,11 @@ function removeReaderFooter() {
 // Opens a kept email from the Keep tab, with the bottom Mark-as-read button.
 // Falls back to the offline cache when the email isn't loaded in memory.
 async function openKept(id) {
+  // Ignore the tap that ends a swipe gesture; if a row is revealed, the tap
+  // just closes it instead of opening the email.
+  if (Date.now() - keepClickGuardTs < 400) return;
+  const openRow = document.querySelector('.keep-row.kr-open');
+  if (openRow) { closeKeepRow(openRow); return; }
   let email = emails.find(e => e.id === id);
   if (!email) {
     try {
@@ -3722,6 +3853,7 @@ loadKeepMarksRead();
 loadClientId();
 setSwipeMode('triage'); // reflect the keep setting in the action labels/hint
 updateAccountChip();
+initKeepSwipe(); // enable swipe-left-to-mark-read on Keep rows
 // Close the account menu when tapping outside it.
 document.addEventListener('click', e => {
   const menu = document.getElementById('account-menu');
