@@ -1,0 +1,13 @@
+# Files in the repo root that must NOT be served as public static assets.
+# (The Worker's [assets] directory is the repo root, so without this the whole
+# repo — including .git — would be publicly downloadable.)
+.git
+.wrangler
+node_modules
+.gitignore
+.assetsignore
+worker.js
+wrangler.toml
+package.json
+package-lock.json
+*.md
