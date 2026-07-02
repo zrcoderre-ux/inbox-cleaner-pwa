@@ -1468,11 +1468,11 @@ const SCOPES = 'https://www.googleapis.com/auth/gmail.modify';
 // Leave false until you've deployed worker.js with GOOGLE_CLIENT_SECRET set
 // (see AUTH-SETUP.md). When false the app uses the original implicit flow, so
 // this is safe to ship before the backend is live.
-const USE_REFRESH_BACKEND = false;
+const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v45'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v46'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
