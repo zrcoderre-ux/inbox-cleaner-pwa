@@ -1,0 +1,26 @@
+name: Deploy to Cloudflare
+
+# Deploys the Worker (and static assets) on every push to main, so merged
+# changes go live automatically — no manual `wrangler deploy` needed.
+# Requires two repository secrets (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN   — a token with the "Edit Cloudflare Workers" template
+#   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account ID
+# The GOOGLE_CLIENT_SECRET lives on the Worker itself (set via `wrangler secret
+# put`) and persists across deploys, so it is NOT needed here.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy with Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config wrangler.toml
