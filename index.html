@@ -1526,7 +1526,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v47'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v48'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3450,7 +3450,7 @@ function startAutoScroll(scroller, doc) {
   stopAutoScrollEngine();
   if (!scroller) return;
   if (scroller.scrollHeight - scroller.clientHeight <= 4) return; // nothing to scroll
-  asState = { scroller, doc, running: true, pxPerSec: 20, last: 0, remainder: 0,
+  asState = { scroller, doc, running: true, pxPerSec: 20, last: 0, pos: scroller.scrollTop,
               words: estimateWords(scroller, doc) };
   recomputeAutoScrollSpeed();
   // Hand control back to the user the moment they touch the content.
@@ -3459,6 +3459,7 @@ function startAutoScroll(scroller, doc) {
   const target = doc || scroller;
   try { target.addEventListener('touchstart', pause, { passive: true }); } catch(e) {}
   try { target.addEventListener('wheel', pause, { passive: true }); } catch(e) {}
+  scrollerMomentum(false); // avoid iOS momentum fighting our per-frame writes
   const pill = document.getElementById('reader-autoscroll');
   if (pill) pill.style.display = 'flex';
   syncAutoScrollUI();
@@ -3472,10 +3473,13 @@ function autoScrollTick(ts) {
   if (!asState || !asState.running) return;
   const s = asState.scroller;
   if (!asState.last) asState.last = ts;
-  const dt = ts - asState.last; asState.last = ts;
-  asState.remainder += asState.pxPerSec * dt / 1000;
-  const step = Math.floor(asState.remainder);
-  if (step > 0) { asState.remainder -= step; s.scrollTop += step; }
+  let dt = ts - asState.last; asState.last = ts;
+  // Cap dt so a dropped/slow frame (GC, layout, tab switch) doesn't lurch.
+  if (dt > 48) dt = 48;
+  // Track a float position and write it straight to scrollTop each frame — no
+  // integer "hold then jump" stepping, which is what makes it look bouncy.
+  asState.pos += asState.pxPerSec * dt / 1000;
+  s.scrollTop = asState.pos;
   if (s.scrollHeight - (s.scrollTop + s.clientHeight) <= 2) {
     pauseAutoScroll();
     if (readerEmail) revealReaderFooter(readerEmail); // done — offer Mark as read
@@ -3489,14 +3493,28 @@ function pauseAutoScroll() {
   asState.running = false;
   if (asState.raf) cancelAnimationFrame(asState.raf);
   asState.raf = null; asState.last = 0;
+  scrollerMomentum(true); // restore native momentum for manual scrolling
   updateAutoScrollToggle();
 }
 
 function resumeAutoScroll() {
   if (!asState || asState.running) return;
   asState.running = true; asState.last = 0;
+  asState.pos = asState.scroller.scrollTop; // resync in case the user moved it
+  scrollerMomentum(false);
   updateAutoScrollToggle();
   asState.raf = requestAnimationFrame(autoScrollTick);
+}
+
+// Toggle -webkit-overflow-scrolling on the active scroller. iOS runs "touch"
+// momentum on a separate compositor thread that fights per-frame scrollTop
+// writes (the "bounce"); "auto" makes programmatic scrolling smooth.
+function scrollerMomentum(on) {
+  if (!asState) return;
+  const els = asState.doc
+    ? [asState.doc.documentElement, asState.doc.body].filter(Boolean)
+    : [asState.scroller];
+  els.forEach(el => { try { el.style.webkitOverflowScrolling = on ? 'touch' : 'auto'; } catch(e) {} });
 }
 
 function toggleAutoScrollRun() {
@@ -3517,6 +3535,7 @@ function updateAutoScrollToggle() {
 function stopAutoScrollEngine() {
   if (!asState) return;
   if (asState.raf) cancelAnimationFrame(asState.raf);
+  scrollerMomentum(true); // restore native momentum before we let go
   const target = asState.doc || asState.scroller;
   try { target.removeEventListener('touchstart', asState.onPause); } catch(e) {}
   try { target.removeEventListener('wheel', asState.onPause); } catch(e) {}
