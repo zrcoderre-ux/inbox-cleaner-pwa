@@ -1526,7 +1526,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v50'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v51'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3467,6 +3467,23 @@ function startAutoScroll(scroller, doc) {
   asState.target = target;
   asState.handlers = h;
   Object.keys(h).forEach(evt => { try { target.addEventListener(evt, h[evt], { passive: true }); } catch(e) {} });
+  // Sub-pixel smoothness: scrollTop only moves in whole pixels (jumpy at slow
+  // speeds), so we render the fractional part with a GPU transform on the
+  // content. For plain text we wrap the content in .ras-inner; for an HTML
+  // email we transform the iframe body.
+  if (doc) {
+    asState.fracEl = doc.body;
+  } else {
+    let inner = scroller.querySelector('.ras-inner');
+    if (!inner) {
+      inner = document.createElement('div');
+      inner.className = 'ras-inner';
+      while (scroller.firstChild) inner.appendChild(scroller.firstChild);
+      scroller.appendChild(inner);
+    }
+    asState.fracEl = inner;
+  }
+  if (asState.fracEl) { try { asState.fracEl.style.willChange = 'transform'; } catch(e) {} }
   const pill = document.getElementById('reader-autoscroll');
   if (pill) pill.style.display = 'flex';
   syncAutoScrollUI();
@@ -3490,11 +3507,8 @@ function autoScrollTick(ts) {
   let dt = ts - asState.last; asState.last = ts;
   // Cap dt so a dropped/slow frame (GC, layout, tab switch) doesn't lurch.
   if (dt > 48) dt = 48;
-  // Track a float position and write it straight to scrollTop each frame — no
-  // integer "hold then jump" stepping, which is what makes it look bouncy.
   asState.pos += asState.pxPerSec * dt / 1000;
-  s.scrollTop = asState.pos;
-  asState.lastWritten = s.scrollTop; // read back the actual value (may round)
+  autoScrollWrite(); // whole pixels via scrollTop, fraction via GPU transform
   if (s.scrollHeight - (s.scrollTop + s.clientHeight) <= 2) {
     pauseAutoScroll();
     if (readerEmail) revealReaderFooter(readerEmail); // done — offer Mark as read
@@ -3503,11 +3517,31 @@ function autoScrollTick(ts) {
   asState.raf = requestAnimationFrame(autoScrollTick);
 }
 
+// Whole pixels go to scrollTop; the leftover fraction is rendered as a GPU
+// transform on the content, so slow motion is smooth instead of stepping 1px
+// at a time. lastWritten tracks the integer scrollTop for divergence detection.
+function autoScrollWrite() {
+  if (!asState) return;
+  const s = asState.scroller;
+  const whole = Math.floor(asState.pos);
+  const frac = asState.pos - whole;
+  s.scrollTop = whole;
+  asState.lastWritten = s.scrollTop;
+  if (asState.fracEl) {
+    try { asState.fracEl.style.transform = 'translate3d(0,' + (-frac) + 'px,0)'; } catch(e) {}
+  }
+}
+
+function autoScrollResetFrac() {
+  if (asState && asState.fracEl) { try { asState.fracEl.style.transform = ''; } catch(e) {} }
+}
+
 // A manual scroll/touch temporarily suspends the auto-advance so the user can
 // scroll freely (ahead, back, wherever). It resumes on its own shortly after.
 function interruptAutoScroll() {
   if (!asState || asState.userPaused) return;
   if (!asState.suspended) {
+    autoScrollResetFrac(); // drop the sub-pixel offset so manual scroll is clean
     asState.suspended = true;
     if (asState.raf) { cancelAnimationFrame(asState.raf); asState.raf = null; }
   }
@@ -3539,6 +3573,7 @@ function pauseAutoScroll() {
   asState.suspended = false;
   if (asState.raf) { cancelAnimationFrame(asState.raf); asState.raf = null; }
   if (asState.resumeTimer) { clearTimeout(asState.resumeTimer); asState.resumeTimer = null; }
+  autoScrollResetFrac();
   asState.last = 0;
   updateAutoScrollToggle();
 }
@@ -3553,6 +3588,7 @@ function toggleAutoScrollRun() {
     asState.suspended = false;
     if (asState.raf) { cancelAnimationFrame(asState.raf); asState.raf = null; }
     if (asState.resumeTimer) { clearTimeout(asState.resumeTimer); asState.resumeTimer = null; }
+    autoScrollResetFrac();
   } else {
     asState.userPaused = false;
     asState.running = true;
@@ -3581,6 +3617,8 @@ function stopAutoScrollEngine() {
   if (!asState) return;
   if (asState.raf) cancelAnimationFrame(asState.raf);
   if (asState.resumeTimer) clearTimeout(asState.resumeTimer);
+  autoScrollResetFrac();
+  if (asState.fracEl) { try { asState.fracEl.style.willChange = ''; } catch(e) {} }
   if (asState.target && asState.handlers) {
     Object.keys(asState.handlers).forEach(evt => {
       try { asState.target.removeEventListener(evt, asState.handlers[evt]); } catch(e) {}
