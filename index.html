@@ -1526,7 +1526,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v48'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v49'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3450,15 +3450,22 @@ function startAutoScroll(scroller, doc) {
   stopAutoScrollEngine();
   if (!scroller) return;
   if (scroller.scrollHeight - scroller.clientHeight <= 4) return; // nothing to scroll
-  asState = { scroller, doc, running: true, pxPerSec: 20, last: 0, pos: scroller.scrollTop,
+  asState = { scroller, doc, running: true, suspended: false, userPaused: false,
+              pxPerSec: 20, last: 0, pos: scroller.scrollTop, resumeTimer: null,
               words: estimateWords(scroller, doc) };
   recomputeAutoScrollSpeed();
-  // Hand control back to the user the moment they touch the content.
-  const pause = () => pauseAutoScroll();
-  asState.onPause = pause;
+  // Manual scrolling temporarily takes over; auto-scroll resumes once the user
+  // stops. Track gestures on the scroll target.
   const target = doc || scroller;
-  try { target.addEventListener('touchstart', pause, { passive: true }); } catch(e) {}
-  try { target.addEventListener('wheel', pause, { passive: true }); } catch(e) {}
+  const h = {
+    touchstart: () => interruptAutoScroll(),
+    wheel: () => interruptAutoScroll(),
+    touchend: () => { if (asState && asState.suspended) scheduleAutoResume(); },
+    scroll: () => { if (asState && asState.suspended) scheduleAutoResume(); }
+  };
+  asState.target = target;
+  asState.handlers = h;
+  Object.keys(h).forEach(evt => { try { target.addEventListener(evt, h[evt], { passive: true }); } catch(e) {} });
   scrollerMomentum(false); // avoid iOS momentum fighting our per-frame writes
   const pill = document.getElementById('reader-autoscroll');
   if (pill) pill.style.display = 'flex';
@@ -3470,7 +3477,7 @@ function startAutoScroll(scroller, doc) {
 }
 
 function autoScrollTick(ts) {
-  if (!asState || !asState.running) return;
+  if (!asState || !asState.running || asState.suspended) return;
   const s = asState.scroller;
   if (!asState.last) asState.last = ts;
   let dt = ts - asState.last; asState.last = ts;
@@ -3488,22 +3495,46 @@ function autoScrollTick(ts) {
   asState.raf = requestAnimationFrame(autoScrollTick);
 }
 
-function pauseAutoScroll() {
-  if (!asState || !asState.running) return;
-  asState.running = false;
-  if (asState.raf) cancelAnimationFrame(asState.raf);
-  asState.raf = null; asState.last = 0;
-  scrollerMomentum(true); // restore native momentum for manual scrolling
-  updateAutoScrollToggle();
+// A manual scroll/touch temporarily suspends the auto-advance so the user can
+// scroll freely (ahead, back, wherever). It resumes on its own shortly after.
+function interruptAutoScroll() {
+  if (!asState || asState.userPaused) return;
+  if (!asState.suspended) {
+    asState.suspended = true;
+    if (asState.raf) { cancelAnimationFrame(asState.raf); asState.raf = null; }
+    scrollerMomentum(true); // give the user natural momentum while they scroll
+  }
+  scheduleAutoResume();
 }
 
-function resumeAutoScroll() {
-  if (!asState || asState.running) return;
-  asState.running = true; asState.last = 0;
-  asState.pos = asState.scroller.scrollTop; // resync in case the user moved it
-  scrollerMomentum(false);
+// Resume auto-scrolling ~1s after the last manual scroll settles (momentum
+// keeps firing scroll events, which keep pushing this out until it stops).
+function scheduleAutoResume() {
+  if (!asState) return;
+  if (asState.resumeTimer) clearTimeout(asState.resumeTimer);
+  asState.resumeTimer = setTimeout(() => {
+    if (!asState) return;
+    asState.resumeTimer = null;
+    if (asState.userPaused || !asState.running) return;
+    asState.suspended = false;
+    asState.pos = asState.scroller.scrollTop; // continue from where they left it
+    asState.last = 0;
+    scrollerMomentum(false);
+    if (!asState.raf) asState.raf = requestAnimationFrame(autoScrollTick);
+  }, 1000);
+}
+
+// Full stop at end-of-email — no auto-resume (footer takes over).
+function pauseAutoScroll() {
+  if (!asState) return;
+  asState.running = false;
+  asState.userPaused = true;
+  asState.suspended = false;
+  if (asState.raf) { cancelAnimationFrame(asState.raf); asState.raf = null; }
+  if (asState.resumeTimer) { clearTimeout(asState.resumeTimer); asState.resumeTimer = null; }
+  asState.last = 0;
+  scrollerMomentum(true);
   updateAutoScrollToggle();
-  asState.raf = requestAnimationFrame(autoScrollTick);
 }
 
 // Toggle -webkit-overflow-scrolling on the active scroller. iOS runs "touch"
@@ -3517,14 +3548,34 @@ function scrollerMomentum(on) {
   els.forEach(el => { try { el.style.webkitOverflowScrolling = on ? 'touch' : 'auto'; } catch(e) {} });
 }
 
+// The pill's play/pause button: an explicit choice that sticks (no auto-resume
+// while paused).
 function toggleAutoScrollRun() {
   if (!asState) return;
-  asState.running ? pauseAutoScroll() : resumeAutoScroll();
+  if (asState.running && !asState.userPaused) {
+    asState.running = false;
+    asState.userPaused = true;
+    asState.suspended = false;
+    if (asState.raf) { cancelAnimationFrame(asState.raf); asState.raf = null; }
+    if (asState.resumeTimer) { clearTimeout(asState.resumeTimer); asState.resumeTimer = null; }
+    scrollerMomentum(true);
+  } else {
+    asState.userPaused = false;
+    asState.running = true;
+    asState.suspended = false;
+    asState.pos = asState.scroller.scrollTop;
+    asState.last = 0;
+    scrollerMomentum(false);
+    if (!asState.raf) asState.raf = requestAnimationFrame(autoScrollTick);
+  }
+  updateAutoScrollToggle();
 }
 
 function updateAutoScrollToggle() {
   const btn = document.getElementById('ras-toggle');
   if (!btn) return;
+  // Suspended (temporary manual override) still counts as "playing" — it will
+  // resume — so the icon doesn't flicker while the user scrolls.
   const playing = !!(asState && asState.running);
   btn.innerHTML = playing
     ? '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>'
@@ -3535,10 +3586,13 @@ function updateAutoScrollToggle() {
 function stopAutoScrollEngine() {
   if (!asState) return;
   if (asState.raf) cancelAnimationFrame(asState.raf);
+  if (asState.resumeTimer) clearTimeout(asState.resumeTimer);
   scrollerMomentum(true); // restore native momentum before we let go
-  const target = asState.doc || asState.scroller;
-  try { target.removeEventListener('touchstart', asState.onPause); } catch(e) {}
-  try { target.removeEventListener('wheel', asState.onPause); } catch(e) {}
+  if (asState.target && asState.handlers) {
+    Object.keys(asState.handlers).forEach(evt => {
+      try { asState.target.removeEventListener(evt, asState.handlers[evt]); } catch(e) {}
+    });
+  }
   asState = null;
 }
 
