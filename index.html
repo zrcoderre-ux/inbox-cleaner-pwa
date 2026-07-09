@@ -821,6 +821,41 @@ body {
 .reader-mark-read:active { opacity: 0.85; transform: scale(0.99); }
 .reader-mark-read:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Floating auto-scroll control, overlaid at the bottom of the reader. */
+.reader-autoscroll {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: rgba(20,20,20,0.78);
+  color: #fff;
+  border-radius: 26px;
+  z-index: 5;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.3);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+.ras-toggle {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255,255,255,0.2);
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ras-toggle svg { width: 16px; height: 16px; }
+.ras-slider { width: 120px; accent-color: #fff; }
+.ras-wpm { font-size: 12px; font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
+
+/* Settings speed slider row */
+.setting-slider input[type="range"] { width: 130px; accent-color: var(--red); }
+
 .action-btn.undo-btn { border-color: var(--border-mid); color: var(--text-2); width: 44px; height: 44px; }
 .action-btn.undo-btn svg { width: 20px; height: 20px; }
 .action-btn.undo-btn:active { background: var(--surface-3); transform: scale(0.9); }
@@ -1348,6 +1383,20 @@ body {
               </span>
               <input type="checkbox" id="keep-marks-read" onchange="setKeepMarksRead(this.checked)">
             </label>
+            <label class="setting-row">
+              <span class="setting-text">
+                <span class="setting-title">Auto-scroll while reading</span>
+                <span class="setting-desc">Slowly scrolls an open email at your reading pace. Adjust speed with the slider in the reader; tap the content (or the pause button) to stop.</span>
+              </span>
+              <input type="checkbox" id="autoscroll-enabled" onchange="setAutoScrollEnabled(this.checked)">
+            </label>
+            <div class="setting-row setting-slider" id="autoscroll-speed-row" style="display:none;">
+              <span class="setting-text">
+                <span class="setting-title">Reading speed</span>
+                <span class="setting-desc"><span id="autoscroll-wpm-label">250</span> words per minute</span>
+              </span>
+              <input type="range" id="autoscroll-wpm" min="100" max="600" step="10" value="250" oninput="setAutoScrollWpm(this.value)">
+            </div>
             <div class="app-version" id="app-version"></div>
           </div>
         </div>
@@ -1441,6 +1490,11 @@ body {
     </div>
   </div>
   <div class="reader-body" id="reader-body"></div>
+  <div class="reader-autoscroll" id="reader-autoscroll">
+    <button class="ras-toggle" id="ras-toggle" onclick="toggleAutoScrollRun()" aria-label="Pause auto-scroll"></button>
+    <input type="range" class="ras-slider" id="ras-slider" min="100" max="600" step="10" value="250" oninput="setAutoScrollWpm(this.value)" aria-label="Reading speed">
+    <span class="ras-wpm" id="ras-wpm-label">250 wpm</span>
+  </div>
 </div>
 
 <script src="https://apis.google.com/js/api.js" async></script>
@@ -1472,7 +1526,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v46'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v47'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1513,6 +1567,12 @@ let keepSearch = '';
 let keepOfflineOnly = false;
 // When true, swiping Keep also marks the email read (label only, not unread).
 let keepMarksRead = false;
+// Optional auto-scroll while reading. Speed is a reading pace in words/minute;
+// each email's scroll speed is derived from its length so it finishes when a
+// reader at that pace would. asState holds the running animation.
+let autoScrollEnabled = false;
+let autoScrollWpm = 250;
+let asState = null;
 // Background queue that caches kept emails for offline reading, most-recent
 // first, with limited concurrency so rapid keeps don't overwhelm the API.
 let cacheQueue = [];
@@ -3327,6 +3387,142 @@ function setKeepMarksRead(on) {
   if (swipeMode === 'triage') setSwipeMode('triage'); // refresh the hint text
 }
 
+// ── Auto-scroll while reading ──────────────────────────────
+function loadAutoScroll() {
+  try { autoScrollEnabled = localStorage.getItem('ic_autoscroll') === '1'; } catch(e) {}
+  try {
+    const w = parseInt(localStorage.getItem('ic_autoscroll_wpm') || '250', 10);
+    if (w >= 60 && w <= 1000) autoScrollWpm = w;
+  } catch(e) {}
+  const cb = document.getElementById('autoscroll-enabled');
+  if (cb) cb.checked = autoScrollEnabled;
+  const row = document.getElementById('autoscroll-speed-row');
+  if (row) row.style.display = autoScrollEnabled ? '' : 'none';
+  syncAutoScrollUI();
+}
+
+function setAutoScrollEnabled(on) {
+  autoScrollEnabled = !!on;
+  try { localStorage.setItem('ic_autoscroll', on ? '1' : '0'); } catch(e) {}
+  const row = document.getElementById('autoscroll-speed-row');
+  if (row) row.style.display = on ? '' : 'none';
+  if (!on) {
+    stopAutoScrollEngine();
+    const pill = document.getElementById('reader-autoscroll');
+    if (pill) pill.style.display = 'none';
+  }
+}
+
+function setAutoScrollWpm(w) {
+  autoScrollWpm = parseInt(w, 10) || 250;
+  try { localStorage.setItem('ic_autoscroll_wpm', String(autoScrollWpm)); } catch(e) {}
+  syncAutoScrollUI();
+  if (asState) recomputeAutoScrollSpeed(); // apply live while reading
+}
+
+// Keeps both sliders + labels (Settings and the reader pill) in step.
+function syncAutoScrollUI() {
+  const s1 = document.getElementById('autoscroll-wpm'); if (s1 && +s1.value !== autoScrollWpm) s1.value = autoScrollWpm;
+  const l1 = document.getElementById('autoscroll-wpm-label'); if (l1) l1.textContent = autoScrollWpm;
+  const s2 = document.getElementById('ras-slider'); if (s2 && +s2.value !== autoScrollWpm) s2.value = autoScrollWpm;
+  const l2 = document.getElementById('ras-wpm-label'); if (l2) l2.textContent = autoScrollWpm + ' wpm';
+}
+
+function estimateWords(scroller, doc) {
+  try {
+    const txt = (doc && doc.body ? (doc.body.innerText || doc.body.textContent) : scroller.textContent) || '';
+    return Math.max(txt.trim().split(/\s+/).filter(Boolean).length, 1);
+  } catch(e) { return 1; }
+}
+
+function recomputeAutoScrollSpeed() {
+  if (!asState || !asState.scroller) return;
+  const s = asState.scroller;
+  const dist = Math.max(s.scrollHeight - s.clientHeight, 1);
+  const seconds = (asState.words / autoScrollWpm) * 60;
+  asState.pxPerSec = Math.max(dist / Math.max(seconds, 1), 4); // floor so it always moves
+}
+
+// scroller: the element whose scrollTop we advance. doc: the iframe document (for
+// HTML emails) so we can measure words and listen for manual scrolls; null for
+// the plain-text reader.
+function startAutoScroll(scroller, doc) {
+  stopAutoScrollEngine();
+  if (!scroller) return;
+  if (scroller.scrollHeight - scroller.clientHeight <= 4) return; // nothing to scroll
+  asState = { scroller, doc, running: true, pxPerSec: 20, last: 0, remainder: 0,
+              words: estimateWords(scroller, doc) };
+  recomputeAutoScrollSpeed();
+  // Hand control back to the user the moment they touch the content.
+  const pause = () => pauseAutoScroll();
+  asState.onPause = pause;
+  const target = doc || scroller;
+  try { target.addEventListener('touchstart', pause, { passive: true }); } catch(e) {}
+  try { target.addEventListener('wheel', pause, { passive: true }); } catch(e) {}
+  const pill = document.getElementById('reader-autoscroll');
+  if (pill) pill.style.display = 'flex';
+  syncAutoScrollUI();
+  updateAutoScrollToggle();
+  // Re-derive speed once more after images settle and change the height.
+  setTimeout(() => { if (asState && asState.scroller === scroller) recomputeAutoScrollSpeed(); }, 1500);
+  asState.raf = requestAnimationFrame(autoScrollTick);
+}
+
+function autoScrollTick(ts) {
+  if (!asState || !asState.running) return;
+  const s = asState.scroller;
+  if (!asState.last) asState.last = ts;
+  const dt = ts - asState.last; asState.last = ts;
+  asState.remainder += asState.pxPerSec * dt / 1000;
+  const step = Math.floor(asState.remainder);
+  if (step > 0) { asState.remainder -= step; s.scrollTop += step; }
+  if (s.scrollHeight - (s.scrollTop + s.clientHeight) <= 2) {
+    pauseAutoScroll();
+    if (readerEmail) revealReaderFooter(readerEmail); // done — offer Mark as read
+    return;
+  }
+  asState.raf = requestAnimationFrame(autoScrollTick);
+}
+
+function pauseAutoScroll() {
+  if (!asState || !asState.running) return;
+  asState.running = false;
+  if (asState.raf) cancelAnimationFrame(asState.raf);
+  asState.raf = null; asState.last = 0;
+  updateAutoScrollToggle();
+}
+
+function resumeAutoScroll() {
+  if (!asState || asState.running) return;
+  asState.running = true; asState.last = 0;
+  updateAutoScrollToggle();
+  asState.raf = requestAnimationFrame(autoScrollTick);
+}
+
+function toggleAutoScrollRun() {
+  if (!asState) return;
+  asState.running ? pauseAutoScroll() : resumeAutoScroll();
+}
+
+function updateAutoScrollToggle() {
+  const btn = document.getElementById('ras-toggle');
+  if (!btn) return;
+  const playing = !!(asState && asState.running);
+  btn.innerHTML = playing
+    ? '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+  btn.setAttribute('aria-label', playing ? 'Pause auto-scroll' : 'Play auto-scroll');
+}
+
+function stopAutoScrollEngine() {
+  if (!asState) return;
+  if (asState.raf) cancelAnimationFrame(asState.raf);
+  const target = asState.doc || asState.scroller;
+  try { target.removeEventListener('touchstart', asState.onPause); } catch(e) {}
+  try { target.removeEventListener('wheel', asState.onPause); } catch(e) {}
+  asState = null;
+}
+
 function setSwipeMode(mode) {
   swipeMode = mode;
   document.getElementById('mode-triage').classList.toggle('active', mode === 'triage');
@@ -3450,6 +3646,9 @@ async function openReader(email, opts = {}) {
   renderBlockSuggestions();
   readerEmail = email;
   if (readerRO) { readerRO.disconnect(); readerRO = null; }
+  stopAutoScrollEngine(); // cancel any scroll from a previously-open email
+  const asPill = document.getElementById('reader-autoscroll');
+  if (asPill) asPill.style.display = 'none';
   const withFooter = !!opts.markRead;
   const overlay = document.getElementById('reader-overlay');
   const subjectEl = document.getElementById('reader-subject');
@@ -3520,9 +3719,11 @@ async function openReader(email, opts = {}) {
             if (a) { ev.preventDefault(); ev.stopPropagation(); toast('Offline — links can’t open'); }
           }, true);
         }
-        if (showFooter) {
-          const scroller = doc.scrollingElement || doc.documentElement || doc.body;
-          watchScrollForFooter(scroller, win, win, doc, email);
+        const scroller = doc.scrollingElement || doc.documentElement || doc.body;
+        if (showFooter) watchScrollForFooter(scroller, win, win, doc, email);
+        // Auto-scroll needs same-origin access to the iframe doc (present here).
+        if (autoScrollEnabled && doc) {
+          setTimeout(() => { if (readerEmail === email) startAutoScroll(scroller, doc); }, 500);
         }
       } catch(e) {
         if (showFooter) revealReaderFooter(email); // can't watch scroll — just show it
@@ -3536,6 +3737,9 @@ async function openReader(email, opts = {}) {
     const el = bodyEl.querySelector('.reader-text');
     el.textContent = email.bodyText || '(no content)';
     if (showFooter) watchScrollForFooter(el, el, window, document, email);
+    if (autoScrollEnabled) {
+      setTimeout(() => { if (readerEmail === email) startAutoScroll(el, null); }, 400);
+    }
   }
 }
 
@@ -3569,6 +3773,11 @@ function revealReaderFooter(email) {
   if (readerEmail !== email) return;
   const overlay = document.getElementById('reader-overlay');
   if (overlay.querySelector('.reader-footer')) return; // already shown
+  // Reached the end — stop auto-scrolling and hide its pill so it doesn't sit
+  // over the Mark-as-read button.
+  pauseAutoScroll();
+  const pill = document.getElementById('reader-autoscroll');
+  if (pill) pill.style.display = 'none';
   const footer = document.createElement('div');
   footer.className = 'reader-footer';
   footer.innerHTML = '<div class="reader-footer-hint">Done reading?</div>' +
@@ -3643,6 +3852,9 @@ function closeReader() {
   document.body.style.overflow = '';
   setReaderZoom(false); // restore the no-zoom lock (and reset any zoom)
   removeReaderFooter();
+  stopAutoScrollEngine();
+  const pill = document.getElementById('reader-autoscroll');
+  if (pill) pill.style.display = 'none';
   // Clear iframe so audio/video doesn't keep playing if any was running
   const bodyEl = document.getElementById('reader-body');
   bodyEl.innerHTML = '';
@@ -3868,6 +4080,7 @@ loadAccountData(); // keptIds + outbox for the active account
 loadKeepSort();
 loadKeepOfflineOnly();
 loadKeepMarksRead();
+loadAutoScroll();
 loadClientId();
 setSwipeMode('triage'); // reflect the keep setting in the action labels/hint
 updateAccountChip();
