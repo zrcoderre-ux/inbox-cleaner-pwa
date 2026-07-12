@@ -1526,7 +1526,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v51'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v52'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3027,8 +3027,8 @@ function swipeCard(direction) {
       doBlock(email);
     } else {
       card.classList.add('fly-right');
-      swipeHistory.push({ email, action: 'read' });
-      doRead(email);
+      swipeHistory.push({ email, action: 'skip' });
+      doKeep(email);
     }
   }
 
@@ -3650,10 +3650,10 @@ function setSwipeMode(mode) {
     leftBtn.className = 'action-btn block-btn';
     leftBtn.title = 'Block sender';
     leftBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`;
-    rightBtn.className = 'action-btn read-btn';
-    rightBtn.title = 'Mark as read';
+    rightBtn.className = 'action-btn skip-btn';
+    rightBtn.title = keepMarksRead ? 'Keep' : 'Keep unread';
     rightBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg>`;
-    hint.textContent = '← block sender · mark as read →';
+    hint.textContent = keepMarksRead ? '← block sender · keep →' : '← block sender · keep unread →';
   }
 }
 
