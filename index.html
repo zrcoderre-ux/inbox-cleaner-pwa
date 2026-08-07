@@ -979,6 +979,14 @@ body {
   gap: 12px;
   cursor: pointer;
 }
+/* Separate stacked settings so a row's description doesn't run into the next
+   row's title. */
+.setting-row + .setting-row,
+.setting-row + .setting-slider {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
 .setting-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .setting-title { font-size: 13px; font-weight: 500; color: var(--text-1); }
 .setting-desc { font-size: 12px; color: var(--text-2); line-height: 1.5; }
@@ -1080,6 +1088,20 @@ body {
   cursor: pointer;
 }
 .suggest-block-btn:active { opacity: 0.85; }
+.suggest-read-btn {
+  height: 32px;
+  padding: 0 12px;
+  background: var(--surface-3);
+  color: var(--text-1);
+  border: none;
+  border-radius: 8px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.suggest-read-btn:active { opacity: 0.85; }
 .suggest-dismiss-btn {
   background: none;
   border: none;
@@ -1092,6 +1114,26 @@ body {
 .suggest-dismiss-btn:active { color: var(--text-1); }
 
 .suggest-empty { font-size: 12px; color: var(--text-3); padding: 4px 0; line-height: 1.6; }
+
+/* Standing sender rules, grouped into their two categories */
+.rules-list { display: flex; flex-direction: column; gap: 16px; }
+.rule-group { display: flex; flex-direction: column; gap: 6px; }
+.rule-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.rule-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
 
 /* Email list card */
 .list-toolbar {
@@ -1385,6 +1427,13 @@ body {
             </label>
             <label class="setting-row">
               <span class="setting-text">
+                <span class="setting-title">Sort swipe deck by sender</span>
+                <span class="setting-desc">Pre-sorts the swipe screen by sender instead of by date, so all of one sender's mail comes up together. The Bulk list keeps its own sort.</span>
+              </span>
+              <input type="checkbox" id="swipe-sort-sender" onchange="setSwipeSortBySender(this.checked)">
+            </label>
+            <label class="setting-row">
+              <span class="setting-text">
                 <span class="setting-title">Auto-scroll while reading</span>
                 <span class="setting-desc">Slowly scrolls an open email at your reading pace. Adjust speed with the slider in the reader; tap the content (or the pause button) to stop.</span>
               </span>
@@ -1408,8 +1457,20 @@ body {
             <span class="chevron">▾</span>
           </div>
           <div class="section-card-body">
-            <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Senders you keep marking as read without ever opening. Tap <strong>Block</strong> to send their unread mail to spam.</p>
+            <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Senders you keep marking as read without ever opening. <strong>Block</strong> sends their mail to spam; <strong>Auto-read</strong> marks it read but leaves it in your inbox.</p>
             <div class="suggest-list" id="suggest-list-el"></div>
+          </div>
+        </div>
+
+        <!-- Standing sender rules, in two categories -->
+        <div class="section-card" id="rules-card">
+          <div class="section-card-header" onclick="toggleSection('rules-card')">
+            <h3>Auto rules <span class="pill" id="rules-count">0</span></h3>
+            <span class="chevron">▾</span>
+          </div>
+          <div class="section-card-body">
+            <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Applied to new mail every time you load. Remove a rule with × — mail already actioned stays where it is.</p>
+            <div class="rules-list" id="rules-list-el"></div>
           </div>
         </div>
 
@@ -1526,7 +1587,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v52'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v53'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1551,6 +1612,11 @@ let senderStats = {};
 // Sender addresses the user has explicitly dismissed from suggestions (or
 // already blocked) so we stop suggesting them.
 let blockIgnore = {};
+// Standing per-sender rules applied to every fetch, in two categories:
+//   'block' → new mail goes to spam (out of the inbox)
+//   'read'  → new mail is marked read but stays in the inbox
+// Shape: { [addr]: { action, name, since } }
+let senderRules = {};
 // How many no-open "mark read" actions before a never-engaged sender is
 // suggested.
 const BLOCK_SUGGEST_THRESHOLD = 3;
@@ -1562,6 +1628,10 @@ let activeTab = 'swipe';
 let swipeMode = 'triage';
 let currentEmail = null;
 let sortMode = 'priority';
+// When true the swipe deck is pre-sorted by sender (newest first within each
+// sender) so mail from one sender arrives as a block, instead of following the
+// bulk list's sort. Only affects the deck; the bulk list keeps `sortMode`.
+let swipeSortBySender = false;
 let keepSortMode = 'date-desc';
 let keepSearch = '';
 let keepOfflineOnly = false;
@@ -1633,6 +1703,20 @@ function saveBlockIgnore() {
   try { localStorage.setItem(nsKey('ic_block_ignore'), JSON.stringify(blockIgnore)); } catch(e) {}
 }
 
+function loadSenderRules() {
+  try { senderRules = JSON.parse(localStorage.getItem(nsKey('ic_sender_rules')) || '{}'); }
+  catch(e) { senderRules = {}; }
+}
+
+function saveSenderRules() {
+  try { localStorage.setItem(nsKey('ic_sender_rules'), JSON.stringify(senderRules)); } catch(e) {}
+}
+
+function senderRuleFor(email) {
+  const { addr } = parseSender((email && email.sender) || '');
+  return addr ? senderRules[addr.toLowerCase()] : null;
+}
+
 // Record an interaction with a sender. kind === 'dismiss' means the user marked
 // the mail read without opening it; 'engage' means they opened or kept it.
 function recordSenderEvent(email, kind) {
@@ -1676,36 +1760,104 @@ function renderBlockSuggestions() {
     const reason = (s.engage || 0) === 0
       ? `Marked read ${s.dismiss}× without opening`
       : `Marked read ${s.streak}× in a row`;
+    const addr = esc(s.addr);
     return `
     <div class="suggest-row">
       <div class="suggest-meta">
         <div class="suggest-name">${esc(s.name || s.addr)}</div>
-        <div class="suggest-addr">${esc(s.addr)}</div>
+        <div class="suggest-addr">${addr}</div>
         <div class="suggest-count">${reason}</div>
       </div>
       <div class="suggest-actions">
-        <button class="suggest-block-btn" onclick="blockSuggestion('${esc(s.addr)}')">Block</button>
-        <button class="suggest-dismiss-btn" title="Not spam — stop suggesting" onclick="dismissSuggestion('${esc(s.addr)}')">×</button>
+        <button class="suggest-block-btn" title="Send their mail to spam" onclick="blockSuggestion('${addr}')">Block</button>
+        <button class="suggest-read-btn" title="Mark their mail read but leave it in the inbox" onclick="autoReadSuggestion('${addr}')">Auto-read</button>
+        <button class="suggest-dismiss-btn" title="Not spam — stop suggesting" onclick="dismissSuggestion('${addr}')">×</button>
       </div>
     </div>
   `;
   }).join('');
 }
 
-async function blockSuggestion(addr) {
+// ── Standing sender rules (two categories) ─────────────────
+// Adds (or replaces) a rule for a sender and applies it to the mail that's
+// already loaded. `action` is 'block' (to spam) or 'read' (read, stays inbox).
+async function setSenderRule(addr, action) {
   if (!addr) return;
   const key = addr.toLowerCase();
-  // Stop suggesting and remove this sender's loaded mail locally right away.
+  const stat = senderStats[key];
+  senderRules[key] = { action, name: (stat && stat.name) || addr, since: Date.now() };
+  saveSenderRules();
+  // Stop suggesting a sender that now has a rule.
   blockIgnore[key] = true;
   saveBlockIgnore();
+
+  // Drop this sender's loaded mail from the deck and list right away; the
+  // remote half below moves the actual messages.
+  const ids = emails.filter(e => parseSender(e.sender).addr.toLowerCase() === key).map(e => e.id);
   emails = emails.filter(e => parseSender(e.sender).addr.toLowerCase() !== key);
   swipeQueue = swipeQueue.filter(e => parseSender(e.sender).addr.toLowerCase() !== key);
+  ids.forEach(id => selectedIds.delete(id));
   renderBlockSuggestions();
+  renderSenderRules();
   renderEmailList();
   renderSwipeStack();
-  const ok = await blockSenderRemote(addr);
-  if (ok) toast(`Blocked ${addr}`);
-  else { enqueueOp({ type: 'block', addr }); toast(`Blocked ${addr} — will sync`); }
+
+  const ok = action === 'block' ? await blockSenderRemote(addr) : await autoReadSenderRemote(addr);
+  const label = action === 'block' ? 'Blocking' : 'Auto-reading';
+  if (ok) toast(`${label} ${addr}`);
+  else { enqueueOp({ type: action === 'block' ? 'block' : 'autoread', addr }); toast(`${label} ${addr} — will sync`); }
+}
+
+function blockSuggestion(addr) { return setSenderRule(addr, 'block'); }
+function autoReadSuggestion(addr) { return setSenderRule(addr, 'read'); }
+
+// Drops a rule. Mail already spammed or marked read stays as it is; this only
+// stops the rule applying to future mail.
+function removeSenderRule(addr) {
+  if (!addr) return;
+  const key = addr.toLowerCase();
+  delete senderRules[key];
+  saveSenderRules();
+  renderSenderRules();
+  toast(`Rule removed for ${addr}`);
+}
+
+function ruleEntries(action) {
+  return Object.keys(senderRules)
+    .filter(a => senderRules[a] && senderRules[a].action === action)
+    .map(a => ({ addr: a, ...senderRules[a] }))
+    .sort((x, y) => (x.name || x.addr).localeCompare(y.name || y.addr));
+}
+
+function renderSenderRules() {
+  const el = document.getElementById('rules-list-el');
+  if (!el) return;
+  const groups = [
+    { action: 'block', title: 'Blocked — moved to spam', empty: 'No blocked senders yet.' },
+    { action: 'read', title: 'Auto marked read — stays in inbox', empty: 'No auto-read senders yet.' }
+  ];
+  const total = ruleEntries('block').length + ruleEntries('read').length;
+  const countEl = document.getElementById('rules-count');
+  if (countEl) countEl.textContent = total;
+
+  el.innerHTML = groups.map(g => {
+    const rows = ruleEntries(g.action);
+    const body = rows.length
+      ? rows.map(r => `
+        <div class="rule-row">
+          <div class="suggest-meta">
+            <div class="suggest-name">${esc(r.name || r.addr)}</div>
+            <div class="suggest-addr">${esc(r.addr)}</div>
+          </div>
+          <button class="suggest-dismiss-btn" title="Remove this rule" onclick="removeSenderRule('${esc(r.addr)}')">×</button>
+        </div>`).join('')
+      : `<div class="suggest-empty">${g.empty}</div>`;
+    return `
+      <div class="rule-group">
+        <div class="rule-group-title">${g.title} <span class="pill ${g.action === 'block' ? 'red' : ''}">${rows.length}</span></div>
+        ${body}
+      </div>`;
+  }).join('');
 }
 
 function dismissSuggestion(addr) {
@@ -2062,6 +2214,60 @@ async function blockSenderRemote(addr) {
   } catch(e) { return false; }
 }
 
+// Marks every unread message from a sender as read, leaving it in the inbox.
+// This is the softer half of the block list: nothing is deleted or spammed,
+// the mail just stops counting as unread.
+async function autoReadSenderRemote(addr) {
+  if (!onlineReady()) return false;
+  try {
+    const listRes = await gapi.client.gmail.users.messages.list({ userId: 'me', q: `from:${addr} is:unread`, maxResults: 100 });
+    const ids = (listRes.result.messages || []).map(m => m.id);
+    return await modifyIdsInChunks(ids, { removeLabelIds: ['UNREAD'] });
+  } catch(e) { return false; }
+}
+
+// Applies a label change to many messages, 10 requests at a time.
+async function modifyIdsInChunks(ids, resource) {
+  try {
+    for (let i = 0; i < ids.length; i += 10) {
+      const chunk = ids.slice(i, i + 10);
+      await Promise.all(chunk.map(id => gapi.client.gmail.users.messages.modify({ userId: 'me', id, resource })));
+    }
+    return true;
+  } catch(e) { return false; }
+}
+
+// Applies the standing sender rules to a freshly-fetched batch. Returns the
+// messages that survived (no rule matched); the rest are actioned on Gmail and
+// dropped from the caller's list.
+async function enforceSenderRules(list) {
+  if (!list.length || !Object.keys(senderRules).length) return list;
+  const toBlock = [], toRead = [], kept = [];
+  list.forEach(e => {
+    const rule = senderRuleFor(e);
+    if (rule && rule.action === 'block') toBlock.push(e);
+    else if (rule && rule.action === 'read') toRead.push(e);
+    else kept.push(e);
+  });
+  if (!toBlock.length && !toRead.length) return list;
+
+  if (onlineReady()) {
+    if (toBlock.length) await modifyIdsInChunks(toBlock.map(e => e.id), { addLabelIds: ['SPAM'], removeLabelIds: ['UNREAD', 'INBOX'] });
+    if (toRead.length) await modifyIdsInChunks(toRead.map(e => e.id), { removeLabelIds: ['UNREAD'] });
+  } else {
+    // Offline: queue one op per affected sender, deduped by the outbox below.
+    const seen = new Set();
+    [...toBlock, ...toRead].forEach(e => {
+      const { addr } = parseSender(e.sender || '');
+      const rule = senderRuleFor(e);
+      if (!addr || !rule || seen.has(addr)) return;
+      seen.add(addr);
+      enqueueOp({ type: rule.action === 'block' ? 'block' : 'autoread', addr });
+    });
+  }
+  return kept;
+}
+
 // Flushes any queued operations to Gmail, keeping ones that still fail.
 async function flushOutbox() {
   if (flushingOps || !pendingOps.length || !onlineReady()) return;
@@ -2073,6 +2279,7 @@ async function flushOutbox() {
       if (op.type === 'read') ok = await sendReadToGmail(op.id);
       else if (op.type === 'keep') ok = await sendKeepToGmail(op.id, !!op.read);
       else if (op.type === 'block') ok = await blockSenderRemote(op.addr);
+      else if (op.type === 'autoread') ok = await autoReadSenderRemote(op.addr);
       else ok = true; // unknown op — drop it
       if (!ok) remaining.push(op);
     }
@@ -2166,7 +2373,9 @@ function loadAccountData() {
   loadKept();
   loadPendingOps();
   loadSenderStats();
+  loadSenderRules();
   renderBlockSuggestions();
+  renderSenderRules();
 }
 
 function tokenExpiry() { const a = activeAccount(); return a ? a.expiry : 0; }
@@ -2632,6 +2841,9 @@ async function fetchEmails() {
     setStatus(true, `Loading ${messages.length} messages…`);
     emails = await fetchMessagesMetadata(messages, importantIds,
       n => setStatus(true, `Loading ${n} / ${messages.length}…`));
+    // Apply the standing block / auto-read rules before anything is shown, so
+    // mail from those senders never reaches the deck.
+    emails = await enforceSenderRules(emails);
 
     // Hide emails the user previously kept unread so they don't have to
     // re-triage them. They stay in `emails` (still visible in the bulk list
@@ -2703,7 +2915,8 @@ async function silentRefresh() {
     const known = new Set(emails.map(e => e.id));
     const newStubs = messages.filter(m => !known.has(m.id));
     if (!newStubs.length) return;
-    const fresh = await fetchMessagesMetadata(newStubs, importantIds);
+    let fresh = await fetchMessagesMetadata(newStubs, importantIds);
+    fresh = await enforceSenderRules(fresh);
     if (!fresh.length) return;
 
     const deckWasEmpty = swipeQueue.length === 0;
@@ -3076,6 +3289,16 @@ async function doBlock(email) {
   emails = emails.filter(e => parseSender(e.sender).addr !== addr);
   swipeQueue = swipeQueue.filter(e => parseSender(e.sender).addr !== addr);
   dropKeptLocally(email.id);
+  // Blocking from the deck also creates a standing rule, so the sender shows up
+  // under "Blocked" on the Bulk tab and their future mail is spammed on arrival.
+  const key = addr.toLowerCase();
+  const { name } = parseSender(email.sender);
+  senderRules[key] = { action: 'block', name: name || addr, since: Date.now() };
+  saveSenderRules();
+  blockIgnore[key] = true;
+  saveBlockIgnore();
+  renderSenderRules();
+  renderBlockSuggestions();
   const ok = await blockSenderRemote(addr);
   if (ok) toast(`Blocked ${addr}`);
   else { enqueueOp({ type: 'block', addr }); toast(`Blocked ${addr} — will sync`); }
@@ -3385,6 +3608,21 @@ function setKeepMarksRead(on) {
   keepMarksRead = !!on;
   try { localStorage.setItem('ic_keep_marks_read', on ? '1' : '0'); } catch(e) {}
   if (swipeMode === 'triage') setSwipeMode('triage'); // refresh the hint text
+}
+
+// Restores the "sort swipe deck by sender" setting and reflects it in the toggle.
+function loadSwipeSortBySender() {
+  try { swipeSortBySender = localStorage.getItem('ic_swipe_sort_sender') === '1'; }
+  catch(e) { swipeSortBySender = false; }
+  const cb = document.getElementById('swipe-sort-sender');
+  if (cb) cb.checked = swipeSortBySender;
+}
+
+function setSwipeSortBySender(on) {
+  swipeSortBySender = !!on;
+  try { localStorage.setItem('ic_swipe_sort_sender', on ? '1' : '0'); } catch(e) {}
+  sortQueue();
+  renderSwipeStack();
 }
 
 // ── Auto-scroll while reading ──────────────────────────────
@@ -4027,10 +4265,20 @@ function sortedEmails() {
   return [...emails].sort(emailComparator(sortMode));
 }
 
+// The deck's own comparator. With "sort swipe deck by sender" on it groups
+// mail by sender (A–Z) and orders each sender's mail newest first, so you
+// triage one sender at a time; otherwise it follows the bulk list's sort.
+function swipeComparator() {
+  if (!swipeSortBySender) return emailComparator(sortMode);
+  const bySender = emailComparator('sender-az');
+  const byDate = emailComparator('date-desc');
+  return (a, b) => bySender(a, b) || byDate(a, b);
+}
+
 // Reorders the remaining swipe cards in place (preserves current/undo behavior
 // between sort changes since it only runs when the sort mode changes or on load).
 function sortQueue() {
-  swipeQueue.sort(emailComparator(sortMode));
+  swipeQueue.sort(swipeComparator());
 }
 
 function renderEmailList() {
@@ -4184,6 +4432,7 @@ loadAccountData(); // keptIds + outbox for the active account
 loadKeepSort();
 loadKeepOfflineOnly();
 loadKeepMarksRead();
+loadSwipeSortBySender();
 loadAutoScroll();
 loadClientId();
 setSwipeMode('triage'); // reflect the keep setting in the action labels/hint
