@@ -14,9 +14,11 @@ Order of operations:
 3. Merge it (squash) as soon as checks pass.
 4. Report what was merged and what it does.
 
-Merging `main` auto-deploys to Cloudflare Pages, so a merge is a release. Bump
-`APP_VERSION` in `index.html` with every user-visible change — it's shown in
-Settings and is how a running build gets identified.
+A merge is a release: `main` deploys through Cloudflare's Git integration
+(`wrangler.toml` serves the repo as the Worker's static assets), not through
+GitHub Actions — there is no CI workflow to wait on. Bump `APP_VERSION` in
+`index.html` with every user-visible change; it's shown in Settings and is how
+a running build gets identified.
 
 Ask first (don't auto-merge) when a change would touch OAuth/auth flow, delete
 user data, or when the task itself was ambiguous enough that the wrong reading
