@@ -1391,6 +1391,7 @@ body {
             </div>
             <div class="toolbar-right">
               <select class="sort-select" id="keep-sort-select" onchange="setKeepSort(this.value)" aria-label="Sort kept emails">
+                <option value="top-reads">Top reads</option>
                 <option value="date-desc">Newest first</option>
                 <option value="date-asc">Oldest first</option>
                 <option value="sender-az">Sender A–Z</option>
@@ -1587,7 +1588,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v53'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v54'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1612,6 +1613,16 @@ let senderStats = {};
 // Sender addresses the user has explicitly dismissed from suggestions (or
 // already blocked) so we stop suggesting them.
 let blockIgnore = {};
+// Reading-priority history for the Keep tab's "Top reads" sort. For each
+// sender: `opens` counts the times you picked one of their kept emails to
+// read, `passes` counts the times their mail was sitting in the Keep list and
+// you read someone else's instead (or dismissed theirs unread). The ratio is
+// how often you choose that sender when given the chance.
+// Shape: { [addr]: { opens, passes, name, last } }
+let keepReadStats = {};
+// The kept emails as last rendered, in display order. Used to attribute a
+// pass to every other sender that was on screen when you opened one.
+let keepListItems = [];
 // Standing per-sender rules applied to every fetch, in two categories:
 //   'block' → new mail goes to spam (out of the inbox)
 //   'read'  → new mail is marked read but stays in the inbox
@@ -1710,6 +1721,78 @@ function loadSenderRules() {
 
 function saveSenderRules() {
   try { localStorage.setItem(nsKey('ic_sender_rules'), JSON.stringify(senderRules)); } catch(e) {}
+}
+
+// ── Keep reading-priority tracking ─────────────────────────
+function loadKeepReadStats() {
+  try { keepReadStats = JSON.parse(localStorage.getItem(nsKey('ic_keep_read_stats')) || '{}'); }
+  catch(e) { keepReadStats = {}; }
+}
+
+function saveKeepReadStats() {
+  try { localStorage.setItem(nsKey('ic_keep_read_stats'), JSON.stringify(keepReadStats)); } catch(e) {}
+}
+
+function senderKeyOf(sender) {
+  const { addr } = parseSender(sender || '');
+  return addr ? addr.toLowerCase() : '';
+}
+
+function keepStatFor(key, sender) {
+  const s = keepReadStats[key] || (keepReadStats[key] = { opens: 0, passes: 0, name: '' });
+  const { name } = parseSender(sender || '');
+  if (name && !s.name) s.name = name;
+  return s;
+}
+
+// Called when a kept email is opened to read. That's one "open" for its sender
+// and one "pass" for every other sender that was on screen and not chosen —
+// which is what makes this a pick order rather than a read count.
+function recordKeepOpen(id) {
+  const opened = keepListItems.find(i => i.id === id);
+  if (!opened) return;
+  const key = senderKeyOf(opened.sender);
+  if (!key) return;
+  const s = keepStatFor(key, opened.sender);
+  s.opens = (s.opens || 0) + 1;
+  s.last = Date.now();
+  const passed = new Set();
+  keepListItems.forEach(i => {
+    const k = senderKeyOf(i.sender);
+    if (!k || k === key || passed.has(k)) return;
+    passed.add(k);
+    const other = keepStatFor(k, i.sender);
+    other.passes = (other.passes || 0) + 1;
+  });
+  saveKeepReadStats();
+}
+
+// Dismissing a kept email without opening it is a direct "not worth reading"
+// signal, so it counts as a pass for that sender.
+function recordKeepDismiss(sender) {
+  const key = senderKeyOf(sender);
+  if (!key) return;
+  const s = keepStatFor(key, sender);
+  s.passes = (s.passes || 0) + 1;
+  saveKeepReadStats();
+}
+
+// How often you pick this sender when their mail is in front of you, 0–1.
+// Laplace-smoothed so a sender with no history sits at a neutral 0.5 and one
+// lucky open doesn't rocket to the top.
+function keepPickRate(key) {
+  const s = keepReadStats[key];
+  const opens = (s && s.opens) || 0;
+  const passes = (s && s.passes) || 0;
+  return (opens + 1) / (opens + passes + 2);
+}
+
+// Reading priority for a sender. Starts from the pick rate and subtracts a
+// backlog penalty: the more of a sender's kept mail is still sitting unread,
+// the further down they go. Log-scaled so one unread barely counts and a big
+// pile counts a lot without ever swamping a strong pick rate. Higher is better.
+function keepSenderScore(key, backlog) {
+  return keepPickRate(key) - Math.log2(1 + (backlog || 0)) / 10;
 }
 
 function senderRuleFor(email) {
@@ -2374,6 +2457,7 @@ function loadAccountData() {
   loadPendingOps();
   loadSenderStats();
   loadSenderRules();
+  loadKeepReadStats();
   renderBlockSuggestions();
   renderSenderRules();
 }
@@ -3385,6 +3469,30 @@ function clearKept() {
 // ── Keep tab ───────────────────────────────────────────────
 // Merges in-memory kept emails with the offline cache so the list works even
 // with no connection or before a load has run.
+// The Keep list's comparator. 'top-reads' groups by sender, ranked by how
+// readily you read that sender's kept mail (see keepSenderScore), newest first
+// within a sender; every other mode is the shared comparator.
+function keepComparator(mode, items) {
+  if (mode !== 'top-reads') return emailComparator(mode);
+  const backlog = new Map();
+  items.forEach(i => {
+    const k = senderKeyOf(i.sender);
+    backlog.set(k, (backlog.get(k) || 0) + 1);
+  });
+  const scores = new Map();
+  backlog.forEach((n, k) => scores.set(k, keepSenderScore(k, n)));
+  const byDate = emailComparator('date-desc');
+  return (a, b) => {
+    const ka = senderKeyOf(a.sender), kb = senderKeyOf(b.sender);
+    if (ka !== kb) {
+      const diff = (scores.get(kb) || 0) - (scores.get(ka) || 0); // higher score first
+      if (diff) return diff;
+      return ka.localeCompare(kb); // stable tie-break so groups stay contiguous
+    }
+    return byDate(a, b);
+  };
+}
+
 async function renderKeepList() {
   const el = document.getElementById('keep-list-el');
   if (!el) return;
@@ -3426,7 +3534,8 @@ async function renderKeepList() {
     items = items.filter(e =>
       e.sender.toLowerCase().includes(q) || e.subject.toLowerCase().includes(q));
   }
-  items.sort(emailComparator(keepSortMode));
+  items.sort(keepComparator(keepSortMode, items));
+  keepListItems = items;
 
   const filtering = q || keepOfflineOnly;
   const countLabel = document.getElementById('keep-count-label');
@@ -3462,6 +3571,8 @@ async function renderKeepList() {
 // Marks a kept email as read without opening it (used by the Keep-row swipe and
 // its revealed button). Removes it from the Keep list and syncs to Gmail.
 async function markKeptRead(id) {
+  const row = keepListItems.find(i => i.id === id);
+  if (row) recordKeepDismiss(row.sender); // cleared without reading
   dropKeptLocally(id);
   emails = emails.filter(e => e.id !== id);
   swipeQueue = swipeQueue.filter(e => e.id !== id);
@@ -4151,7 +4262,11 @@ async function openKept(id) {
       };
     } catch(_) {}
   }
-  if (email) openReader(email, { markRead: true });
+  if (email) {
+    // Picking this email out of the list is the reading-priority signal.
+    recordKeepOpen(id);
+    openReader(email, { markRead: true });
+  }
   else toast('Email not available offline');
 }
 
