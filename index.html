@@ -1074,6 +1074,14 @@ body {
 }
 .suggest-count { font-size: 11px; color: var(--orange); font-weight: 500; margin-top: 2px; }
 .suggest-pattern { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.suggest-variants {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .suggest-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .suggest-block-btn {
@@ -1471,7 +1479,7 @@ body {
             <span class="chevron">▾</span>
           </div>
           <div class="section-card-body">
-            <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Recurring subjects you never open, from senders whose other mail you do read. <strong>Auto-read</strong> marks future matching mail read and leaves it in your inbox — there's no block option here, since only this one subject is the problem.</p>
+            <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Recurring subjects you never open, from senders whose other mail you do read. Subjects that vary a little each time are grouped, and the rule matches on the words they share. <strong>Auto-read</strong> marks future matching mail read and leaves it in your inbox — there's no block option here, because the sender isn't the problem.</p>
             <div class="suggest-list" id="subject-list-el"></div>
           </div>
         </div>
@@ -1601,7 +1609,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v55'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v56'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1661,6 +1669,12 @@ const BLOCK_SUGGEST_THRESHOLD = 3;
 const SUBJECT_SUGGEST_THRESHOLD = 3;
 // A normalised pattern shorter than this is too generic to match on safely.
 const SUBJECT_PATTERN_MIN_CHARS = 5;
+// How alike two subject patterns must be (shared tokens over the smaller token
+// set) to join the same fuzzy cluster.
+const FUZZY_SUBJECT_SIMILARITY = 0.5;
+// Combined no-open dismissals across a cluster before it's worth suggesting.
+// Higher than the exact-match bar because a fuzzy rule matches more broadly.
+const FUZZY_SUBJECT_THRESHOLD = 4;
 // Consecutive no-open "mark read" actions that trigger a suggestion even for a
 // sender you've previously opened or kept (the streak resets on any engagement).
 const BLOCK_SUGGEST_STREAK = 10;
@@ -1865,9 +1879,138 @@ function subjectKeyFor(email) {
   return pattern ? subjectKey(addr.toLowerCase(), pattern) : '';
 }
 
+// ── Fuzzy subject clustering ───────────────────────────────
+// Some senders vary the wording rather than repeating one template — "5 new
+// jobs for you" then "12 new jobs matching your search". Those never collapse
+// to one exact pattern, so near-identical patterns from a sender are clustered
+// and the tokens common to every member become the rule's matcher.
+//
+// Words too common to carry meaning on their own. A cluster whose shared
+// tokens are all stopwords would match nearly anything, so it's rejected.
+const SUBJECT_STOPWORDS = new Set(('a about above after again all also am an and any are as at be been before being ' +
+  'below between both but by can could did do does doing down during each few for from further had has have having ' +
+  'he her here hers him his how i if in into is it its itself just me more most my no nor not now of off on once ' +
+  'only or other otherwise our ours out over own re same she should so some such than that the their theirs them ' +
+  'then there these they this those through to too under until up us very was we were what when where which while ' +
+  'who whom why will with would you your yours').split(' '));
+
+function subjectTokens(pattern) {
+  return (pattern || '').split(' ').filter(t => t.length > 1);
+}
+
+// Overlap coefficient: shared tokens over the smaller set. Preferred over
+// Jaccard here because templated mail varies mostly in the tail, which Jaccard
+// punishes far too hard — "new jobs for you" vs "new jobs matching your
+// search" scores 0.29 by Jaccard but 0.5 by overlap.
+function tokenOverlap(a, b) {
+  if (!a.size || !b.size) return 0;
+  let shared = 0;
+  a.forEach(t => { if (b.has(t)) shared++; });
+  return shared / Math.min(a.size, b.size);
+}
+
+function intersectTokens(sets) {
+  if (!sets.length) return [];
+  return [...sets[0]].filter(t => sets.every(s => s.has(t)));
+}
+
+// A core is only safe to auto-read on if it's specific enough: at least two
+// shared tokens, and enough real (non-stopword) text among them that it can't
+// match half the sender's mail. A core of "about" + "the" passes the token
+// count but carries no meaning, so the weight is measured on content words.
+function coreIsUsable(core) {
+  if (core.length < 2) return false;
+  const content = core.filter(t => !SUBJECT_STOPWORDS.has(t));
+  return content.length >= 1 && content.join('').length >= 6;
+}
+
+function subjectMatchesCore(subject, core) {
+  const pattern = subjectPattern(subject);
+  if (!pattern) return false;
+  const toks = new Set(subjectTokens(pattern));
+  return core.every(t => toks.has(t));
+}
+
+// True when the rule covers this subject. Exact rules (and any rule saved
+// before fuzzy matching existed) compare normalised patterns; fuzzy rules ask
+// whether every core token is present.
+function matchesSubjectRule(rule, subject) {
+  if (!rule) return false;
+  if (rule.kind === 'fuzzy') return subjectMatchesCore(subject, rule.core || []);
+  return subjectPattern(subject) === rule.pattern;
+}
+
 function subjectRuleFor(email) {
+  const { addr } = parseSender((email && email.sender) || '');
+  if (!addr) return null;
   const key = subjectKeyFor(email);
-  return key ? subjectRules[key] : null;
+  if (key && subjectRules[key]) return subjectRules[key];
+  const low = addr.toLowerCase();
+  const subject = email && email.subject;
+  for (const k of Object.keys(subjectRules)) {
+    const r = subjectRules[k];
+    if (r.kind === 'fuzzy' && r.addr === low && matchesSubjectRule(r, subject)) return r;
+  }
+  return null;
+}
+
+function fuzzyRuleKey(addr, core) { return addr + '|~|' + [...core].sort().join(' '); }
+
+// Clusters a sender's never-engaged subject patterns by similarity, greedily
+// and with complete linkage — a pattern joins a cluster only if it's similar
+// enough to every member already in it, which keeps clusters tight.
+function clusterSubjectPatterns(entries) {
+  const clusters = [];
+  entries.forEach(e => {
+    const toks = new Set(subjectTokens(e.pattern));
+    if (!toks.size) return;
+    const fit = clusters.find(c => c.sets.every(s => tokenOverlap(toks, s) >= FUZZY_SUBJECT_SIMILARITY));
+    if (fit) { fit.members.push(e); fit.sets.push(toks); }
+    else clusters.push({ members: [e], sets: [toks] });
+  });
+  return clusters;
+}
+
+// Fuzzy rule candidates: a sender's varied-but-similar subjects, dismissed
+// enough times between them and never once opened. Skipped when the sender
+// already has a whole-sender rule, when the cluster is a single pattern (the
+// exact-match suggestion already covers that), and — importantly — when any
+// subject the user HAS engaged with from that sender would also match the
+// core, which would make the rule swallow mail they read.
+function fuzzySubjectSuggestions() {
+  const bySender = {};
+  Object.keys(subjectStats).forEach(k => {
+    const s = subjectStats[k];
+    if (!s || !s.addr) return;
+    (bySender[s.addr] || (bySender[s.addr] = [])).push({ key: k, ...s });
+  });
+
+  const out = [];
+  Object.keys(bySender).forEach(addr => {
+    if (senderRules[addr]) return;
+    const all = bySender[addr];
+    const cold = all.filter(s => (s.engage || 0) === 0 && (s.dismiss || 0) > 0 && !subjectRules[s.key]);
+    const engaged = all.filter(s => (s.engage || 0) > 0);
+    clusterSubjectPatterns(cold).forEach(c => {
+      if (c.members.length < 2) return;
+      const core = intersectTokens(c.sets);
+      if (!coreIsUsable(core)) return;
+      const key = fuzzyRuleKey(addr, core);
+      if (subjectIgnore[key] || subjectRules[key]) return;
+      const dismiss = c.members.reduce((n, m) => n + (m.dismiss || 0), 0);
+      if (dismiss < FUZZY_SUBJECT_THRESHOLD) return;
+      // Would this core also catch something they read? Then it's too broad.
+      if (engaged.some(s => core.every(t => new Set(subjectTokens(s.pattern)).has(t)))) return;
+      out.push({
+        key, addr, core, dismiss,
+        name: c.members[0].name || addr,
+        variants: c.members.length,
+        samples: c.members.map(m => m.sample || m.pattern).filter(Boolean),
+        patterns: c.members.map(m => m.key)
+      });
+    });
+  });
+  return out.sort((a, b) => b.dismiss - a.dismiss);
 }
 
 function loadSubjectData() {
@@ -1953,28 +2096,42 @@ let subjectSuggestionView = [];
 function renderSubjectSuggestions() {
   const el = document.getElementById('subject-list-el');
   if (!el) return;
-  const sugg = subjectSuggestions();
+  const fuzzy = fuzzySubjectSuggestions();
+  // A cluster already covers its members, so drop the exact suggestions it
+  // subsumes rather than offering two rules for the same mail.
+  const covered = new Set(fuzzy.flatMap(f => f.patterns));
+  const exact = subjectSuggestions().filter(s => !covered.has(s.key));
+  const sugg = [...fuzzy.map(f => ({ ...f, fuzzy: true })), ...exact];
   subjectSuggestionView = sugg;
   const countEl = document.getElementById('subject-count');
   if (countEl) countEl.textContent = sugg.length;
   if (!sugg.length) {
-    el.innerHTML = '<div class="suggest-empty">No subject patterns yet. When you repeatedly mark the same recurring subject read without opening it — a digest, a receipt, an automated report — it\'ll show up here.</div>';
+    el.innerHTML = '<div class="suggest-empty">No subject patterns yet. When you repeatedly mark the same recurring subject read without opening it — a digest, a receipt, an automated report — it\'ll show up here. Subjects that vary a little each time get grouped together.</div>';
     return;
   }
-  el.innerHTML = sugg.map((s, i) => `
+  el.innerHTML = sugg.map((s, i) => {
+    const title = s.fuzzy ? (s.samples[0] || '') : (s.sample || s.pattern);
+    const extra = s.fuzzy && s.samples.length > 1
+      ? `<div class="suggest-variants">+ ${s.variants - 1} more like “${esc(s.samples[1])}”</div>` : '';
+    const matcher = s.fuzzy
+      ? `matches their subjects containing ${s.core.map(t => `“${esc(t)}”`).join(' + ')}`
+      : `matches “${esc(s.pattern)}”`;
+    return `
     <div class="suggest-row">
       <div class="suggest-meta">
-        <div class="suggest-name">${esc(s.sample || s.pattern)}</div>
+        <div class="suggest-name">${esc(title)}</div>
         <div class="suggest-addr">from ${esc(s.name || s.addr)}</div>
-        <div class="suggest-count">Marked read ${s.dismiss}× without opening</div>
-        <div class="suggest-pattern">matches “${esc(s.pattern)}”</div>
+        ${extra}
+        <div class="suggest-count">Marked read ${s.dismiss}× without opening${s.fuzzy ? ` across ${s.variants} variants` : ''}</div>
+        <div class="suggest-pattern">${matcher}</div>
       </div>
       <div class="suggest-actions">
         <button class="suggest-read-btn" title="Mark future matching mail read, leaving it in the inbox" onclick="addSubjectRule(${i})">Auto-read</button>
         <button class="suggest-dismiss-btn" title="Stop suggesting this subject" onclick="dismissSubjectSuggestion(${i})">×</button>
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 // Creates the rule and clears the matching mail that's already loaded. There is
@@ -1982,10 +2139,16 @@ function renderSubjectSuggestions() {
 async function addSubjectRule(i) {
   const s = subjectSuggestionView[i];
   if (!s) return;
-  subjectRules[s.key] = { addr: s.addr, name: s.name, pattern: s.pattern, sample: s.sample, since: Date.now() };
+  const rule = s.fuzzy
+    ? { addr: s.addr, name: s.name, kind: 'fuzzy', core: s.core, sample: s.samples[0] || '', since: Date.now() }
+    : { addr: s.addr, name: s.name, pattern: s.pattern, sample: s.sample, since: Date.now() };
+  subjectRules[s.key] = rule;
   saveSubjectRules();
 
-  const matches = e => subjectKeyFor(e) === s.key;
+  const matches = e => {
+    const { addr } = parseSender(e.sender || '');
+    return !!addr && addr.toLowerCase() === s.addr && matchesSubjectRule(rule, e.subject);
+  };
   const loaded = emails.filter(matches).map(e => e.id);
   emails = emails.filter(e => !matches(e));
   swipeQueue = swipeQueue.filter(e => !matches(e));
@@ -1995,11 +2158,11 @@ async function addSubjectRule(i) {
   renderEmailList();
   renderSwipeStack();
 
-  const ok = await autoReadSubjectRemote(s.addr, s.pattern);
-  if (ok) toast(`Auto-reading “${s.pattern}”`);
+  const ok = await autoReadSubjectRemote(rule);
+  if (ok) toast(s.fuzzy ? `Auto-reading ${s.core.join(' + ')}` : `Auto-reading “${s.pattern}”`);
   else {
     loaded.forEach(id => enqueueOp({ type: 'read', id }));
-    enqueueOp({ type: 'autoread-subject', addr: s.addr, pattern: s.pattern });
+    enqueueOp({ type: 'autoread-subject', key: s.key, rule });
     toast('Rule saved — will sync');
   }
 }
@@ -2153,8 +2316,10 @@ function renderSenderRules() {
     ? subjRows.map((r, i) => `
       <div class="rule-row">
         <div class="suggest-meta">
-          <div class="suggest-name">${esc(r.sample || r.pattern)}</div>
-          <div class="suggest-addr">from ${esc(r.name || r.addr)} · matches “${esc(r.pattern)}”</div>
+          <div class="suggest-name">${esc(r.sample || r.pattern || (r.core || []).join(' '))}</div>
+          <div class="suggest-addr">from ${esc(r.name || r.addr)} · ${r.kind === 'fuzzy'
+            ? `subjects containing ${(r.core || []).map(t => `“${esc(t)}”`).join(' + ')}`
+            : `matches “${esc(r.pattern)}”`}</div>
         </div>
         <button class="suggest-dismiss-btn" title="Remove this rule" onclick="removeSubjectRuleAt(${i})">×</button>
       </div>`).join('')
@@ -2467,7 +2632,7 @@ function savePendingOps() {
 }
 
 function enqueueOp(op) {
-  const dup = pendingOps.some(o => o.type === op.type && o.id === op.id && o.addr === op.addr && o.pattern === op.pattern);
+  const dup = pendingOps.some(o => o.type === op.type && o.id === op.id && o.addr === op.addr && o.pattern === op.pattern && o.key === op.key);
   if (!dup) { pendingOps.push(op); savePendingOps(); }
 }
 
@@ -2542,14 +2707,14 @@ async function autoReadSenderRemote(addr) {
 // leaving everything else from them — and the matched mail itself — in the
 // inbox. Gmail can't search on a normalised pattern, so this pulls the
 // sender's unread headers and filters them locally.
-async function autoReadSubjectRemote(addr, pattern) {
+async function autoReadSubjectRemote(rule) {
   if (!onlineReady()) return false;
   try {
-    const listRes = await gapi.client.gmail.users.messages.list({ userId: 'me', q: `from:${addr} is:unread`, maxResults: 100 });
+    const listRes = await gapi.client.gmail.users.messages.list({ userId: 'me', q: `from:${rule.addr} is:unread`, maxResults: 100 });
     const stubs = listRes.result.messages || [];
     if (!stubs.length) return true;
     const metas = await fetchMessagesMetadata(stubs, new Set());
-    const ids = metas.filter(m => subjectPattern(m.subject) === pattern).map(m => m.id);
+    const ids = metas.filter(m => matchesSubjectRule(rule, m.subject)).map(m => m.id);
     if (!ids.length) return true;
     return await modifyIdsInChunks(ids, { removeLabelIds: ['UNREAD'] });
   } catch(e) { return false; }
@@ -2616,7 +2781,7 @@ async function flushOutbox() {
       else if (op.type === 'keep') ok = await sendKeepToGmail(op.id, !!op.read);
       else if (op.type === 'block') ok = await blockSenderRemote(op.addr);
       else if (op.type === 'autoread') ok = await autoReadSenderRemote(op.addr);
-      else if (op.type === 'autoread-subject') ok = await autoReadSubjectRemote(op.addr, op.pattern);
+      else if (op.type === 'autoread-subject') ok = await autoReadSubjectRemote(op.rule || { addr: op.addr, pattern: op.pattern });
       else ok = true; // unknown op — drop it
       if (!ok) remaining.push(op);
     }
