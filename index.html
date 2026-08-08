@@ -1073,6 +1073,7 @@ body {
   white-space: nowrap;
 }
 .suggest-count { font-size: 11px; color: var(--orange); font-weight: 500; margin-top: 2px; }
+.suggest-pattern { font-size: 11px; color: var(--text-3); margin-top: 2px; }
 
 .suggest-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .suggest-block-btn {
@@ -1463,6 +1464,18 @@ body {
           </div>
         </div>
 
+        <!-- Suggested subject rules -->
+        <div class="section-card" id="subject-card">
+          <div class="section-card-header" onclick="toggleSection('subject-card')">
+            <h3>Suggested subject rules <span class="pill" id="subject-count">0</span></h3>
+            <span class="chevron">▾</span>
+          </div>
+          <div class="section-card-body">
+            <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Recurring subjects you never open, from senders whose other mail you do read. <strong>Auto-read</strong> marks future matching mail read and leaves it in your inbox — there's no block option here, since only this one subject is the problem.</p>
+            <div class="suggest-list" id="subject-list-el"></div>
+          </div>
+        </div>
+
         <!-- Standing sender rules, in two categories -->
         <div class="section-card" id="rules-card">
           <div class="section-card-header" onclick="toggleSection('rules-card')">
@@ -1588,7 +1601,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v54'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v55'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1628,9 +1641,26 @@ let keepListItems = [];
 //   'read'  → new mail is marked read but stays in the inbox
 // Shape: { [addr]: { action, name, since } }
 let senderRules = {};
+// Per sender+subject-pattern history. Some senders you read selectively: one
+// recurring template you never open, everything else you do. Those can't be
+// caught at the sender level, so the same dismiss/engage counts are also kept
+// against a normalised subject pattern (see subjectPattern).
+// Shape: { [addr|pattern]: { addr, name, pattern, sample, dismiss, engage } }
+let subjectStats = {};
+// Subject patterns dismissed from suggestions, keyed the same way.
+let subjectIgnore = {};
+// Standing sender+subject rules. These only ever mark mail read and leave it
+// in the inbox — there is deliberately no spam action here, because a sender
+// with a subject rule is by definition one whose other mail you do read.
+// Shape: { [addr|pattern]: { addr, name, pattern, sample, since } }
+let subjectRules = {};
 // How many no-open "mark read" actions before a never-engaged sender is
 // suggested.
 const BLOCK_SUGGEST_THRESHOLD = 3;
+// Same, for a recurring subject pattern from a sender you otherwise read.
+const SUBJECT_SUGGEST_THRESHOLD = 3;
+// A normalised pattern shorter than this is too generic to match on safely.
+const SUBJECT_PATTERN_MIN_CHARS = 5;
 // Consecutive no-open "mark read" actions that trigger a suggestion even for a
 // sender you've previously opened or kept (the streak resets on any engagement).
 const BLOCK_SUGGEST_STREAK = 10;
@@ -1800,6 +1830,65 @@ function senderRuleFor(email) {
   return addr ? senderRules[addr.toLowerCase()] : null;
 }
 
+// ── Subject-pattern matching ───────────────────────────────
+// Reduces a subject to a recurring-template key by dropping the parts that
+// change from send to send — reply prefixes, dates, times, numbers and
+// punctuation — so "Issue #212 — five things" and "Issue #213 — five things"
+// land on the same pattern. Returns '' for subjects too short or too generic
+// to match on.
+const _MONTH = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*';
+function subjectPattern(subject) {
+  let s = String(subject || '').toLowerCase();
+  // Repeated reply/forward prefixes.
+  let prev;
+  do { prev = s; s = s.replace(/^\s*(re|fwd|fw|aw)\s*:\s*/i, ''); } while (s !== prev);
+  s = s
+    // Date-like runs first, so month names only vanish when they're a date —
+    // a bare "May" in an ordinary subject is a word, not a month.
+    .replace(new RegExp(`\\b${_MONTH}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s*\\d{4})?\\b`, 'g'), ' ')
+    .replace(new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)?\\s+${_MONTH}\\b`, 'g'), ' ')
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?\b/g, ' ')   // times
+    .replace(/\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/g, ' ')
+    .replace(/[^\p{L}\s]+/gu, ' ')   // numbers, punctuation, emoji, symbols
+    .replace(/\s+/g, ' ')
+    .trim();
+  return s.length >= SUBJECT_PATTERN_MIN_CHARS ? s : '';
+}
+
+function subjectKey(addr, pattern) { return addr + '|' + pattern; }
+
+// The key for an email, or '' if it isn't patternable.
+function subjectKeyFor(email) {
+  const { addr } = parseSender((email && email.sender) || '');
+  if (!addr) return '';
+  const pattern = subjectPattern(email && email.subject);
+  return pattern ? subjectKey(addr.toLowerCase(), pattern) : '';
+}
+
+function subjectRuleFor(email) {
+  const key = subjectKeyFor(email);
+  return key ? subjectRules[key] : null;
+}
+
+function loadSubjectData() {
+  try { subjectStats = JSON.parse(localStorage.getItem(nsKey('ic_subject_stats')) || '{}'); }
+  catch(e) { subjectStats = {}; }
+  try { subjectIgnore = JSON.parse(localStorage.getItem(nsKey('ic_subject_ignore')) || '{}'); }
+  catch(e) { subjectIgnore = {}; }
+  try { subjectRules = JSON.parse(localStorage.getItem(nsKey('ic_subject_rules')) || '{}'); }
+  catch(e) { subjectRules = {}; }
+}
+
+function saveSubjectStats() {
+  try { localStorage.setItem(nsKey('ic_subject_stats'), JSON.stringify(subjectStats)); } catch(e) {}
+}
+function saveSubjectIgnore() {
+  try { localStorage.setItem(nsKey('ic_subject_ignore'), JSON.stringify(subjectIgnore)); } catch(e) {}
+}
+function saveSubjectRules() {
+  try { localStorage.setItem(nsKey('ic_subject_rules'), JSON.stringify(subjectRules)); } catch(e) {}
+}
+
 // Record an interaction with a sender. kind === 'dismiss' means the user marked
 // the mail read without opening it; 'engage' means they opened or kept it.
 function recordSenderEvent(email, kind) {
@@ -1813,6 +1902,22 @@ function recordSenderEvent(email, kind) {
   else { s.dismiss = (s.dismiss || 0) + 1; s.streak = (s.streak || 0) + 1; }
   if (email.subject) s.last = email.subject;
   saveSenderStats();
+  recordSubjectEvent(email, kind, key, name || addr);
+}
+
+// The same tally against this email's subject pattern, so a recurring template
+// you never open can be spotted even when you read the sender's other mail.
+function recordSubjectEvent(email, kind, addrKey, displayName) {
+  const pattern = subjectPattern(email.subject);
+  if (!pattern) return;
+  const key = subjectKey(addrKey, pattern);
+  const s = subjectStats[key] ||
+    (subjectStats[key] = { addr: addrKey, name: displayName, pattern, sample: '', dismiss: 0, engage: 0 });
+  if (displayName && !s.name) s.name = displayName;
+  if (email.subject) s.sample = email.subject;
+  if (kind === 'engage') s.engage = (s.engage || 0) + 1;
+  else s.dismiss = (s.dismiss || 0) + 1;
+  saveSubjectStats();
 }
 
 // Senders worth suggesting to block: either never opened/kept and dismissed a
@@ -1827,6 +1932,94 @@ function blockSuggestions() {
       return neverEngaged || longStreak;
     })
     .sort((a, b) => (b.streak || 0) - (a.streak || 0) || (b.dismiss || 0) - (a.dismiss || 0));
+}
+
+// Recurring subject templates worth auto-reading: dismissed a few times and
+// never once opened or kept. Senders already covered by a whole-sender rule
+// are skipped — a subject rule under a sender rule would be redundant.
+function subjectSuggestions() {
+  return Object.keys(subjectStats)
+    .filter(k => !subjectIgnore[k] && !subjectRules[k])
+    .map(k => ({ key: k, ...subjectStats[k] }))
+    .filter(s => !senderRules[s.addr])
+    .filter(s => (s.engage || 0) === 0 && (s.dismiss || 0) >= SUBJECT_SUGGEST_THRESHOLD)
+    .sort((a, b) => (b.dismiss || 0) - (a.dismiss || 0));
+}
+
+// What's currently on screen, so the row buttons can address a suggestion by
+// index instead of round-tripping the pattern text through an HTML attribute.
+let subjectSuggestionView = [];
+
+function renderSubjectSuggestions() {
+  const el = document.getElementById('subject-list-el');
+  if (!el) return;
+  const sugg = subjectSuggestions();
+  subjectSuggestionView = sugg;
+  const countEl = document.getElementById('subject-count');
+  if (countEl) countEl.textContent = sugg.length;
+  if (!sugg.length) {
+    el.innerHTML = '<div class="suggest-empty">No subject patterns yet. When you repeatedly mark the same recurring subject read without opening it — a digest, a receipt, an automated report — it\'ll show up here.</div>';
+    return;
+  }
+  el.innerHTML = sugg.map((s, i) => `
+    <div class="suggest-row">
+      <div class="suggest-meta">
+        <div class="suggest-name">${esc(s.sample || s.pattern)}</div>
+        <div class="suggest-addr">from ${esc(s.name || s.addr)}</div>
+        <div class="suggest-count">Marked read ${s.dismiss}× without opening</div>
+        <div class="suggest-pattern">matches “${esc(s.pattern)}”</div>
+      </div>
+      <div class="suggest-actions">
+        <button class="suggest-read-btn" title="Mark future matching mail read, leaving it in the inbox" onclick="addSubjectRule(${i})">Auto-read</button>
+        <button class="suggest-dismiss-btn" title="Stop suggesting this subject" onclick="dismissSubjectSuggestion(${i})">×</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// Creates the rule and clears the matching mail that's already loaded. There is
+// no block counterpart on purpose: these senders are ones you do read.
+async function addSubjectRule(i) {
+  const s = subjectSuggestionView[i];
+  if (!s) return;
+  subjectRules[s.key] = { addr: s.addr, name: s.name, pattern: s.pattern, sample: s.sample, since: Date.now() };
+  saveSubjectRules();
+
+  const matches = e => subjectKeyFor(e) === s.key;
+  const loaded = emails.filter(matches).map(e => e.id);
+  emails = emails.filter(e => !matches(e));
+  swipeQueue = swipeQueue.filter(e => !matches(e));
+  loaded.forEach(id => selectedIds.delete(id));
+  renderSubjectSuggestions();
+  renderSenderRules();
+  renderEmailList();
+  renderSwipeStack();
+
+  const ok = await autoReadSubjectRemote(s.addr, s.pattern);
+  if (ok) toast(`Auto-reading “${s.pattern}”`);
+  else {
+    loaded.forEach(id => enqueueOp({ type: 'read', id }));
+    enqueueOp({ type: 'autoread-subject', addr: s.addr, pattern: s.pattern });
+    toast('Rule saved — will sync');
+  }
+}
+
+function dismissSubjectSuggestion(i) {
+  const s = subjectSuggestionView[i];
+  if (!s) return;
+  subjectIgnore[s.key] = true;
+  saveSubjectIgnore();
+  renderSubjectSuggestions();
+  toast('Won\'t suggest that subject again');
+}
+
+function removeSubjectRule(key) {
+  if (!key || !subjectRules[key]) return;
+  delete subjectRules[key];
+  saveSubjectRules();
+  renderSubjectSuggestions();
+  renderSenderRules();
+  toast('Rule removed');
 }
 
 function renderBlockSuggestions() {
@@ -1881,6 +2074,7 @@ async function setSenderRule(addr, action) {
   swipeQueue = swipeQueue.filter(e => parseSender(e.sender).addr.toLowerCase() !== key);
   ids.forEach(id => selectedIds.delete(id));
   renderBlockSuggestions();
+  renderSubjectSuggestions();
   renderSenderRules();
   renderEmailList();
   renderSwipeStack();
@@ -1912,6 +2106,16 @@ function ruleEntries(action) {
     .sort((x, y) => (x.name || x.addr).localeCompare(y.name || y.addr));
 }
 
+function subjectRuleEntries() {
+  return Object.keys(subjectRules)
+    .map(k => ({ key: k, ...subjectRules[k] }))
+    .sort((x, y) => (x.name || x.addr).localeCompare(y.name || y.addr));
+}
+
+// Mirrors subjectSuggestionView: lets the remove buttons address a rule by
+// index rather than embedding the pattern text in an attribute.
+let subjectRuleView = [];
+
 function renderSenderRules() {
   const el = document.getElementById('rules-list-el');
   if (!el) return;
@@ -1919,11 +2123,13 @@ function renderSenderRules() {
     { action: 'block', title: 'Blocked — moved to spam', empty: 'No blocked senders yet.' },
     { action: 'read', title: 'Auto marked read — stays in inbox', empty: 'No auto-read senders yet.' }
   ];
-  const total = ruleEntries('block').length + ruleEntries('read').length;
+  const subjRows = subjectRuleEntries();
+  subjectRuleView = subjRows;
+  const total = ruleEntries('block').length + ruleEntries('read').length + subjRows.length;
   const countEl = document.getElementById('rules-count');
   if (countEl) countEl.textContent = total;
 
-  el.innerHTML = groups.map(g => {
+  const senderGroups = groups.map(g => {
     const rows = ruleEntries(g.action);
     const body = rows.length
       ? rows.map(r => `
@@ -1941,6 +2147,29 @@ function renderSenderRules() {
         ${body}
       </div>`;
   }).join('');
+
+  // Subject rules are read-only by design — never a spam action.
+  const subjBody = subjRows.length
+    ? subjRows.map((r, i) => `
+      <div class="rule-row">
+        <div class="suggest-meta">
+          <div class="suggest-name">${esc(r.sample || r.pattern)}</div>
+          <div class="suggest-addr">from ${esc(r.name || r.addr)} · matches “${esc(r.pattern)}”</div>
+        </div>
+        <button class="suggest-dismiss-btn" title="Remove this rule" onclick="removeSubjectRuleAt(${i})">×</button>
+      </div>`).join('')
+    : '<div class="suggest-empty">No subject rules yet.</div>';
+
+  el.innerHTML = senderGroups + `
+    <div class="rule-group">
+      <div class="rule-group-title">Auto marked read by subject — stays in inbox <span class="pill">${subjRows.length}</span></div>
+      ${subjBody}
+    </div>`;
+}
+
+function removeSubjectRuleAt(i) {
+  const r = subjectRuleView[i];
+  if (r) removeSubjectRule(r.key);
 }
 
 function dismissSuggestion(addr) {
@@ -2238,7 +2467,7 @@ function savePendingOps() {
 }
 
 function enqueueOp(op) {
-  const dup = pendingOps.some(o => o.type === op.type && o.id === op.id && o.addr === op.addr);
+  const dup = pendingOps.some(o => o.type === op.type && o.id === op.id && o.addr === op.addr && o.pattern === op.pattern);
   if (!dup) { pendingOps.push(op); savePendingOps(); }
 }
 
@@ -2309,6 +2538,23 @@ async function autoReadSenderRemote(addr) {
   } catch(e) { return false; }
 }
 
+// Marks the sender's unread mail whose subject matches `pattern` as read,
+// leaving everything else from them — and the matched mail itself — in the
+// inbox. Gmail can't search on a normalised pattern, so this pulls the
+// sender's unread headers and filters them locally.
+async function autoReadSubjectRemote(addr, pattern) {
+  if (!onlineReady()) return false;
+  try {
+    const listRes = await gapi.client.gmail.users.messages.list({ userId: 'me', q: `from:${addr} is:unread`, maxResults: 100 });
+    const stubs = listRes.result.messages || [];
+    if (!stubs.length) return true;
+    const metas = await fetchMessagesMetadata(stubs, new Set());
+    const ids = metas.filter(m => subjectPattern(m.subject) === pattern).map(m => m.id);
+    if (!ids.length) return true;
+    return await modifyIdsInChunks(ids, { removeLabelIds: ['UNREAD'] });
+  } catch(e) { return false; }
+}
+
 // Applies a label change to many messages, 10 requests at a time.
 async function modifyIdsInChunks(ids, resource) {
   try {
@@ -2324,21 +2570,27 @@ async function modifyIdsInChunks(ids, resource) {
 // messages that survived (no rule matched); the rest are actioned on Gmail and
 // dropped from the caller's list.
 async function enforceSenderRules(list) {
-  if (!list.length || !Object.keys(senderRules).length) return list;
-  const toBlock = [], toRead = [], kept = [];
+  if (!list.length) return list;
+  if (!Object.keys(senderRules).length && !Object.keys(subjectRules).length) return list;
+  const toBlock = [], toRead = [], toReadBySubject = [], kept = [];
   list.forEach(e => {
     const rule = senderRuleFor(e);
     if (rule && rule.action === 'block') toBlock.push(e);
     else if (rule && rule.action === 'read') toRead.push(e);
+    // A whole-sender rule wins; otherwise the subject rules get a look.
+    else if (subjectRuleFor(e)) toReadBySubject.push(e);
     else kept.push(e);
   });
-  if (!toBlock.length && !toRead.length) return list;
+  if (!toBlock.length && !toRead.length && !toReadBySubject.length) return list;
 
   if (onlineReady()) {
     if (toBlock.length) await modifyIdsInChunks(toBlock.map(e => e.id), { addLabelIds: ['SPAM'], removeLabelIds: ['UNREAD', 'INBOX'] });
-    if (toRead.length) await modifyIdsInChunks(toRead.map(e => e.id), { removeLabelIds: ['UNREAD'] });
+    const readIds = [...toRead, ...toReadBySubject].map(e => e.id);
+    if (readIds.length) await modifyIdsInChunks(readIds, { removeLabelIds: ['UNREAD'] });
   } else {
-    // Offline: queue one op per affected sender, deduped by the outbox below.
+    // Offline: one op per affected sender for the sender rules, deduped by the
+    // outbox. Subject matches queue per message instead — a sender-wide op
+    // would mark mail read that the rule doesn't actually cover.
     const seen = new Set();
     [...toBlock, ...toRead].forEach(e => {
       const { addr } = parseSender(e.sender || '');
@@ -2347,6 +2599,7 @@ async function enforceSenderRules(list) {
       seen.add(addr);
       enqueueOp({ type: rule.action === 'block' ? 'block' : 'autoread', addr });
     });
+    toReadBySubject.forEach(e => enqueueOp({ type: 'read', id: e.id }));
   }
   return kept;
 }
@@ -2363,6 +2616,7 @@ async function flushOutbox() {
       else if (op.type === 'keep') ok = await sendKeepToGmail(op.id, !!op.read);
       else if (op.type === 'block') ok = await blockSenderRemote(op.addr);
       else if (op.type === 'autoread') ok = await autoReadSenderRemote(op.addr);
+      else if (op.type === 'autoread-subject') ok = await autoReadSubjectRemote(op.addr, op.pattern);
       else ok = true; // unknown op — drop it
       if (!ok) remaining.push(op);
     }
@@ -2458,7 +2712,9 @@ function loadAccountData() {
   loadSenderStats();
   loadSenderRules();
   loadKeepReadStats();
+  loadSubjectData();
   renderBlockSuggestions();
+  renderSubjectSuggestions();
   renderSenderRules();
 }
 
@@ -3344,6 +3600,7 @@ async function doRead(email) {
   // opening — the signal that drives block suggestions.
   recordSenderEvent(email, 'dismiss');
   renderBlockSuggestions();
+  renderSubjectSuggestions();
   emails = emails.filter(e => e.id !== email.id);
   selectedIds.delete(email.id);
   dropKeptLocally(email.id);
@@ -3356,6 +3613,7 @@ async function doKeep(email) {
   // Keeping is engagement — never suggest blocking a sender the user keeps.
   recordSenderEvent(email, 'engage');
   renderBlockSuggestions();
+  renderSubjectSuggestions();
   // Remember the choice and cache its content (high priority) for offline use.
   keptIds.add(email.id);
   saveKept();
@@ -4097,6 +4355,7 @@ async function openReader(email, opts = {}) {
   // Opening to read is engagement — it keeps the sender out of block suggestions.
   recordSenderEvent(email, 'engage');
   renderBlockSuggestions();
+  renderSubjectSuggestions();
   readerEmail = email;
   if (readerRO) { readerRO.disconnect(); readerRO = null; }
   stopAutoScrollEngine(); // cancel any scroll from a previously-open email
@@ -4458,6 +4717,8 @@ async function bulkMarkRead() {
     const done = selectedIds.size;
     // Bulk mark-read is dismiss-without-opening too — feed it to suggestions.
     emails.forEach(e => { if (selectedIds.has(e.id)) recordSenderEvent(e, 'dismiss'); });
+    renderBlockSuggestions();
+    renderSubjectSuggestions();
     selectedIds.forEach(id => forgetKept(id));
     emails = emails.filter(e => !selectedIds.has(e.id));
     swipeQueue = swipeQueue.filter(e => !selectedIds.has(e.id));
