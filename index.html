@@ -689,7 +689,20 @@ body {
 /* Tint the whole swipe surface so the active mode is obvious at a glance. */
 #swipe-screen.block-mode { background: var(--red-light); }
 #swipe-screen.block-mode .card-stack-area { box-shadow: inset 0 0 0 2px var(--red); border-radius: 16px; margin: 0 8px; }
-#swipe-screen.block-mode .action-hint { color: var(--red); font-weight: 600; }
+#swipe-screen.block-mode .hint-keys { margin-top: 6px; font-size: 11px; color: var(--text-3); }
+.hint-keys kbd {
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  margin: 0 1px;
+  border: 1px solid var(--border-mid);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-2);
+}
+.action-hint { color: var(--red); font-weight: 600; }
 
 .open-gmail-btn {
   display: flex;
@@ -1609,7 +1622,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v57'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v58'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3694,12 +3707,35 @@ async function loadCardBody(card, email) {
   bodyEl.innerHTML = `<div class="card-body-text">${esc(email.bodyText || '')}</div>`;
 }
 
+// How far a card must travel before the swipe commits.
+const SWIPE_COMMIT_PX = 80;
+
+// Paints the front card at a horizontal offset and fades in the matching
+// action overlay. Shared by touch drag, mouse drag and trackpad swipe so all
+// three feel identical.
+function paintCardOffset(card, emailId, dx) {
+  card.style.transform = `translateX(${dx}px) rotate(${dx * 0.08}deg)`;
+  const ratio = Math.min(Math.abs(dx) / 100, 1);
+  const read = document.getElementById('ro-' + emailId);
+  const unread = document.getElementById('uo-' + emailId);
+  if (read) read.style.opacity = dx < 0 ? ratio : 0;
+  if (unread) unread.style.opacity = dx > 0 ? ratio : 0;
+}
+
+function resetCardOffset(card, emailId) {
+  card.style.transform = '';
+  const read = document.getElementById('ro-' + emailId);
+  const unread = document.getElementById('uo-' + emailId);
+  if (read) read.style.opacity = 0;
+  if (unread) unread.style.opacity = 0;
+}
+
 function attachDrag(card, email) {
-  let startX = 0, startY = 0, curX = 0;
+  let startX = 0, curX = 0;
   let dragging = false;
 
-  function onStart(x, y) {
-    startX = x; startY = y; curX = 0;
+  function onStart(x) {
+    startX = x; curX = 0;
     dragging = true;
     card.classList.add('is-dragging');
   }
@@ -3707,58 +3743,83 @@ function attachDrag(card, email) {
   function onMove(x) {
     if (!dragging) return;
     curX = x - startX;
-    const rotate = curX * 0.08;
-    card.style.transform = `translateX(${curX}px) rotate(${rotate}deg)`;
-
-    const ratio = Math.min(Math.abs(curX) / 100, 1);
-    const readOverlay = document.getElementById('ro-' + email.id);
-    const unreadOverlay = document.getElementById('uo-' + email.id);
-
-    if (curX < 0) {
-      readOverlay.style.opacity = ratio;
-      unreadOverlay.style.opacity = 0;
-    } else {
-      unreadOverlay.style.opacity = ratio;
-      readOverlay.style.opacity = 0;
-    }
+    paintCardOffset(card, email.id, curX);
   }
 
   function onEnd() {
     if (!dragging) return;
     dragging = false;
     card.classList.remove('is-dragging');
-
-    const threshold = 80;
-    if (curX < -threshold) {
-      swipeCard('left');
-    } else if (curX > threshold) {
-      swipeCard('right');
-    } else {
-      // Snap back
-      card.style.transform = '';
-      const readOverlay = document.getElementById('ro-' + email.id);
-      const unreadOverlay = document.getElementById('uo-' + email.id);
-      if (readOverlay) readOverlay.style.opacity = 0;
-      if (unreadOverlay) unreadOverlay.style.opacity = 0;
-    }
+    if (curX < -SWIPE_COMMIT_PX) swipeCard('left');
+    else if (curX > SWIPE_COMMIT_PX) swipeCard('right');
+    else resetCardOffset(card, email.id);
   }
 
   // Touch
-  card.addEventListener('touchstart', e => {
-    const t = e.touches[0];
-    onStart(t.clientX, t.clientY);
-  }, { passive: true });
-
-  card.addEventListener('touchmove', e => {
-    onMove(e.touches[0].clientX);
-  }, { passive: true });
-
+  card.addEventListener('touchstart', e => onStart(e.touches[0].clientX), { passive: true });
+  card.addEventListener('touchmove', e => onMove(e.touches[0].clientX), { passive: true });
   card.addEventListener('touchend', onEnd);
 
-  // Mouse
-  card.addEventListener('mousedown', e => { onStart(e.clientX, e.clientY); });
-  window.addEventListener('mousemove', e => { if (dragging) onMove(e.clientX); });
-  window.addEventListener('mouseup', onEnd);
+  // Mouse. The window listeners live only for the duration of the drag —
+  // attaching them per card and never removing them leaked one pair per
+  // rendered card, which is every swipe.
+  function onMouseMove(e) { onMove(e.clientX); }
+  function onMouseUp() {
+    window.removeEventListener('mousemove', onMouseMove);
+    window.removeEventListener('mouseup', onMouseUp);
+    onEnd();
+  }
+  card.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;         // left button only
+    e.preventDefault();                 // stop the browser's native text/image drag
+    onStart(e.clientX);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  });
+}
+
+// ── Trackpad swipe ─────────────────────────────────────────
+// A two-finger horizontal swipe on a laptop trackpad arrives as wheel events
+// with deltaX and no gesture-end event, so the swipe is committed (or snapped
+// back) once the wheel goes quiet. Vertical intent is left alone so the card
+// body still scrolls.
+let trackpadSwipe = null;
+
+function initTrackpadSwipe() {
+  const area = document.getElementById('card-stack-area');
+  if (!area || area._wheelBound) return;
+  area._wheelBound = true;
+  area.addEventListener('wheel', e => {
+    if (activeTab !== 'swipe' || !swipeQueue.length) return;
+    if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+    const card = document.querySelector('.swipe-card.front');
+    if (!card) return;
+    // Also stops the browser's back/forward navigation gesture, which would
+    // otherwise leave the app entirely mid-swipe.
+    e.preventDefault();
+    const email = swipeQueue[0];
+    if (!trackpadSwipe) {
+      trackpadSwipe = { dx: 0, id: email.id };
+      card.classList.add('is-dragging');
+    }
+    // Fingers moving left scroll content left (deltaX positive), so the card
+    // follows the fingers when the sign is flipped.
+    trackpadSwipe.dx -= e.deltaX;
+    paintCardOffset(card, email.id, trackpadSwipe.dx);
+    clearTimeout(trackpadSwipe.timer);
+    trackpadSwipe.timer = setTimeout(endTrackpadSwipe, 110);
+  }, { passive: false });
+}
+
+function endTrackpadSwipe() {
+  if (!trackpadSwipe) return;
+  const { dx, id } = trackpadSwipe;
+  trackpadSwipe = null;
+  const card = document.querySelector('.swipe-card.front');
+  if (card) card.classList.remove('is-dragging');
+  if (dx < -SWIPE_COMMIT_PX) swipeCard('left');
+  else if (dx > SWIPE_COMMIT_PX) swipeCard('right');
+  else if (card) resetCardOffset(card, id);
 }
 
 // Swipe actions apply locally immediately (so they work offline) and sync to
@@ -4442,6 +4503,23 @@ function stopAutoScrollEngine() {
   asState = null;
 }
 
+// True on a laptop/desktop: a mouse or trackpad rather than a finger.
+const IS_FINE_POINTER = !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+
+// On a laptop the arrows in the hint read as swipe directions, which doesn't
+// tell you what to actually do. Spell the input out when there's no touchscreen.
+function setSwipeHint(text) {
+  const hint = document.getElementById('swipe-hint');
+  if (!hint) return;
+  hint.textContent = text;
+  if (!IS_FINE_POINTER) return;
+  const keys = document.createElement('div');
+  keys.className = 'hint-keys';
+  keys.innerHTML = 'drag, two-finger swipe, or <kbd>←</kbd> <kbd>→</kbd>' +
+    ' &nbsp;·&nbsp; <kbd>Z</kbd> undo &nbsp;·&nbsp; <kbd>Enter</kbd> open';
+  hint.appendChild(keys);
+}
+
 function setSwipeMode(mode) {
   swipeMode = mode;
   document.getElementById('mode-triage').classList.toggle('active', mode === 'triage');
@@ -4460,7 +4538,7 @@ function setSwipeMode(mode) {
     rightBtn.className = 'action-btn skip-btn';
     rightBtn.title = keepMarksRead ? 'Keep' : 'Keep unread';
     rightBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg>`;
-    hint.textContent = keepMarksRead ? '← mark as read · keep →' : '← mark as read · keep unread →';
+    setSwipeHint(keepMarksRead ? '← mark as read · keep →' : '← mark as read · keep unread →');
   } else {
     leftBtn.className = 'action-btn block-btn';
     leftBtn.title = 'Block sender';
@@ -4468,7 +4546,7 @@ function setSwipeMode(mode) {
     rightBtn.className = 'action-btn skip-btn';
     rightBtn.title = keepMarksRead ? 'Keep' : 'Keep unread';
     rightBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg>`;
-    hint.textContent = keepMarksRead ? '← block sender · keep →' : '← block sender · keep unread →';
+    setSwipeHint(keepMarksRead ? '← block sender · keep →' : '← block sender · keep unread →');
   }
 }
 
@@ -4796,9 +4874,15 @@ window.addEventListener('keydown', e => {
     return;
   }
   if (activeTab !== 'swipe') return;
-  if (e.key === 'ArrowLeft') swipeCard('left');
-  if (e.key === 'ArrowRight') swipeCard('right');
-  if (e.key === 'ArrowUp') undoSwipe();
+  // Never steal a keystroke from a text field (Keep search, client-ID input).
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
+  const k = (e.key || '').toLowerCase();
+  if (e.key === 'ArrowLeft') { e.preventDefault(); swipeCard('left'); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); swipeCard('right'); }
+  else if (e.key === 'ArrowUp' || k === 'z' || k === 'u') { e.preventDefault(); undoSwipe(); }
+  else if (e.key === 'Enter' || k === 'o') { e.preventDefault(); openInGmail(); }
 });
 
 // ── Bulk UI ────────────────────────────────────────────────
@@ -5022,6 +5106,7 @@ loadClientId();
 setSwipeMode('triage'); // reflect the keep setting in the action labels/hint
 updateAccountChip();
 initKeepSwipe(); // enable swipe-left-to-mark-read on Keep rows
+initTrackpadSwipe(); // two-finger horizontal swipe on laptop trackpads
 // Close the account menu when tapping outside it.
 document.addEventListener('click', e => {
   const menu = document.getElementById('account-menu');
