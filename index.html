@@ -1654,7 +1654,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v61'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v62'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -4370,8 +4370,12 @@ function fnSupToDigits(s) { return Array.from(s).map(c => FN_SUP_DIGITS[c] || ''
 // Block elements count as line breaks when deciding what "start of a line"
 // means, so an HTML body and a plain-text one match by the same rules.
 const FN_BLOCK_TAGS = /^(P|DIV|LI|TR|TD|TH|BR|BLOCKQUOTE|H[1-6]|UL|OL|TABLE|SECTION|ARTICLE|HR|PRE)$/;
-// A line opening with a marker and then saying something is a note.
-const FN_DEF_RE = /(^|\n)[ \t]*(?:\[(\d{1,3})\]|\((\d{1,3})\)|(\d{1,3})[.)]|([⁰¹²³⁴⁵⁶⁷⁸⁹]+)|([†‡§]|\*{1,3}))[ \t]*[.):–-]?[ \t]*([^\n]{3,})/g;
+// Notes come in two shapes: the marker and its text on one line, or — as
+// Substack and others render them — the marker alone with the text beneath it.
+const FN_DEF_INLINE = /^[ \t]*(?:\[(\d{1,3})\]|\((\d{1,3})\)|(\d{1,3})[.)]|([⁰¹²³⁴⁵⁶⁷⁸⁹]+)|([†‡§]|\*{1,3}))[ \t]*[.):–-]?[ \t]*(.{3,})$/;
+const FN_DEF_ALONE = /^[ \t]*(?:\[(\d{1,3})\]|\((\d{1,3})\)|(\d{1,3})[.)]?|([⁰¹²³⁴⁵⁶⁷⁸⁹]+)|([†‡§]|\*{1,3}))[ \t]*$/;
+// Notes longer than this are truncated for the popup.
+const FN_NOTE_MAX = 600;
 // The same markers appearing mid-prose.
 const FN_REF_RE = /\[(\d{1,3})\]|\((\d{1,3})\)|([⁰¹²³⁴⁵⁶⁷⁸⁹]+)|([†‡§]|\*{1,3})/g;
 
@@ -4400,19 +4404,42 @@ function fnTextIndex(root) {
 // definition wins, since references come before the notes they point at.
 function fnDefinitions(full) {
   const defs = new Map();
-  FN_DEF_RE.lastIndex = 0;
-  let m;
-  while ((m = FN_DEF_RE.exec(full))) {
+  const lines = full.split('\n');
+  const offsets = [];
+  let acc = 0;
+  for (const ln of lines) { offsets.push(acc); acc += ln.length + 1; }
+  const isMarkerLine = ln => FN_DEF_ALONE.test(ln) || FN_DEF_INLINE.test(ln);
+
+  for (let i = 0; i < lines.length; i++) {
+    let m = FN_DEF_INLINE.exec(lines[i]);
+    let alone = false;
+    if (!m) { m = FN_DEF_ALONE.exec(lines[i]); alone = !!m; }
+    if (!m) continue;
     let key = null, bare = false;
-    if (m[2]) key = 'n' + Number(m[2]);
-    else if (m[3]) key = 'n' + Number(m[3]);
-    else if (m[4]) { key = 'n' + Number(m[4]); bare = true; }
-    else if (m[5]) { const d = fnSupToDigits(m[5]); if (!d) continue; key = 'n' + Number(d); }
-    else if (m[6]) key = 's' + m[6];
+    if (m[1]) key = 'n' + Number(m[1]);
+    else if (m[2]) key = 'n' + Number(m[2]);
+    else if (m[3]) { key = 'n' + Number(m[3]); bare = true; }
+    else if (m[4]) { const d = fnSupToDigits(m[4]); if (!d) continue; key = 'n' + Number(d); }
+    else if (m[5]) key = 's' + m[5];
     if (!key) continue;
-    const text = (m[7] || '').trim();
+
+    let text = alone ? '' : (m[6] || '').trim();
+    if (alone) {
+      // The note is whatever sits under the marker, up to a blank line or the
+      // next note's marker.
+      for (let j = i + 1; j < lines.length; j++) {
+        const ln = lines[j].trim();
+        if (!ln) { if (text) break; else continue; }
+        if (isMarkerLine(lines[j])) break;
+        text = text ? text + ' ' + ln : ln;
+        if (text.length >= FN_NOTE_MAX) break;
+      }
+    }
+    text = text.trim();
     if (text.length < 3) continue;
-    defs.set(key, { text, at: m.index, bare });
+    if (text.length > FN_NOTE_MAX) text = text.slice(0, FN_NOTE_MAX).trim() + '…';
+    // Later wins: references come before the notes they point at.
+    defs.set(key, { text, at: offsets[i], bare });
   }
   return defs;
 }
