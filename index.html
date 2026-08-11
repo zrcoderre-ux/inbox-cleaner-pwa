@@ -836,6 +836,37 @@ body {
 .reader-mark-read:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Floating auto-scroll control, overlaid at the bottom of the reader. */
+/* Footnotes: in-text marker and its popup */
+.fn-ref {
+  color: var(--blue, #1a73e8);
+  cursor: pointer;
+  border-bottom: 1px dotted currentColor;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.fn-ref:hover, .fn-ref:focus-visible { background: rgba(26,115,232,0.14); outline: none; }
+.fn-popup {
+  position: fixed;
+  /* Above the reader overlay (1000) it belongs to, below the toast (9999). */
+  z-index: 1300;
+  max-height: 40vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--text-1);
+  border: 1px solid var(--border-mid);
+  border-radius: 10px;
+  box-shadow: var(--shadow-card-lifted, 0 8px 28px rgba(0,0,0,0.18));
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.fn-popup.open { opacity: 1; }
+
 .reader-autoscroll {
   position: absolute;
   left: 50%;
@@ -1623,7 +1654,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v60'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v61'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -4327,6 +4358,214 @@ function setSwipeSortBySender(on) {
   renderSwipeStack();
 }
 
+// ── Footnotes ──────────────────────────────────────────────
+// Newsletters mark footnotes in ordinary prose — "as reported[1]" — and put the
+// note itself at the bottom, with no anchor or popup of their own. These
+// helpers find the pairs and make the in-text marker show its note: hover to
+// peek on a laptop, click (or tap) to pin it open.
+
+const FN_SUP_DIGITS = { '⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9' };
+function fnSupToDigits(s) { return Array.from(s).map(c => FN_SUP_DIGITS[c] || '').join(''); }
+
+// Block elements count as line breaks when deciding what "start of a line"
+// means, so an HTML body and a plain-text one match by the same rules.
+const FN_BLOCK_TAGS = /^(P|DIV|LI|TR|TD|TH|BR|BLOCKQUOTE|H[1-6]|UL|OL|TABLE|SECTION|ARTICLE|HR|PRE)$/;
+// A line opening with a marker and then saying something is a note.
+const FN_DEF_RE = /(^|\n)[ \t]*(?:\[(\d{1,3})\]|\((\d{1,3})\)|(\d{1,3})[.)]|([⁰¹²³⁴⁵⁶⁷⁸⁹]+)|([†‡§]|\*{1,3}))[ \t]*[.):–-]?[ \t]*([^\n]{3,})/g;
+// The same markers appearing mid-prose.
+const FN_REF_RE = /\[(\d{1,3})\]|\((\d{1,3})\)|([⁰¹²³⁴⁵⁶⁷⁸⁹]+)|([†‡§]|\*{1,3})/g;
+
+// Flattens a subtree to text, remembering which node each offset came from.
+function fnTextIndex(root) {
+  const doc = root.ownerDocument;
+  const nodes = [];
+  let full = '', lastBlock, seen = false;
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  let n;
+  while ((n = walker.nextNode())) {
+    const parent = n.parentNode;
+    if (!parent || parent.nodeName === 'SCRIPT' || parent.nodeName === 'STYLE') continue;
+    let block = parent;
+    while (block && block !== root && !FN_BLOCK_TAGS.test(block.nodeName)) block = block.parentNode;
+    if (seen && block !== lastBlock && full && !full.endsWith('\n')) full += '\n';
+    lastBlock = block; seen = true;
+    const start = full.length;
+    full += n.nodeValue;
+    nodes.push({ node: n, start, end: full.length });
+  }
+  return { full, nodes };
+}
+
+// Maps every marker that opens a line to the note that follows it. A later
+// definition wins, since references come before the notes they point at.
+function fnDefinitions(full) {
+  const defs = new Map();
+  FN_DEF_RE.lastIndex = 0;
+  let m;
+  while ((m = FN_DEF_RE.exec(full))) {
+    let key = null, bare = false;
+    if (m[2]) key = 'n' + Number(m[2]);
+    else if (m[3]) key = 'n' + Number(m[3]);
+    else if (m[4]) { key = 'n' + Number(m[4]); bare = true; }
+    else if (m[5]) { const d = fnSupToDigits(m[5]); if (!d) continue; key = 'n' + Number(d); }
+    else if (m[6]) key = 's' + m[6];
+    if (!key) continue;
+    const text = (m[7] || '').trim();
+    if (text.length < 3) continue;
+    defs.set(key, { text, at: m.index, bare });
+  }
+  return defs;
+}
+
+// Wraps each in-text marker that has a matching note. Returns how many linked.
+function linkFootnotes(root, frameEl) {
+  if (!root) return 0;
+  const doc = root.ownerDocument;
+  const { full, nodes } = fnTextIndex(root);
+  if (full.length < 40) return 0;
+  const defs = fnDefinitions(full);
+  if (!defs.size) return 0;
+
+  const refs = [];
+  FN_REF_RE.lastIndex = 0;
+  let m;
+  while ((m = FN_REF_RE.exec(full))) {
+    let key = null, solid = false;
+    if (m[1]) { key = 'n' + Number(m[1]); solid = true; }
+    else if (m[2]) key = 'n' + Number(m[2]);
+    else if (m[3]) { const d = fnSupToDigits(m[3]); if (!d) continue; key = 'n' + Number(d); solid = true; }
+    else if (m[4]) { key = 's' + m[4]; solid = true; }
+    if (!key) continue;
+    const def = defs.get(key);
+    if (!def) continue;
+    if (m.index >= def.at) continue;   // this marker IS the note, or follows it
+    if (def.bare && !solid) continue;  // a lone "1." is too close to a list item
+    refs.push({ start: m.index, end: m.index + m[0].length, text: def.text });
+  }
+  // Back to front, so earlier offsets stay valid as text nodes are split.
+  let linked = 0;
+  for (let i = refs.length - 1; i >= 0; i--) {
+    const r = refs[i];
+    const entry = nodes.find(nd => r.start >= nd.start && r.end <= nd.end);
+    if (!entry) continue; // straddles two nodes — leave it alone
+    try {
+      const tail = entry.node.splitText(r.start - entry.start);
+      tail.splitText(r.end - r.start);
+      const span = doc.createElement('span');
+      span.className = 'fn-ref';
+      span.setAttribute('role', 'button');
+      span.setAttribute('tabindex', '0');
+      span.setAttribute('aria-label', 'Footnote: ' + r.text);
+      span.dataset.note = r.text;
+      span.textContent = tail.nodeValue;
+      tail.parentNode.replaceChild(span, tail);
+      linked++;
+    } catch(e) {}
+  }
+
+  // <sup>1</sup> is the commonest HTML footnote marker and the text pass can't
+  // see it: it renders as a bare digit, which is far too common in prose to
+  // match on. The element itself is the signal, so it's read separately — and
+  // being explicit, it's unambiguous enough to trust a bare "1." note.
+  if (root.querySelectorAll) {
+    root.querySelectorAll('sup').forEach(sup => {
+      if (sup.classList.contains('fn-ref') || sup.querySelector('.fn-ref')) return;
+      const raw = (sup.textContent || '').trim();
+      const mm = /^\[?(\d{1,3})\]?$/.exec(raw) || /^([†‡§]|\*{1,3})$/.exec(raw);
+      if (!mm) return;
+      const key = (/^\d/.test(mm[1]) ? 'n' + Number(mm[1]) : 's' + mm[1]);
+      const def = defs.get(key);
+      if (!def) return;
+      const inner = nodes.find(nd => sup.contains(nd.node));
+      if (inner && inner.start >= def.at) return; // the marker is in the note itself
+      sup.classList.add('fn-ref');
+      sup.setAttribute('role', 'button');
+      sup.setAttribute('tabindex', '0');
+      sup.setAttribute('aria-label', 'Footnote: ' + def.text);
+      sup.dataset.note = def.text;
+      linked++;
+    });
+  }
+
+  if (linked) attachFootnoteHandlers(root, doc, frameEl);
+  return linked;
+}
+
+function attachFootnoteHandlers(root, doc, frameEl) {
+  if (root._fnBound) return;
+  root._fnBound = true;
+  const refOf = ev => (ev.target && ev.target.closest) ? ev.target.closest('.fn-ref') : null;
+
+  doc.addEventListener('click', ev => {
+    const ref = refOf(ev);
+    if (!ref) { hideFootnote(true); return; }
+    ev.preventDefault();
+    ev.stopPropagation();
+    showFootnote(ref, frameEl, true); // clicking pins it open
+  }, true);
+
+  // On a laptop a hover is enough to peek; the pin is only for keeping it.
+  if (IS_FINE_POINTER) {
+    doc.addEventListener('mouseover', ev => { const r = refOf(ev); if (r) showFootnote(r, frameEl, false); });
+    doc.addEventListener('mouseout', ev => { if (refOf(ev)) scheduleFootnoteHide(); });
+  }
+  doc.addEventListener('keydown', ev => {
+    const ref = refOf(ev);
+    if (ref && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); showFootnote(ref, frameEl, true); }
+  });
+  doc.addEventListener('scroll', () => hideFootnote(true), true);
+}
+
+// ── Footnote popup ─────────────────────────────────────────
+let fnPopup = null, fnPinned = false, fnHideTimer = null;
+
+function showFootnote(ref, frameEl, pinned) {
+  clearTimeout(fnHideTimer);
+  if (fnPopup && fnPopup._ref === ref) { if (pinned) fnPinned = true; return; }
+  hideFootnote(true);
+
+  const pop = document.createElement('div');
+  pop.className = 'fn-popup';
+  pop.textContent = ref.dataset.note || '';
+  pop._ref = ref;
+  document.body.appendChild(pop);
+  fnPopup = pop;
+  fnPinned = !!pinned;
+  // Hovering the note itself keeps it up, so a long one can be read.
+  pop.addEventListener('mouseenter', () => clearTimeout(fnHideTimer));
+  pop.addEventListener('mouseleave', () => { if (!fnPinned) scheduleFootnoteHide(); });
+
+  // The marker's rect is in its own document; shift it into the page's frame
+  // when the email is rendered inside the reader iframe.
+  const r = ref.getBoundingClientRect();
+  let x = r.left + r.width / 2, top = r.top, bottom = r.bottom;
+  if (frameEl) {
+    const ir = frameEl.getBoundingClientRect();
+    x += ir.left; top += ir.top; bottom += ir.top;
+  }
+  const w = Math.min(320, window.innerWidth - 24);
+  pop.style.width = w + 'px';
+  const h = pop.offsetHeight;
+  pop.style.left = Math.max(12, Math.min(x - w / 2, window.innerWidth - w - 12)) + 'px';
+  // Above the marker, or below it when there isn't room.
+  pop.style.top = (top - h - 10 >= 12 ? top - h - 10 : bottom + 10) + 'px';
+  pop.classList.add('open');
+}
+
+function scheduleFootnoteHide() {
+  clearTimeout(fnHideTimer);
+  fnHideTimer = setTimeout(() => { if (!fnPinned) hideFootnote(true); }, 160);
+}
+
+function hideFootnote(force) {
+  if (!fnPopup) return;
+  if (fnPinned && !force) return;
+  clearTimeout(fnHideTimer);
+  fnPopup.remove();
+  fnPopup = null;
+  fnPinned = false;
+}
+
 // ── Auto-scroll while reading ──────────────────────────────
 function loadAutoScroll() {
   try { autoScrollEnabled = localStorage.getItem('ic_autoscroll') === '1'; } catch(e) {}
@@ -4757,6 +4996,8 @@ async function openReader(email, opts = {}) {
   table{max-width:100%!important;}
   pre,code{white-space:pre-wrap;word-wrap:break-word;}
   blockquote{border-left:3px solid #dadce0;margin:0;padding-left:12px;color:#5f6368;}
+  .fn-ref{color:#1a73e8;cursor:pointer;border-bottom:1px dotted currentColor;border-radius:2px;padding:0 1px;}
+  .fn-ref:hover{background:rgba(26,115,232,0.14);}
   ${offline ? 'a{pointer-events:none;cursor:default;}' : ''}
 </style></head>
 <body>${email.bodyHtml}</body></html>`;
@@ -4782,6 +5023,8 @@ async function openReader(email, opts = {}) {
           }, true);
         }
         const scroller = doc.scrollingElement || doc.documentElement || doc.body;
+        // Footnote markers become tappable now the email's DOM is reachable.
+        if (doc.body) { try { linkFootnotes(doc.body, iframe); } catch(_) {} }
         if (showFooter) watchScrollForFooter(scroller, win, win, doc, email);
         // Auto-scroll needs same-origin access to the iframe doc (present here).
         if (autoScrollEnabled && doc) {
@@ -4798,6 +5041,7 @@ async function openReader(email, opts = {}) {
     bodyEl.innerHTML = `<div class="reader-text"></div>`;
     const el = bodyEl.querySelector('.reader-text');
     el.textContent = email.bodyText || '(no content)';
+    try { linkFootnotes(el, null); } catch(_) {}
     if (showFooter) watchScrollForFooter(el, el, window, document, email);
     if (autoScrollEnabled) {
       setTimeout(() => { if (readerEmail === email) startAutoScroll(el, null); }, 400);
@@ -4913,6 +5157,7 @@ function setReaderZoom(on) {
 }
 
 function closeReader() {
+  hideFootnote(true);
   const overlay = document.getElementById('reader-overlay');
   overlay.classList.remove('open');
   document.body.style.overflow = '';
@@ -4934,7 +5179,7 @@ window.addEventListener('keydown', e => {
   // If the reader overlay is open, Escape closes it and other keys are ignored
   const overlay = document.getElementById('reader-overlay');
   if (overlay && overlay.classList.contains('open')) {
-    if (e.key === 'Escape') closeReader();
+    if (e.key === 'Escape') { if (fnPopup) hideFootnote(true); else closeReader(); }
     return;
   }
   if (activeTab !== 'swipe') return;
@@ -5171,6 +5416,12 @@ setSwipeMode('triage'); // reflect the keep setting in the action labels/hint
 updateAccountChip();
 initKeepSwipe(); // enable swipe-left-to-mark-read on Keep rows
 initTrackpadSwipe(); // trackpad two-finger swipe and mouse Shift+wheel
+// A tap anywhere outside a footnote marker dismisses its popup.
+document.addEventListener('click', e => {
+  if (e.target && e.target.closest && e.target.closest('.fn-ref, .fn-popup')) return;
+  hideFootnote(true);
+}, true);
+window.addEventListener('resize', () => hideFootnote(true));
 // Close the account menu when tapping outside it.
 document.addEventListener('click', e => {
   const menu = document.getElementById('account-menu');
