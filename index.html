@@ -1654,7 +1654,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v62'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v63'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -4537,17 +4537,31 @@ function attachFootnoteHandlers(root, doc, frameEl) {
     doc.addEventListener('mouseout', ev => { if (refOf(ev)) scheduleFootnoteHide(); });
   }
   doc.addEventListener('keydown', ev => {
+    // Escape has to be handled here as well as on the parent: when the email
+    // renders in the iframe, focus lives in there and the parent never sees it.
+    if (ev.key === 'Escape') {
+      // Stop here when a note was open: in the plain-text reader this document
+      // is the page itself, and letting it bubble on would close the reader too.
+      if (fnPopup) { ev.preventDefault(); ev.stopPropagation(); hideFootnote(true); }
+      return;
+    }
     const ref = refOf(ev);
     if (ref && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); showFootnote(ref, frameEl, true); }
   });
-  doc.addEventListener('scroll', () => hideFootnote(true), true);
+  // A scroll dismisses the note — but not the one auto-scroll had already
+  // queued when the note opened, which would close it the instant it appeared.
+  doc.addEventListener('scroll', () => {
+    if (Date.now() - fnShownAt < 350) return;
+    hideFootnote(true);
+  }, true);
 }
 
 // ── Footnote popup ─────────────────────────────────────────
-let fnPopup = null, fnPinned = false, fnHideTimer = null;
+let fnPopup = null, fnPinned = false, fnHideTimer = null, fnShownAt = 0;
 
 function showFootnote(ref, frameEl, pinned) {
   clearTimeout(fnHideTimer);
+  holdAutoScrollForFootnote();
   if (fnPopup && fnPopup._ref === ref) { if (pinned) fnPinned = true; return; }
   hideFootnote(true);
 
@@ -4558,6 +4572,7 @@ function showFootnote(ref, frameEl, pinned) {
   document.body.appendChild(pop);
   fnPopup = pop;
   fnPinned = !!pinned;
+  fnShownAt = Date.now();
   // Hovering the note itself keeps it up, so a long one can be read.
   pop.addEventListener('mouseenter', () => clearTimeout(fnHideTimer));
   pop.addEventListener('mouseleave', () => { if (!fnPinned) scheduleFootnoteHide(); });
@@ -4591,6 +4606,7 @@ function hideFootnote(force) {
   fnPopup.remove();
   fnPopup = null;
   fnPinned = false;
+  releaseAutoScrollForFootnote();
 }
 
 // ── Auto-scroll while reading ──────────────────────────────
@@ -4762,13 +4778,39 @@ function scheduleAutoResume() {
   asState.resumeTimer = setTimeout(() => {
     if (!asState) return;
     asState.resumeTimer = null;
-    if (asState.userPaused || !asState.running) return;
+    if (asState.userPaused || !asState.running || asState.fnHold) return;
     asState.suspended = false;
     asState.pos = asState.scroller.scrollTop; // continue from where they left it
     asState.lastWritten = null;
     asState.last = 0;
     if (!asState.raf) asState.raf = requestAnimationFrame(autoScrollTick);
   }, 1000);
+}
+
+// Auto-scroll holds still while a footnote is open, so the text doesn't slide
+// out from under the note being read. Unlike the manual-scroll suspension this
+// one doesn't time out — it waits for the note to close — and it never
+// overrides an explicit pause.
+function holdAutoScrollForFootnote() {
+  if (!asState || !asState.running || asState.userPaused) return;
+  if (asState.resumeTimer) { clearTimeout(asState.resumeTimer); asState.resumeTimer = null; }
+  if (!asState.suspended) {
+    autoScrollResetFrac();
+    asState.suspended = true;
+    if (asState.raf) { cancelAnimationFrame(asState.raf); asState.raf = null; }
+  }
+  asState.fnHold = true;
+}
+
+function releaseAutoScrollForFootnote() {
+  if (!asState || !asState.fnHold) return;
+  asState.fnHold = false;
+  if (asState.userPaused || !asState.running) return;
+  asState.suspended = false;
+  asState.pos = asState.scroller.scrollTop; // pick up wherever the page sits now
+  asState.lastWritten = null;
+  asState.last = 0;
+  if (!asState.raf) asState.raf = requestAnimationFrame(autoScrollTick);
 }
 
 // Full stop at end-of-email — no auto-resume (footer takes over).
