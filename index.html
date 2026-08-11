@@ -418,6 +418,7 @@ body {
 .kept-bar button:active { opacity: 0.6; }
 
 /* Card stack area */
+.card-stack-area:focus, .card-stack-area:focus-visible { outline: none; }
 .card-stack-area {
   flex: 1;
   position: relative;
@@ -1361,7 +1362,7 @@ body {
         <button onclick="clearKept()">Reset</button>
       </div>
 
-      <div class="card-stack-area" id="card-stack-area">
+      <div class="card-stack-area" id="card-stack-area" tabindex="-1">
         <div class="empty-swipe" id="swipe-empty">
           <div class="empty-icon">📭</div>
           <div id="swipe-empty-msg">Tap "Load emails" to start swiping</div>
@@ -1622,7 +1623,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v58'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v59'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3289,6 +3290,20 @@ function enterOfflineMode() {
 }
 
 // ── Tab switching ──────────────────────────────────────────
+// Keystrokes only reach the app while the document has keyboard focus. After a
+// load where the page was never clicked, or once focus lands on nothing in
+// particular, the arrow keys go to the browser instead of the deck. Parking
+// focus on the card stack keeps them coming here.
+function focusSwipeDeck() {
+  if (activeTab !== 'swipe') return;
+  const area = document.getElementById('card-stack-area');
+  if (!area) return;
+  const a = document.activeElement;
+  // Never take focus off a control the user is actually using.
+  if (a && a !== document.body && a !== document.documentElement) return;
+  try { area.focus({ preventScroll: true }); } catch(e) {}
+}
+
 function switchTab(tab) {
   activeTab = tab;
   document.getElementById('swipe-screen').style.display = tab === 'swipe' ? 'flex' : 'none';
@@ -3298,6 +3313,7 @@ function switchTab(tab) {
   document.getElementById('nav-keep').classList.toggle('active', tab === 'keep');
   document.getElementById('nav-bulk').classList.toggle('active', tab === 'bulk');
   if (tab === 'keep') renderKeepList();
+  if (tab === 'swipe') focusSwipeDeck();
 }
 
 // ── Fetch emails ───────────────────────────────────────────
@@ -3657,6 +3673,7 @@ function renderSwipeStack() {
     if (isFront) {
       currentEmail = email;
       updateOpenGmailBtn(email);
+      focusSwipeDeck();
       attachDrag(card, email);
       loadCardBody(card, email);
     }
@@ -4879,9 +4896,9 @@ window.addEventListener('keydown', e => {
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
   const k = (e.key || '').toLowerCase();
-  if (e.key === 'ArrowLeft') { e.preventDefault(); swipeCard('left'); }
-  else if (e.key === 'ArrowRight') { e.preventDefault(); swipeCard('right'); }
-  else if (e.key === 'ArrowUp' || k === 'z' || k === 'u') { e.preventDefault(); undoSwipe(); }
+  if (e.key === 'ArrowLeft' || e.key === 'Left') { e.preventDefault(); swipeCard('left'); }
+  else if (e.key === 'ArrowRight' || e.key === 'Right') { e.preventDefault(); swipeCard('right'); }
+  else if (e.key === 'ArrowUp' || e.key === 'Up' || k === 'z' || k === 'u') { e.preventDefault(); undoSwipe(); }
   else if (e.key === 'Enter' || k === 'o') { e.preventDefault(); openInGmail(); }
 });
 
