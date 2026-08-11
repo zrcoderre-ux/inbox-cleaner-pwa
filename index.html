@@ -1623,7 +1623,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v59'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v60'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3795,12 +3795,31 @@ function attachDrag(card, email) {
   });
 }
 
-// ── Trackpad swipe ─────────────────────────────────────────
-// A two-finger horizontal swipe on a laptop trackpad arrives as wheel events
-// with deltaX and no gesture-end event, so the swipe is committed (or snapped
-// back) once the wheel goes quiet. Vertical intent is left alone so the card
-// body still scrolls.
-let trackpadSwipe = null;
+// ── Wheel swipe (trackpad and mouse) ───────────────────────
+// A trackpad's two-finger swipe and a mouse's Shift+wheel both arrive as wheel
+// events with no gesture-end event, so the swipe commits the moment it has
+// travelled far enough and snaps back if the wheel goes quiet first.
+//
+// Direction needs no per-platform handling: deltaX is defined as the amount the
+// content should scroll, and the OS has already applied its own natural-
+// scrolling preference before the event reaches the page. Flipping the sign
+// therefore makes the card follow the fingers identically everywhere.
+//
+// Magnitude does vary, and is detected. Deltas arrive in pixels, lines or pages
+// depending on the device, and a mouse wheel steps in big discrete notches
+// where a trackpad streams small ones.
+function wheelDeltaPx(value, mode) {
+  if (mode === 1) return value * 16;    // lines
+  if (mode === 2) return value * 400;   // pages
+  return value;
+}
+
+// A single event this large is a wheel notch rather than trackpad travel.
+const WHEEL_NOTCH_PX = 40;
+// Longest a committed swipe will go on swallowing a momentum tail.
+const WHEEL_SPENT_MAX_MS = 600;
+
+let wheelSwipe = null;
 
 function initTrackpadSwipe() {
   const area = document.getElementById('card-stack-area');
@@ -3808,35 +3827,63 @@ function initTrackpadSwipe() {
   area._wheelBound = true;
   area.addEventListener('wheel', e => {
     if (activeTab !== 'swipe' || !swipeQueue.length) return;
-    if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+
+    let dx = wheelDeltaPx(e.deltaX, e.deltaMode);
+    const dy = wheelDeltaPx(e.deltaY, e.deltaMode);
+    // Shift+wheel is how a plain mouse scrolls sideways on Windows and Linux.
+    // Some browsers hand that back as deltaX, others leave it on deltaY.
+    if (e.shiftKey && Math.abs(dy) > Math.abs(dx)) dx = dy;
+    else if (Math.abs(dx) <= Math.abs(dy)) return; // vertical — let it scroll
+    if (!dx) return;
+
     const card = document.querySelector('.swipe-card.front');
     if (!card) return;
     // Also stops the browser's back/forward navigation gesture, which would
     // otherwise leave the app entirely mid-swipe.
     e.preventDefault();
+
+    // Trackpad momentum keeps arriving after a swipe commits; it must not start
+    // the next card moving. Swallow the tail until the wheel goes quiet — but
+    // never past a hard cap, or continuous input would extend the window on
+    // every event and the deck would stop accepting swipes entirely.
+    if (wheelSwipe && wheelSwipe.spent) {
+      clearTimeout(wheelSwipe.timer);
+      if (Date.now() - wheelSwipe.at < WHEEL_SPENT_MAX_MS) {
+        wheelSwipe.timer = setTimeout(() => { wheelSwipe = null; }, 150);
+        return;
+      }
+      wheelSwipe = null; // tail outlasted the cap — this is deliberate input
+    }
+
     const email = swipeQueue[0];
-    if (!trackpadSwipe) {
-      trackpadSwipe = { dx: 0, id: email.id };
+    if (!wheelSwipe) {
+      wheelSwipe = { dx: 0, id: email.id, notched: true };
       card.classList.add('is-dragging');
     }
-    // Fingers moving left scroll content left (deltaX positive), so the card
-    // follows the fingers when the sign is flipped.
-    trackpadSwipe.dx -= e.deltaX;
-    paintCardOffset(card, email.id, trackpadSwipe.dx);
-    clearTimeout(trackpadSwipe.timer);
-    trackpadSwipe.timer = setTimeout(endTrackpadSwipe, 110);
+    if (Math.abs(dx) < WHEEL_NOTCH_PX) wheelSwipe.notched = false;
+    wheelSwipe.dx -= dx;
+    paintCardOffset(card, email.id, wheelSwipe.dx);
+
+    // A notched wheel needs more travel so one flick can't fire an action.
+    const threshold = wheelSwipe.notched ? SWIPE_COMMIT_PX * 2 : SWIPE_COMMIT_PX;
+    clearTimeout(wheelSwipe.timer);
+    if (Math.abs(wheelSwipe.dx) >= threshold) {
+      const dir = wheelSwipe.dx < 0 ? 'left' : 'right';
+      card.classList.remove('is-dragging');
+      wheelSwipe = { spent: true, at: Date.now(), timer: setTimeout(() => { wheelSwipe = null; }, 150) };
+      swipeCard(dir);
+    } else {
+      wheelSwipe.timer = setTimeout(endWheelSwipe, 220);
+    }
   }, { passive: false });
 }
 
-function endTrackpadSwipe() {
-  if (!trackpadSwipe) return;
-  const { dx, id } = trackpadSwipe;
-  trackpadSwipe = null;
+function endWheelSwipe() {
+  if (!wheelSwipe || wheelSwipe.spent) return;
+  const { id } = wheelSwipe;
+  wheelSwipe = null;
   const card = document.querySelector('.swipe-card.front');
-  if (card) card.classList.remove('is-dragging');
-  if (dx < -SWIPE_COMMIT_PX) swipeCard('left');
-  else if (dx > SWIPE_COMMIT_PX) swipeCard('right');
-  else if (card) resetCardOffset(card, id);
+  if (card) { card.classList.remove('is-dragging'); resetCardOffset(card, id); }
 }
 
 // Swipe actions apply locally immediately (so they work offline) and sync to
@@ -4532,7 +4579,7 @@ function setSwipeHint(text) {
   if (!IS_FINE_POINTER) return;
   const keys = document.createElement('div');
   keys.className = 'hint-keys';
-  keys.innerHTML = 'drag, two-finger swipe, or <kbd>←</kbd> <kbd>→</kbd>' +
+  keys.innerHTML = 'drag, <kbd>←</kbd> <kbd>→</kbd>, two-finger swipe or <kbd>Shift</kbd>+wheel' +
     ' &nbsp;·&nbsp; <kbd>Z</kbd> undo &nbsp;·&nbsp; <kbd>Enter</kbd> open';
   hint.appendChild(keys);
 }
@@ -5123,7 +5170,7 @@ loadClientId();
 setSwipeMode('triage'); // reflect the keep setting in the action labels/hint
 updateAccountChip();
 initKeepSwipe(); // enable swipe-left-to-mark-read on Keep rows
-initTrackpadSwipe(); // two-finger horizontal swipe on laptop trackpads
+initTrackpadSwipe(); // trackpad two-finger swipe and mouse Shift+wheel
 // Close the account menu when tapping outside it.
 document.addEventListener('click', e => {
   const menu = document.getElementById('account-menu');
