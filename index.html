@@ -1609,7 +1609,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v56'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v57'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3058,13 +3058,56 @@ function handleOAuthRedirect() {
   return false;
 }
 
+// Pulls the code, message and reason out of a gapi error in one shape, so
+// callers don't each have to dig through the three places they can hide.
+function apiErrorInfo(e) {
+  const err = (e && e.result && e.result.error) || {};
+  const first = (err.errors && err.errors[0]) || {};
+  return {
+    code: (e && e.status) || err.code || 0,
+    reason: first.reason || err.status || '',
+    message: err.message || (e && e.message) || 'Unknown error'
+  };
+}
+
+// Why the last getProfile failed, if it did. getProfile is a Gmail call, so it
+// fails for the same reasons a mail load does — but its failure is invisible
+// (the chip just keeps its stale address), which made a broken token look like
+// a working one. Recorded here so the load error can say so.
+let lastProfileError = null;
+
 async function loadUserInfo() {
   try {
     const res = await gapi.client.gmail.users.getProfile({ userId: 'me' });
     const email = res.result.emailAddress || '';
+    lastProfileError = null;
     updateAccountChip(email);
     return email;
-  } catch(e) { return ''; }
+  } catch(e) {
+    // Still returns '' — the caller's behaviour is unchanged — but no longer
+    // silently.
+    lastProfileError = apiErrorInfo(e);
+    console.warn('getProfile failed:', lastProfileError.code, lastProfileError.reason, lastProfileError.message);
+    return '';
+  }
+}
+
+// Turns a failed load into something that says what to do about it. The two
+// auth-shaped failures look identical to the user otherwise — the app appears
+// signed in and simply loads nothing.
+function describeFetchError(e) {
+  const { code, reason, message } = apiErrorInfo(e);
+  const both = reason + ' ' + message;
+  const who = activeEmail
+    ? ` (signed in as ${activeEmail}${lastProfileError ? ' — unconfirmed, Gmail could not read this account’s profile' : ''})`
+    : '';
+  if (code === 403 && /insufficient|scope|permission/i.test(both)) {
+    return `Gmail access wasn’t granted for this sign-in${who}. Sign out, then sign in again leaving the Gmail permission ticked.`;
+  }
+  if (code === 400 && /precondition/i.test(both)) {
+    return `Gmail refused this account${who}. It may have no Gmail mailbox — sign out, then sign in with your Gmail account.`;
+  }
+  return 'Error: ' + message;
 }
 
 // Updates the header account chip to reflect the given (or active) email.
@@ -3383,8 +3426,8 @@ async function fetchEmails() {
         setTimeout(() => signIn(), 1500);
       }
     } else {
-      const msg = e?.result?.error?.message || e?.message || 'Unknown error';
-      setStatus(false, 'Error: ' + msg);
+      console.error('fetchEmails failed:', apiErrorInfo(e));
+      setStatus(false, describeFetchError(e));
     }
   } finally {
     isFetching = false;
