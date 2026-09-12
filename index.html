@@ -1820,7 +1820,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v66'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v67'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1924,7 +1924,10 @@ let ttsRate = 1;
 let ttsAutoStart = false;
 let ttsSession = null;
 let ttsBackend = 'cloud';   // drops to 'device' for the session once cloud fails
-let ttsUsage = null;        // { month, chars } — progress against the free tier
+let ttsUsage = null;        // { month, chars } — this browser's own estimate
+// What the Worker reports when it's enforcing a monthly budget: authoritative,
+// and counts every device rather than just this one.
+let ttsBudget = null;       // { used, cap } or null when nothing is enforced
 // Background queue that caches kept emails for offline reading, most-recent
 // first, with limited concurrency so rapid keeps don't overwhelm the API.
 let cacheQueue = [];
@@ -5860,7 +5863,12 @@ async function ttsFetchChunk(text, retried) {
     // Google answers 429 both for a per-minute rate limit and for a spent
     // monthly allowance. The first clears in seconds — worth one wait before
     // deciding the good voice is gone.
-    if (res.status === 429 && !retried) {
+    // A spent monthly budget is refused with the same status as a rate limit,
+    // but waiting won't help and nor will the next email.
+    if (res.status === 429 && payload.error === 'monthly_cap') {
+      ttsBudget = { used: payload.used || 0, cap: payload.cap || TTS_FREE_CHARS };
+      renderTtsUsage();
+    } else if (res.status === 429 && !retried) {
       await new Promise(r => setTimeout(r, 1500));
       return ttsFetchChunk(text, true);
     }
@@ -5869,6 +5877,9 @@ async function ttsFetchChunk(text, retried) {
     err.detail = payload.detail || '';
     throw err;
   }
+  const monthChars = parseInt(res.headers.get('x-tts-month-chars') || '', 10);
+  const monthCap = parseInt(res.headers.get('x-tts-month-cap') || '', 10);
+  if (isFinite(monthChars) && isFinite(monthCap)) ttsBudget = { used: monthChars, cap: monthCap };
   recordTtsChars(parseInt(res.headers.get('x-tts-chars') || '0', 10) || text.length);
   const url = URL.createObjectURL(await res.blob());
   ttsMemo.set(key, url);
@@ -5899,7 +5910,8 @@ function ttsPrefetch(i) {
 // starts on the cloud again.
 function ttsSwitchToDevice(e) {
   if (!('speechSynthesis' in window)) return false;
-  const misconfigured = e && (e.status === 501 || e.status === 401 || e.status === 403);
+  const capped = e && e.message === 'monthly_cap';
+  const misconfigured = capped || (e && (e.status === 501 || e.status === 401 || e.status === 403));
   // The free-tier counter is about the Google voices, so it goes away with them.
   if (misconfigured) { ttsBackend = 'device'; renderTtsUsage(); }
   if (misconfigured || (e && (!e.status || e.status === 429))) { toast(ttsErrorMessage(e)); return true; }
@@ -5911,6 +5923,7 @@ function ttsErrorMessage(e) {
   if (e.status === 501) return 'Natural voice isn’t set up — using the device voice';
   if (e.status === 401) return 'Sign in again for the natural voice — using the device voice';
   if (e.status === 403) return 'Voice service refused the key — using the device voice';
+  if (e.message === 'monthly_cap') return 'Monthly voice budget spent — using the device voice';
   if (e.status === 429) return 'Google voice limit hit — device voice for this email';
   if (e.status === 413) return 'That passage was too long to speak';
   if (!e.status) return 'Voice service unreachable — using the device voice';
@@ -6303,6 +6316,7 @@ async function populateTtsVoices() {
     sel.disabled = false;
     ttsBackend = 'cloud';
     if (desc) desc.textContent = voices.length + ' natural voices available for ' + lang + '.';
+    loadTtsBudget();
   } catch(e) {
     ttsBackend = 'device';
     sel.innerHTML = '<option>Device voice</option>';
@@ -6346,12 +6360,40 @@ function renderTtsUsage() {
   const el = document.getElementById('tts-usage');
   if (!el) return;
   const month = new Date().toISOString().slice(0, 7);
-  const used = (ttsUsage && ttsUsage.month === month) ? ttsUsage.chars : 0;
-  if (!ttsEnabled || ttsBackend === 'device' || !used) { el.style.display = 'none'; return; }
-  const pct = Math.min(Math.round((used / TTS_FREE_CHARS) * 100), 999);
+  const local = (ttsUsage && ttsUsage.month === month) ? ttsUsage.chars : 0;
+  // The Worker's figure wins when there's one: it counts every device, and
+  // it's the number the cap is actually enforced against.
+  const used = ttsBudget ? ttsBudget.used : local;
+  const cap = ttsBudget ? ttsBudget.cap : TTS_FREE_CHARS;
+  // While the Google voices are in use this is a running total. Once they're
+  // not, it's only worth showing when the budget is the reason they aren't —
+  // a missing key makes the month's figure beside the point.
+  const spent = !!(ttsBudget && ttsBudget.used >= ttsBudget.cap);
+  if (!ttsEnabled || !used || (ttsBackend === 'device' && !spent)) {
+    el.style.display = 'none';
+    el.textContent = '';   // don't leave a stale figure sitting in the DOM
+    return;
+  }
+  const pct = Math.min(Math.round((used / cap) * 100), 999);
   el.style.display = '';
-  el.textContent = 'Spoken this month: ' + used.toLocaleString() + ' characters — about ' + pct +
-                   '% of Google’s monthly free allowance, as counted on this device.';
+  el.textContent = ttsBudget
+    ? 'Spoken this month: ' + used.toLocaleString() + ' of ' + cap.toLocaleString() +
+      ' characters (' + pct + '%), counted across every device.' +
+      (used >= cap ? ' Budget spent — the device voice takes over until next month.' : '')
+    : 'Spoken this month: ' + used.toLocaleString() + ' characters — about ' + pct +
+      '% of Google’s monthly free allowance, as counted on this device.';
+}
+
+// Asks the Worker where the month stands, so Settings shows a real figure
+// before anything has been spoken in this session.
+async function loadTtsBudget() {
+  try {
+    const res = await fetch('/api/tts/usage');
+    if (!res.ok) return;
+    const data = await res.json();
+    ttsBudget = data.enforced ? { used: data.used || 0, cap: data.cap || TTS_FREE_CHARS } : null;
+  } catch(e) { /* no budget reported — the local estimate stands */ }
+  renderTtsUsage();
 }
 
 // ── Bulk UI ────────────────────────────────────────────────

@@ -20,3 +20,20 @@ binding = "ASSETS"
 
 # The client SECRET is set as an encrypted secret, NOT here:
 #   npx wrangler secret put GOOGLE_CLIENT_SECRET
+
+# Monthly character budget for read-aloud (see AUTH-SETUP.md). The Worker
+# refuses to spend past the cap, counted across every device rather than
+# per-browser. Create the namespace, paste its id below, and uncomment:
+#
+#   npx wrangler kv namespace create TTS_BUDGET
+#
+# Leave it commented and nothing is enforced — the app falls back to its own
+# per-browser estimate, which is how it shipped.
+# [[kv_namespaces]]
+# binding = "TTS_BUDGET"
+# id = "paste-the-id-wrangler-printed"
+
+# Optional: override the monthly cap (default 950000, just under Google's
+# 1,000,000-character free allowance).
+# [vars]
+# TTS_MONTHLY_CHAR_CAP = "950000"
