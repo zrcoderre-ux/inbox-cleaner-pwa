@@ -118,7 +118,13 @@ project as the OAuth client:
 1. Enable **Cloud Text-to-Speech API**. Link a billing account if the console
    asks for one — the recurring free tier still sits behind a billing account,
    though nothing is charged inside the allowance.
-2. **APIs & Services → Credentials → Create credentials → API key.**
+2. **APIs & Services → Credentials → Create credentials → API key.** Not an
+   OAuth client ID — that's the credential in step 1 of the section above, and
+   it sits directly beneath this one in the same menu. Text-to-Speech reads
+   none of your data, so there's no user to authenticate: an API key just
+   identifies the project for billing. You'll get one opaque string starting
+   `AIzaSy`, with no secret and no redirect URIs. Leave the existing OAuth
+   client alone.
 3. Restrict the key: under **API restrictions** choose *Restrict key* and
    select only **Cloud Text-to-Speech API**. Leave application restrictions
    unset — the key is used server-side from the Worker, not from a browser.
