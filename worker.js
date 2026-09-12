@@ -26,6 +26,14 @@ const TTS_MAX_CHARS = 1000;
 // lists (Standard, and the older novelty voices) is the mechanical-sounding
 // tier this feature exists to avoid, so it's filtered out.
 const TTS_TIERS = ['Chirp3-HD', 'Chirp-HD', 'Studio', 'Neural2', 'Polyglot', 'Wavenet'];
+// Monthly character budget, enforced here so it holds across every device
+// instead of per-browser. Sits under Google's 1,000,000-character free
+// allowance: the margin covers both the counter's own imprecision (below) and
+// the fact that Google's month and this one may not end at the same instant.
+// Override with the TTS_MONTHLY_CHAR_CAP var; unset it and this applies.
+const TTS_DEFAULT_CAP = 950000;
+// Spent months are worth keeping briefly for a look back, not forever.
+const TTS_USAGE_TTL = 70 * 24 * 60 * 60;
 const DEFAULT_CLIENT_ID = '348956142337-6g3l76tuaqsl0f20rdbd0u5bhuag2c4g.apps.googleusercontent.com';
 const COOKIE_NAME = 'ic_rt';
 // Refresh tokens are long-lived; keep the cookie ~400 days (Chrome's max).
@@ -201,6 +209,13 @@ async function handleTts(request, env, url) {
     if (!text) return json({ error: 'missing_text' }, 400);
     if (text.length > TTS_MAX_CHARS) return json({ error: 'text_too_long', max: TTS_MAX_CHARS }, 413);
 
+    // Check the budget before spending any of it. Refusing here costs nothing;
+    // finding out from Google's bill costs money.
+    const usage = await ttsReadUsage(env);
+    if (usage && usage.used + text.length > usage.cap) {
+      return json({ error: 'monthly_cap', used: usage.used, cap: usage.cap }, 429);
+    }
+
     const name = typeof body.voice === 'string' ? body.voice : '';
     // "en-US-Chirp3-HD-Achernar" → "en-US". A name and its language have to
     // agree or the API rejects the pair.
@@ -222,18 +237,65 @@ async function handleTts(request, env, url) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.audioContent) return ttsUpstreamError(res, data);
 
-    return new Response(b64ToBytes(data.audioContent), {
-      headers: {
-        'content-type': 'audio/mpeg',
-        'cache-control': 'no-store',
-        // What this request cost against the monthly free tier, so the app can
-        // show the running total.
-        'x-tts-chars': String(text.length)
-      }
-    });
+    // Only spend the budget on audio actually delivered.
+    await ttsAddUsage(env, usage, text.length);
+
+    const headers = {
+      'content-type': 'audio/mpeg',
+      'cache-control': 'no-store',
+      // What this request cost against the monthly allowance.
+      'x-tts-chars': String(text.length)
+    };
+    // And where that leaves the month, so the app shows a figure covering
+    // every device rather than only this browser's share.
+    if (usage) {
+      headers['x-tts-month-chars'] = String(usage.used + text.length);
+      headers['x-tts-month-cap'] = String(usage.cap);
+    }
+    return new Response(b64ToBytes(data.audioContent), { headers });
+  }
+
+  if (path === '/api/tts/usage' && request.method === 'GET') {
+    const usage = await ttsReadUsage(env);
+    return json(usage ? { enforced: true, used: usage.used, cap: usage.cap }
+                      : { enforced: false });
   }
 
   return json({ error: 'not_found' }, 404);
+}
+
+// ── Monthly budget ─────────────────────────────────────────────────────────
+// Kept in KV under one key per calendar month. With no KV namespace bound the
+// budget simply isn't enforced and the app falls back to its own per-browser
+// estimate, so this is safe to deploy before the namespace exists.
+function ttsMonthKey() {
+  return 'chars:' + new Date().toISOString().slice(0, 7);
+}
+
+function ttsCap(env) {
+  const n = parseInt(env && env.TTS_MONTHLY_CHAR_CAP, 10);
+  return (isFinite(n) && n > 0) ? n : TTS_DEFAULT_CAP;
+}
+
+async function ttsReadUsage(env) {
+  if (!env || !env.TTS_BUDGET) return null;  // no namespace bound — not enforced
+  const key = ttsMonthKey();
+  let used = 0;
+  try { used = parseInt(await env.TTS_BUDGET.get(key), 10) || 0; } catch (e) {}
+  return { key, used, cap: ttsCap(env) };
+}
+
+// KV has no atomic increment, so two requests in flight can read the same
+// total and one of their additions is lost. The app sends at most two at once
+// (the playing chunk and the one fetched ahead), each at most TTS_MAX_CHARS,
+// so the drift is small and always an undercount — which is what the margin
+// under the free allowance is for. Exact accounting would want a Durable
+// Object; this is a budget, not a ledger.
+async function ttsAddUsage(env, state, n) {
+  if (!state || !n) return;
+  try {
+    await env.TTS_BUDGET.put(state.key, String(state.used + n), { expirationTtl: TTS_USAGE_TTL });
+  } catch (e) {}
 }
 
 function ttsVoiceTier(name) {

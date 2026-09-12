@@ -164,6 +164,40 @@ Two controls, which do different things:
 Also note the restrictions in step 1 do real work here: a key restricted to
 the Text-to-Speech API can't be spent on anything else.
 
+## Step 4 — Stop at the free allowance (optional)
+
+Steps 3's controls bound the *rate* and tell you after the fact. Neither can
+hold you inside the monthly free allowance, because no per-minute number can:
+1,000,000 characters spread over a month is 23 characters a minute, and the
+app needs about 1,200 just to speak continuously. The only thing that can is
+the Worker refusing to spend past a total, which is what this step adds.
+
+```sh
+npx wrangler kv namespace create TTS_BUDGET
+```
+
+Wrangler prints an id. Uncomment the `[[kv_namespaces]]` block in
+`wrangler.toml`, paste the id in, and commit — the deploy picks it up.
+
+From then on the Worker keeps a character total per calendar month and refuses
+requests that would pass the cap, answering before it calls Google so a refusal
+costs nothing. The app drops to the device voice for the rest of the month and
+says why. The default cap is 950,000, a little under Google's 1,000,000; set
+`TTS_MONTHLY_CHAR_CAP` in `wrangler.toml` to change it.
+
+Two things this buys beyond the in-app counter: the total covers **every
+device** rather than one browser's share, and it's a stop rather than a
+notice. Settings shows the Worker's figure once the namespace is bound.
+
+The margin under the allowance is doing real work. KV has no atomic
+increment, so two requests in flight can read the same total and one of their
+additions is lost. The app sends at most two at a time, so the drift is small
+and always an undercount — the 50,000-character gap absorbs it. Exact
+accounting would want a Durable Object; this is a budget, not a ledger.
+
+Leave the namespace uncreated and nothing is enforced: the Worker skips the
+whole mechanism and the app falls back to its own per-browser estimate.
+
 ## How it works
 
 - `/api/tts/voices` lists the good voice families for your language
@@ -179,6 +213,8 @@ the Text-to-Speech API can't be spent on anything else.
   re-synthesising, so changing pace costs nothing and never re-bills.
 - Chunks are remembered for the session, so replaying an email — or stepping
   back a sentence — doesn't spend the quota twice.
+- `/api/tts/usage` reports where the month stands, so Settings shows a real
+  figure before anything has been spoken in a session.
 
 ## Without the key
 
