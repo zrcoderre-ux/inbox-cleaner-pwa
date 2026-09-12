@@ -1,4 +1,4 @@
-const CACHE_NAME = 'inbox-cleaner-v52';
+const CACHE_NAME = 'inbox-cleaner-v65';
 const ASSETS = [
   '/',
   '/index.html',
@@ -29,6 +29,8 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   // Only handle same-origin requests; pass through Google API calls etc.
   if (!req.url.startsWith(self.location.origin)) return;
+  // The app's own API is live (and metered) — never answer it from the cache.
+  if (new URL(req.url).pathname.startsWith('/api/')) return;
 
   const isHTML = req.mode === 'navigate' ||
     (req.headers.get('accept') || '').includes('text/html');

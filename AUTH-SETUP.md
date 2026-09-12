@@ -92,3 +92,72 @@ map, and refresh requests pass the active account's email.
 Set `USE_REFRESH_BACKEND = false` and redeploy. The app returns to the implicit
 flow. The Worker's OAuth endpoints simply go unused (and return `501` if the
 secret isn't set), so they're harmless to leave deployed.
+
+---
+
+# Natural voices for read-aloud
+
+Settings → **Read emails aloud** puts a headphones button in the reader. With
+no extra setup it speaks with whatever voice the device has, which on iOS is
+usually the mechanical compact Siri voice. These steps switch it to Google
+Cloud Text-to-Speech's neural voices, proxied through the same Worker so the
+API key never reaches the browser.
+
+Google's published free allowance for the Chirp 3 HD voices is **1 million
+characters a month**, which is roughly 600–700 average emails read aloud — so
+ordinary use is likely to cost nothing. Confirm the current figures on
+[Google's pricing page](https://cloud.google.com/text-to-speech/pricing)
+before relying on them, and set a quota cap (step 3) so a surprise can't
+become a bill.
+
+## Step 1 — Enable the API and make a key
+
+In the [Google Cloud Console](https://console.cloud.google.com/), in the same
+project as the OAuth client:
+
+1. Enable **Cloud Text-to-Speech API**. (Billing must be enabled on the
+   project even to use the free tier.)
+2. **APIs & Services → Credentials → Create credentials → API key.**
+3. Restrict the key: under **API restrictions** choose *Restrict key* and
+   select only **Cloud Text-to-Speech API**. Leave application restrictions
+   unset — the key is used server-side from the Worker, not from a browser.
+
+## Step 2 — Give it to the Worker
+
+```sh
+npx wrangler secret put GOOGLE_TTS_API_KEY
+# paste the API key from step 1
+```
+
+Redeploy (`npx wrangler deploy`). The voice list in Settings fills in on the
+next load; pick any voice and it's remembered per browser.
+
+## Step 3 — Cap the quota
+
+**APIs & Services → Cloud Text-to-Speech API → Quotas**, and set a daily
+character limit near what you actually expect. This is the real backstop: it
+bounds the damage if the endpoint is ever found and hammered.
+
+## How it works
+
+- `/api/tts/voices` lists the good voice families for your language
+  (Chirp 3 HD, Studio, Neural2, WaveNet — the Standard tier is filtered out).
+- `/api/tts/speak` takes a chunk of cleaned-up email text and returns MP3.
+  The app plays it through an `<audio>` element, which is why playback keeps
+  going with the screen locked and shows up in the lock-screen controls.
+- Both routes require the request to be same-origin **and** to carry the
+  sign-in cookie from the OAuth flow above, so the quota isn't spendable by
+  anyone who merely finds the URL. With `USE_REFRESH_BACKEND = false` there is
+  no such cookie, and read-aloud falls back to the device voice.
+- Speed is applied with the audio element's `playbackRate`, not by
+  re-synthesising, so changing pace costs nothing and never re-bills.
+- Chunks are remembered for the session, so replaying an email — or stepping
+  back a sentence — doesn't spend the quota twice.
+
+## Without the key
+
+Everything above is optional. With no `GOOGLE_TTS_API_KEY` the routes answer
+`501`, the app says so in Settings, and read-aloud uses the device's own voice
+(which also covers offline reading). On iOS that voice is much better if you
+first download an Enhanced or Premium voice under **Settings → Accessibility
+→ Spoken Content → Voices**.
