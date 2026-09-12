@@ -1820,7 +1820,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v65'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v66'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5846,7 +5846,7 @@ async function ttsPlayIndex(i) {
 
 // One chunk of MP3 from the Worker, remembered for the session so stepping back
 // a sentence — or re-reading the email — doesn't spend the quota twice.
-async function ttsFetchChunk(text) {
+async function ttsFetchChunk(text, retried) {
   const key = ttsVoice + '|' + text;
   if (ttsMemo.has(key)) return ttsMemo.get(key);
   const res = await fetch('/api/tts/speak', {
@@ -5857,6 +5857,13 @@ async function ttsFetchChunk(text) {
   if (!res.ok) {
     let payload = {};
     try { payload = await res.json(); } catch(e) {}
+    // Google answers 429 both for a per-minute rate limit and for a spent
+    // monthly allowance. The first clears in seconds — worth one wait before
+    // deciding the good voice is gone.
+    if (res.status === 429 && !retried) {
+      await new Promise(r => setTimeout(r, 1500));
+      return ttsFetchChunk(text, true);
+    }
     const err = new Error(payload.error || ('http_' + res.status));
     err.status = res.status;
     err.detail = payload.detail || '';
@@ -5882,15 +5889,20 @@ function ttsPrefetch(i) {
   ttsFetchChunk(s.chunks[i]).catch(() => {});
 }
 
-// Whether to finish the email with the device's own voice. A missing key or a
-// spent quota means the good voice isn't coming back this session; a network
-// blip only means this one request failed.
+// Whether to finish the email with the device's own voice.
+//
+// A missing key or a refused one is a configuration problem: the good voice
+// isn't coming back until something changes, so the whole session gives up on
+// it. A 429 or a network blip is not — skipping fast enough to trip a
+// per-minute quota shouldn't cost the good voice for the rest of the evening,
+// so those drop to the device voice for this email only and the next one
+// starts on the cloud again.
 function ttsSwitchToDevice(e) {
   if (!('speechSynthesis' in window)) return false;
-  const permanent = e && (e.status === 501 || e.status === 401 || e.status === 403 || e.status === 429);
+  const misconfigured = e && (e.status === 501 || e.status === 401 || e.status === 403);
   // The free-tier counter is about the Google voices, so it goes away with them.
-  if (permanent) { ttsBackend = 'device'; renderTtsUsage(); }
-  if (permanent || (e && !e.status)) { toast(ttsErrorMessage(e)); return true; }
+  if (misconfigured) { ttsBackend = 'device'; renderTtsUsage(); }
+  if (misconfigured || (e && (!e.status || e.status === 429))) { toast(ttsErrorMessage(e)); return true; }
   return false;
 }
 
@@ -5899,7 +5911,7 @@ function ttsErrorMessage(e) {
   if (e.status === 501) return 'Natural voice isn’t set up — using the device voice';
   if (e.status === 401) return 'Sign in again for the natural voice — using the device voice';
   if (e.status === 403) return 'Voice service refused the key — using the device voice';
-  if (e.status === 429) return 'Google voice quota reached — using the device voice';
+  if (e.status === 429) return 'Google voice limit hit — device voice for this email';
   if (e.status === 413) return 'That passage was too long to speak';
   if (!e.status) return 'Voice service unreachable — using the device voice';
   return 'Couldn’t reach the voice service';
