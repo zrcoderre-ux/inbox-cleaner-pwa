@@ -129,6 +129,21 @@ project as the OAuth client:
    select only **Cloud Text-to-Speech API**. Leave application restrictions
    unset — the key is used server-side from the Worker, not from a browser.
 
+### If there's no "API key" option
+
+Plenty of organisations block API key creation by policy, and in that console
+the **Create credentials** menu offers only OAuth client ID and service
+account. Two things to try before giving up on the key:
+
+- Enable the **API Keys API**
+  (`console.cloud.google.com/apis/library/apikeys.googleapis.com`) and reload
+  the Credentials page — the option depends on it.
+- Check you hold **Owner**, **Editor**, or **API Keys Admin** on the project.
+
+If it's still missing, it's policy, and no amount of clicking will produce
+one. Use a service account instead — see the alternative below. The Worker
+supports both.
+
 ## Step 2 — Give it to the Worker
 
 ```sh
@@ -138,6 +153,30 @@ npx wrangler secret put GOOGLE_TTS_API_KEY
 
 Redeploy (`npx wrangler deploy`). The voice list in Settings fills in on the
 next load; pick any voice and it's remembered per browser.
+
+### Alternative: a service account
+
+Same result, a few more steps, and it works where API keys are blocked.
+
+1. **APIs & Services → Credentials → Create credentials → Service account.**
+   Name it anything; it needs **no project role at all** — the Text-to-Speech
+   API is enabled per project, not granted per principal, so an unroled
+   account can still synthesise. Skip the optional grant steps.
+2. Open it → **Keys → Add key → Create new key → JSON**. A file downloads.
+3. Hand the whole file to the Worker, contents and all:
+
+   ```sh
+   npx wrangler secret put GOOGLE_TTS_SA_KEY < ~/Downloads/that-file.json
+   ```
+
+   Or paste the entire JSON into the dashboard's secret field. It must be the
+   complete document, `{` to `}`, private key included.
+
+The Worker signs a JWT with that key and trades it for an hour-long access
+token, cached between requests. If both credentials are set the API key wins.
+
+Treat the JSON as a password: it grants synthesis on your project to anyone
+holding it. Delete the downloaded file once the secret is set.
 
 ## Step 3 — Guard the spend
 
@@ -205,6 +244,9 @@ whole mechanism and the app falls back to its own per-browser estimate.
 - `/api/tts/speak` takes a chunk of cleaned-up email text and returns MP3.
   The app plays it through an `<audio>` element, which is why playback keeps
   going with the screen locked and shows up in the lock-screen controls.
+- Authentication is an API key on the query string, or a service-account JWT
+  exchanged for a Bearer token — whichever is configured. Either way the
+  credential stays on the server and never reaches the browser.
 - Both routes require the request to be same-origin **and** to carry the
   sign-in cookie from the OAuth flow above, so the quota isn't spendable by
   anyone who merely finds the URL. With `USE_REFRESH_BACKEND = false` there is
@@ -218,8 +260,8 @@ whole mechanism and the app falls back to its own per-browser estimate.
 
 ## Without the key
 
-Everything above is optional. With no `GOOGLE_TTS_API_KEY` the routes answer
-`501`, the app says so in Settings, and read-aloud uses the device's own voice
+Everything above is optional. With neither `GOOGLE_TTS_API_KEY` nor
+`GOOGLE_TTS_SA_KEY` the routes answer `501`, the app says so in Settings, and read-aloud uses the device's own voice
 (which also covers offline reading). On iOS that voice is much better if you
 first download an Enhanced or Premium voice under **Settings → Accessibility
 → Spoken Content → Voices**.

@@ -172,13 +172,12 @@ async function handleOAuth(request, env, url) {
 }
 
 // ── Text-to-speech proxy ───────────────────────────────────────────────────
-// Google Cloud Text-to-Speech, called with an API key that stays on the server.
-// The app sends a chunk of cleaned-up email text and gets MP3 back. Without
-// GOOGLE_TTS_API_KEY set this answers 501 and the app falls back to whatever
-// voice the device has.
+// Google Cloud Text-to-Speech, called with a credential that stays on the
+// server. The app sends a chunk of cleaned-up email text and gets MP3 back.
+// With neither credential set this answers 501 and the app falls back to
+// whatever voice the device has.
 async function handleTts(request, env, url) {
-  const key = env && env.GOOGLE_TTS_API_KEY;
-  if (!key) return json({ error: 'not_configured' }, 501);
+  if (!ttsHasCredential(env)) return json({ error: 'not_configured' }, 501);
 
   // This endpoint spends a metered quota, so it's for this app only: same
   // origin, and only for someone who actually has a session here. The sign-in
@@ -189,9 +188,16 @@ async function handleTts(request, env, url) {
 
   const path = url.pathname.replace(/\/+$/, '');
 
+  // Minting a service-account token can fail on its own (a malformed key, a
+  // clock problem, Google refusing the assertion). Treat that like a refused
+  // key: the app drops to the device voice and says so.
+  let auth;
+  try { auth = await ttsAuth(env); }
+  catch (e) { return json({ error: 'credential_failed', detail: String(e && e.message || e) }, 403); }
+
   if (path === '/api/tts/voices' && request.method === 'GET') {
     const lang = url.searchParams.get('languageCode') || 'en-US';
-    const res = await fetch(`${TTS_VOICES_URL}?languageCode=${encodeURIComponent(lang)}&key=${key}`);
+    const res = await fetch(ttsUrl(TTS_VOICES_URL, auth, { languageCode: lang }), { headers: auth.headers });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return ttsUpstreamError(res, data);
     const voices = (data.voices || [])
@@ -225,9 +231,9 @@ async function handleTts(request, env, url) {
     // No speakingRate here on purpose: the app changes speed with the audio
     // element's playbackRate, so one synthesis serves every speed (and not
     // every voice family accepts the parameter).
-    const res = await fetch(`${TTS_SYNTH_URL}?key=${key}`, {
+    const res = await fetch(ttsUrl(TTS_SYNTH_URL, auth), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...auth.headers },
       body: JSON.stringify({
         input: { text },
         voice: name ? { languageCode, name } : { languageCode },
@@ -262,6 +268,99 @@ async function handleTts(request, env, url) {
   }
 
   return json({ error: 'not_found' }, 404);
+}
+
+// ── Credentials ────────────────────────────────────────────────────────────
+// An API key is the simplest way in, but plenty of organisations block API key
+// creation by policy — in that console the Credentials page offers only OAuth
+// clients and service accounts. So a service account works too: the Worker
+// signs a JWT with its private key and trades that for an access token.
+//
+// GOOGLE_TTS_API_KEY wins if both are set. GOOGLE_TTS_SA_KEY is the downloaded
+// service-account JSON, pasted in whole.
+const TTS_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
+// Access tokens last an hour. The isolate outlives a single request, so
+// caching one here saves a round trip on nearly every call.
+let ttsTokenCache = null;   // { token, expires }
+
+function ttsHasCredential(env) {
+  return !!(env && (env.GOOGLE_TTS_API_KEY || env.GOOGLE_TTS_SA_KEY));
+}
+
+async function ttsAuth(env) {
+  if (env && env.GOOGLE_TTS_API_KEY) return { key: env.GOOGLE_TTS_API_KEY, headers: {} };
+  const token = await ttsAccessToken(env.GOOGLE_TTS_SA_KEY);
+  return { key: '', headers: { authorization: 'Bearer ' + token } };
+}
+
+function ttsUrl(base, auth, params) {
+  const u = new URL(base);
+  Object.keys(params || {}).forEach(k => u.searchParams.set(k, params[k]));
+  if (auth.key) u.searchParams.set('key', auth.key);
+  return u.toString();
+}
+
+async function ttsAccessToken(raw) {
+  // Validate before consulting the cache, and tie the cache to the account it
+  // was minted for: swapping the credential should take effect at once rather
+  // than whenever the old token happens to expire.
+  let sa;
+  try { sa = JSON.parse(raw); } catch (e) { throw new Error('service account JSON is not valid JSON'); }
+  if (!sa.client_email || !sa.private_key) throw new Error('service account JSON is missing client_email or private_key');
+
+  const now = Math.floor(Date.now() / 1000);
+  if (ttsTokenCache && ttsTokenCache.issuer === sa.client_email && ttsTokenCache.expires > now + 60) {
+    return ttsTokenCache.token;
+  }
+
+  const aud = sa.token_uri || TOKEN_ENDPOINT;
+  const assertion = await ttsSignJwt(
+    { iss: sa.client_email, scope: TTS_SCOPE, aud, iat: now, exp: now + 3600 },
+    sa.private_key
+  );
+  const res = await fetch(aud, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion
+    }).toString()
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.access_token) {
+    throw new Error(data.error_description || data.error || 'token exchange failed');
+  }
+  ttsTokenCache = {
+    token: data.access_token,
+    expires: now + (parseInt(data.expires_in, 10) || 3600),
+    issuer: sa.client_email
+  };
+  return ttsTokenCache.token;
+}
+
+function b64url(bytes) {
+  let bin = '';
+  const arr = new Uint8Array(bytes);
+  for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function ttsSignJwt(claims, privateKeyPem) {
+  const enc = new TextEncoder();
+  const head = b64url(enc.encode(JSON.stringify({ alg: 'RS256', typ: 'JWT' })));
+  const body = b64url(enc.encode(JSON.stringify(claims)));
+  const signingInput = head + '.' + body;
+  const key = await crypto.subtle.importKey(
+    'pkcs8', pemToDer(privateKeyPem),
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, enc.encode(signingInput));
+  return signingInput + '.' + b64url(sig);
+}
+
+function pemToDer(pem) {
+  const body = String(pem).replace(/-----[^-]*-----/g, '').replace(/\s+/g, '');
+  return b64ToBytes(body).buffer;
 }
 
 // ── Monthly budget ─────────────────────────────────────────────────────────
