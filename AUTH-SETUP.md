@@ -137,11 +137,20 @@ next load; pick any voice and it's remembered per browser.
 
 Two controls, which do different things:
 
-- **IAM & Admin → Quotas**, filtered to *Cloud Text-to-Speech API*. Lower any
-  per-minute request or character quota you're allowed to edit. This is the
-  one that hard-stops, so it's what bounds the damage if the endpoint is ever
-  found and hammered. (The quotas here are per-minute, not per-day — there's
-  no monthly ceiling to set.)
+- **IAM & Admin → Quotas**, filtered to *Cloud Text-to-Speech API*. Set the
+  per-minute request quota to **60**. Listening to an email steadily is about
+  2 requests a minute — one 700-character chunk every 30–45 seconds, plus one
+  fetched ahead — and even holding down skip only reaches ~20, so 60 is
+  roughly triple the worst honest minute.
+
+  This is the quota that hard-stops, so it's what bounds a runaway. Be clear
+  about what it does and doesn't do, though: it caps the *rate*, not the
+  month. Paired with the Worker's 1000-character request cap, 60 requests a
+  minute is a ceiling of 60,000 characters a minute — far more than a month's
+  free allowance if something ran at that rate unattended. Its real job is to
+  keep abuse slow enough that the budget alert below reaches you first.
+  (The quotas here are per-minute, not per-day; there's no monthly ceiling to
+  set.)
 - **Billing → Budgets & alerts**, scoped to this project, with alerts at
   50/90/100% of a few dollars. This only notifies; it doesn't stop anything,
   but it's what catches slow drift past the free allowance.

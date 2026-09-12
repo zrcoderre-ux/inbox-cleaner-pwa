@@ -17,10 +17,11 @@
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const TTS_SYNTH_URL = 'https://texttospeech.googleapis.com/v1/text:synthesize';
 const TTS_VOICES_URL = 'https://texttospeech.googleapis.com/v1/voices';
-// Google caps a synthesize request at 5000 bytes of input. The app chunks a
-// sentence or two at a time, so anything near this is a bug — or someone else
-// spending the quota.
-const TTS_MAX_CHARS = 2000;
+// The app never sends more than TTS_CHUNK_CHARS (700) in one request, so this
+// sits just above real traffic rather than at Google's own 5000-byte ceiling:
+// it's the per-request half of the spend limit, and the project's per-minute
+// quota is the other half. The two multiply, so keeping this tight matters.
+const TTS_MAX_CHARS = 1000;
 // Voice families worth offering, best-sounding first. Anything else Google
 // lists (Standard, and the older novelty voices) is the mechanical-sounding
 // tier this feature exists to avoid, so it's filtered out.
