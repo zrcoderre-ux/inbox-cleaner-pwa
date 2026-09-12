@@ -140,8 +140,27 @@ account. Two things to try before giving up on the key:
   the Credentials page — the option depends on it.
 - Check you hold **Owner**, **Editor**, or **API Keys Admin** on the project.
 
-If it's still missing, it's policy, and no amount of clicking will produce
-one. Use a service account instead — see the alternative below. The Worker
+If the console says an **organization policy** blocks it, note what that
+implies: a personal Google account can't have an organization at all, so that
+project belongs to a work or Workspace account rather than a personal one.
+Changing the policy needs Organization Policy Administrator at the
+organization level — not project Owner — and relaxing an employer's security
+posture for this isn't the right move anyway. The same applies if the
+service-account path below is blocked instead: new organizations enforce
+`constraints/iam.disableServiceAccountKeyCreation` by default, which stops the
+JSON key download.
+
+The way past it is a **separate project with no organization**, not a policy
+change. The voice credential doesn't have to share a project with the OAuth
+client — nothing links them:
+
+1. Sign in to the console with the personal account (a separate browser
+   profile helps; signing in as the wrong account is the quiet failure here).
+2. Create a project and confirm it reads *No organization*.
+3. Enable the Text-to-Speech API on it and link billing.
+4. Create the key there. With no organization, no policy can refuse it.
+
+Otherwise a service account works too — see the alternative below. The Worker
 supports both.
 
 ## Step 2 — Give it to the Worker
