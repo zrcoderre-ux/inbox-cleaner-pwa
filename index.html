@@ -756,6 +756,23 @@ body {
   color: var(--text-1, #202124);
 }
 .reader-close svg { width: 18px; height: 18px; }
+/* Read-aloud lives opposite the close button, so the header keeps its shape. */
+.reader-listen {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: var(--surface-3, #f1f3f4);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  color: var(--text-1, #202124);
+}
+.reader-listen.available { display: flex; }
+.reader-listen.speaking { background: var(--red, #d93025); color: #fff; }
+.reader-listen svg { width: 18px; height: 18px; }
 .reader-header-info {
   flex: 1;
   min-width: 0;
@@ -903,6 +920,86 @@ body {
 }
 .ras-toggle svg { width: 16px; height: 16px; }
 .reader-autoscroll.dragging { cursor: grabbing; }
+
+/* The read-aloud player. Same look as the auto-scroll pill, but it stays put:
+   the two never show at once, so it can own the bottom of the reader. */
+.reader-tts {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  background: rgba(20,20,20,0.82);
+  color: #fff;
+  border-radius: 26px;
+  z-index: 6;
+  max-width: calc(100% - 24px);
+  box-shadow: 0 4px 18px rgba(0,0,0,0.3);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+.reader-tts.open { display: flex; }
+.rtts-btn {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255,255,255,0.16);
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+.rtts-btn svg { width: 15px; height: 15px; }
+.rtts-btn.primary { width: 34px; height: 34px; background: rgba(255,255,255,0.28); }
+.rtts-btn.primary svg { width: 17px; height: 17px; }
+.rtts-progress {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+.rtts-rate {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  border: none;
+  border-radius: 12px;
+  padding: 5px 8px;
+  background: rgba(255,255,255,0.16);
+  color: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+/* Which voice is actually talking — only worth saying when it isn't the good
+   one, so a fallback doesn't look like the feature is broken. */
+.rtts-note {
+  font-family: var(--sans);
+  font-size: 11px;
+  opacity: 0.7;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tts-usage { margin-top: 8px; font-size: 11px; color: var(--text-3); line-height: 1.5; }
+.tts-voice-select {
+  font-family: var(--sans);
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-mid);
+  background: var(--surface, #fff);
+  color: var(--text-1, #202124);
+  max-width: 190px;
+  flex-shrink: 0;
+}
 /* Almost every part of the pill is a control, so it gets a grip of its own. */
 .ras-grip {
   width: 10px;
@@ -1522,6 +1619,35 @@ body {
               </span>
               <input type="range" id="autoscroll-wpm" min="100" max="600" step="10" value="250" oninput="setAutoScrollWpm(this.value)">
             </div>
+            <label class="setting-row">
+              <span class="setting-text">
+                <span class="setting-title">Read emails aloud</span>
+                <span class="setting-desc">Puts a headphones button in the reader. Uses a natural Google voice when the server key is set up, and the device's own voice otherwise. Playback keeps going with the screen locked.</span>
+              </span>
+              <input type="checkbox" id="tts-enabled" onchange="setTtsEnabled(this.checked)">
+            </label>
+            <div class="setting-row setting-slider" id="tts-voice-row" style="display:none;">
+              <span class="setting-text">
+                <span class="setting-title">Voice</span>
+                <span class="setting-desc" id="tts-voice-desc">Loading voices…</span>
+              </span>
+              <select class="tts-voice-select" id="tts-voice" onchange="setTtsVoice(this.value)" aria-label="Reading voice"></select>
+            </div>
+            <div class="setting-row setting-slider" id="tts-rate-row" style="display:none;">
+              <span class="setting-text">
+                <span class="setting-title">Speaking speed</span>
+                <span class="setting-desc"><span id="tts-rate-label">1.0</span>&times; normal pace</span>
+              </span>
+              <input type="range" id="tts-rate" min="0.7" max="1.8" step="0.05" value="1" oninput="setTtsRate(this.value)">
+            </div>
+            <label class="setting-row" id="tts-auto-row" style="display:none;">
+              <span class="setting-text">
+                <span class="setting-title">Start reading when an email opens</span>
+                <span class="setting-desc">Begins speaking as soon as the body loads, instead of waiting for the headphones button.</span>
+              </span>
+              <input type="checkbox" id="tts-autostart" onchange="setTtsAutoStart(this.checked)">
+            </label>
+            <div class="tts-usage" id="tts-usage" style="display:none;"></div>
             <div class="app-version" id="app-version"></div>
           </div>
         </div>
@@ -1637,6 +1763,9 @@ body {
       <div class="reader-subject" id="reader-subject"></div>
       <div class="reader-sender" id="reader-sender"></div>
     </div>
+    <button class="reader-listen" id="reader-listen" onclick="toggleReadAloud()" aria-label="Read aloud">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-3a8 8 0 0 1 16 0v3"/><path d="M4 14a2 2 0 0 1 2-2h1v6H6a2 2 0 0 1-2-2zM20 14a2 2 0 0 0-2-2h-1v6h1a2 2 0 0 0 2-2z"/></svg>
+    </button>
   </div>
   <div class="reader-body" id="reader-body"></div>
   <div class="reader-autoscroll" id="reader-autoscroll">
@@ -1644,6 +1773,21 @@ body {
     <button class="ras-toggle" id="ras-toggle" onclick="toggleAutoScrollRun()" aria-label="Pause auto-scroll"></button>
     <input type="range" class="ras-slider" id="ras-slider" min="100" max="600" step="10" value="250" oninput="setAutoScrollWpm(this.value)" aria-label="Reading speed">
     <span class="ras-wpm" id="ras-wpm-label">250 wpm</span>
+  </div>
+  <div class="reader-tts" id="reader-tts">
+    <button class="rtts-btn" onclick="ttsSkip(-1)" aria-label="Previous sentence">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 6h2v12H7zM19 6v12l-9-6z"/></svg>
+    </button>
+    <button class="rtts-btn primary" id="rtts-toggle" onclick="ttsTogglePlay()" aria-label="Pause"></button>
+    <button class="rtts-btn" onclick="ttsSkip(1)" aria-label="Next sentence">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 6h2v12h-2zM5 6l9 6-9 6z"/></svg>
+    </button>
+    <span class="rtts-progress" id="rtts-progress"></span>
+    <button class="rtts-rate" id="rtts-rate" onclick="cycleTtsRate()" aria-label="Speaking speed">1&times;</button>
+    <span class="rtts-note" id="rtts-note"></span>
+    <button class="rtts-btn" onclick="stopReadAloud()" aria-label="Stop reading">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
   </div>
 </div>
 
@@ -1676,7 +1820,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v64'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v65'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1770,6 +1914,17 @@ let asState = null;
 // Where the reader's speed pill was last dragged to, as fractions of the free
 // space in the reader, so it lands in the same place on any screen size.
 let asPillPos = null;
+// Read-aloud. The email is cleaned up, split into sentence-sized chunks, and
+// spoken either by Google's neural voices (through the Worker, which holds the
+// API key) or — when that isn't configured, reachable or paid for — by whatever
+// voice the device itself has. ttsSession holds the running playback.
+let ttsEnabled = false;
+let ttsVoice = '';          // a Google voice name, e.g. en-US-Chirp3-HD-Achernar
+let ttsRate = 1;
+let ttsAutoStart = false;
+let ttsSession = null;
+let ttsBackend = 'cloud';   // drops to 'device' for the session once cloud fails
+let ttsUsage = null;        // { month, chars } — progress against the free tier
 // Background queue that caches kept emails for offline reading, most-recent
 // first, with limited concurrency so rapid keeps don't overwhelm the API.
 let cacheQueue = [];
@@ -5169,6 +5324,9 @@ async function openReader(email, opts = {}) {
   renderSubjectSuggestions();
   readerEmail = email;
   if (readerRO) { readerRO.disconnect(); readerRO = null; }
+  stopReadAloud({ silent: true }); // stop speaking a previously-open email
+  ttsShowBar(false);
+  updateListenButton();
   stopAutoScrollEngine(); // cancel any scroll from a previously-open email
   const asPill = document.getElementById('reader-autoscroll');
   if (asPill) asPill.style.display = 'none';
@@ -5252,8 +5410,11 @@ async function openReader(email, opts = {}) {
         try { doc.addEventListener('keydown', autoScrollSpeedKey); } catch(_) {}
         if (showFooter) watchScrollForFooter(scroller, win, win, doc, email);
         // Auto-scroll needs same-origin access to the iframe doc (present here).
-        if (autoScrollEnabled && doc) {
+        if (autoScrollEnabled && doc && !ttsWillAutoStart()) {
           setTimeout(() => { if (readerEmail === email) startAutoScroll(scroller, doc); }, 500);
+        }
+        if (ttsWillAutoStart()) {
+          setTimeout(() => { if (readerEmail === email) startReadAloud(email); }, 400);
         }
       } catch(e) {
         if (showFooter) revealReaderFooter(email); // can't watch scroll — just show it
@@ -5268,8 +5429,11 @@ async function openReader(email, opts = {}) {
     el.textContent = email.bodyText || '(no content)';
     try { linkFootnotes(el, null); } catch(_) {}
     if (showFooter) watchScrollForFooter(el, el, window, document, email);
-    if (autoScrollEnabled) {
+    if (autoScrollEnabled && !ttsWillAutoStart()) {
       setTimeout(() => { if (readerEmail === email) startAutoScroll(el, null); }, 400);
+    }
+    if (ttsWillAutoStart()) {
+      setTimeout(() => { if (readerEmail === email) startReadAloud(email); }, 300);
     }
   }
 }
@@ -5325,6 +5489,7 @@ function revealReaderFooter(email) {
   pauseAutoScroll();
   const pill = document.getElementById('reader-autoscroll');
   if (pill) pill.style.display = 'none';
+  ttsShowBar(false);
   const footer = document.createElement('div');
   footer.className = 'reader-footer';
   footer.innerHTML = '<div class="reader-footer-hint">Done reading?</div>' +
@@ -5344,6 +5509,7 @@ function removeReaderFooter() {
     const pill = document.getElementById('reader-autoscroll');
     if (pill) { pill.style.display = 'flex'; applyAutoScrollPos(); }
   }
+  if (ttsSession) ttsShowBar(true);
   return true;
 }
 
@@ -5413,6 +5579,8 @@ function closeReader() {
   document.body.style.overflow = '';
   setReaderZoom(false); // restore the no-zoom lock (and reset any zoom)
   removeReaderFooter();
+  stopReadAloud({ silent: true });
+  ttsShowBar(false);
   stopAutoScrollEngine();
   const pill = document.getElementById('reader-autoscroll');
   if (pill) pill.style.display = 'none';
@@ -5430,6 +5598,8 @@ window.addEventListener('keydown', e => {
   const overlay = document.getElementById('reader-overlay');
   if (overlay && overlay.classList.contains('open')) {
     if (e.key === 'Escape') { if (fnPopup) hideFootnote(true); else closeReader(); }
+    // Space is the play/pause anyone reaches for while something is speaking.
+    else if (ttsSession && (e.key === ' ' || e.key === 'Spacebar')) { e.preventDefault(); ttsTogglePlay(); }
     else autoScrollSpeedKey(e); // ← / → set the reading pace
     return;
   }
@@ -5444,6 +5614,733 @@ window.addEventListener('keydown', e => {
   else if (e.key === 'ArrowUp' || e.key === 'Up' || k === 'z' || k === 'u') { e.preventDefault(); undoSwipe(); }
   else if (e.key === 'Enter' || k === 'o') { e.preventDefault(); openInGmail(); }
 });
+
+// ── Read aloud (text-to-speech) ────────────────────────────
+// Mail is written to be looked at, not listened to. Most of what follows is
+// about that gap: quoted reply chains, signature blocks, unsubscribe footers
+// and tracking URLs all read aloud as noise, and stripping them does more for
+// how this sounds than the choice of voice does.
+
+// Roughly a paragraph per request: small enough that the first words start
+// quickly and a skip lands somewhere useful, big enough that the voice keeps
+// its sentence-to-sentence rhythm.
+const TTS_CHUNK_CHARS = 700;
+const TTS_RATES = [0.8, 1, 1.15, 1.35, 1.6];
+// Google publishes a monthly free allowance for the Chirp 3 HD voices; the
+// counter below is a local estimate of how much of it has gone.
+const TTS_FREE_CHARS = 1000000;
+// A frame of silence. Playing it on the tap that starts reading unlocks the
+// audio element, so the real chunk can start later (iOS only allows playback
+// that a gesture began, and fetching the audio outlasts the gesture).
+const TTS_SILENCE = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=';
+// Stands in for an abbreviation's full stop while sentences are split, so
+// "Dr. Chen called." doesn't come apart in the middle.
+const TTS_DOT = '\u0001';
+
+let ttsAudio = null;
+let ttsMemo = new Map();    // voice|text → object URL, so a re-listen is free
+let ttsSyncTimer = null;
+let ttsKeepTimer = null;
+let ttsDeviceVoices = [];
+
+// ── Preparing the text ─────────────────────────────────────
+// Truncates at the earliest of these markers — whatever follows is the part of
+// the mail nobody wants read to them.
+function ttsCutAt(text, patterns) {
+  let idx = -1;
+  patterns.forEach(re => {
+    const m = text.match(re);
+    if (m && m.index != null && m.index > 0 && (idx === -1 || m.index < idx)) idx = m.index;
+  });
+  return idx > 0 ? text.slice(0, idx) : text;
+}
+
+// Marketing mail ends in a slab of unsubscribe, preferences and legal text.
+// Only the tail counts: the same words halfway up are part of the message.
+const TTS_FOOTER_RE = /\b(unsubscribe|manage (?:your )?(?:email )?preferences|update your preferences|view (?:this|it) (?:as a web page|in (?:your )?browser)|privacy policy|you(?:'re| are)? receiv(?:ed|ing) this (?:email|message)|all rights reserved)\b/i;
+function ttsCutFooter(text) {
+  const lines = text.split('\n');
+  for (let i = Math.floor(lines.length * 0.5); i < lines.length; i++) {
+    if (lines[i].length < 200 && TTS_FOOTER_RE.test(lines[i])) return lines.slice(0, i).join('\n');
+  }
+  return text;
+}
+
+function cleanForSpeech(raw) {
+  let t = String(raw || '').replace(/\r\n?/g, '\n');
+  t = t.replace(/[\u200B-\u200D\uFEFF\u00AD]/g, '');   // zero-width padding
+  t = ttsCutAt(t, [
+    /^\s*On\b[\s\S]{5,200}?\bwrote:\s*$/m,             // Gmail-style quote header
+    /^\s*-{2,}\s*Original Message\s*-{2,}\s*$/im,
+    /^\s*-{2,}\s*Forwarded message\s*-{2,}\s*$/im,
+    /^\s*From:\s.*\n\s*(?:Sent|Date):\s/m              // Outlook-style chain
+  ]);
+  t = t.split('\n').filter(l => !/^\s*>/.test(l)).join('\n');
+  t = ttsCutAt(t, [/^\s*--\s*$/m]);                    // signature block
+  t = ttsCutFooter(t);
+  t = t.replace(/\b(?:https?:\/\/|www\.)\S+/gi, ' (link) ');
+  t = t.replace(/<[^<>\s@]+@[^<>\s@]+>/g, ' ');        // bare <addr> after a name
+  t = t.split('\n')
+       .map(l => l.replace(/^[\s*·•\-–—=_~#|]+/, '').replace(/[\s*=_~|]+$/, '').trim())
+       .filter(l => l && /[A-Za-z0-9]/.test(l))        // rules, spacers, emoji-only
+       .join('\n');
+  return t.replace(/[ \t]{2,}/g, ' ').replace(/\n{2,}/g, '\n').trim();
+}
+
+// Abbreviations whose full stop doesn't end a sentence.
+const TTS_ABBREV = /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Inc|Ltd|Co|Corp|Dept|Approx|No|vs|etc|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec|e\.g|i\.e|a\.m|p\.m|U\.S|U\.K)\.(?=\s)/gi;
+
+function splitSentences(text) {
+  const masked = String(text || '').replace(TTS_ABBREV, m => m.replace(/\./g, TTS_DOT));
+  const out = [];
+  masked.split('\n').forEach(line => {
+    // Runs of text up to a terminator (or the end of the line). The leading
+    // [^.!?]+ can't match empty, so this always advances.
+    const re = /[^.!?]+(?:[.!?]+["')\]]*|$)/g;
+    let m;
+    while ((m = re.exec(line)) !== null) {
+      const sentence = m[0].split(TTS_DOT).join('.').trim();
+      if (!sentence) continue;
+      // A break before a digit or a lowercase word wasn't the end of a
+      // sentence — "Sept. 14", "No. 3", an initial. Put it back together.
+      if (out.length && /^[0-9a-z]/.test(sentence)) out[out.length - 1] += ' ' + sentence;
+      else out.push(sentence);
+    }
+  });
+  return out;
+}
+
+// A sentence past the per-request budget is broken at a comma, then at a space,
+// rather than being refused by the Worker.
+function splitLongSentence(s) {
+  const parts = [];
+  let rest = s;
+  while (rest.length > TTS_CHUNK_CHARS) {
+    let cut = rest.lastIndexOf(', ', TTS_CHUNK_CHARS - 1);
+    if (cut < TTS_CHUNK_CHARS * 0.4) cut = rest.lastIndexOf(' ', TTS_CHUNK_CHARS - 1);
+    if (cut < 1) cut = TTS_CHUNK_CHARS - 1;
+    parts.push(rest.slice(0, cut + 1).trim());
+    rest = rest.slice(cut + 1);
+  }
+  if (rest.trim()) parts.push(rest.trim());
+  return parts;
+}
+
+function chunkSentences(sentences) {
+  const chunks = [];
+  let cur = '';
+  sentences.forEach(s => {
+    if (s.length > TTS_CHUNK_CHARS) {
+      if (cur) { chunks.push(cur); cur = ''; }
+      splitLongSentence(s).forEach(p => chunks.push(p));
+      return;
+    }
+    if (cur && cur.length + s.length + 1 > TTS_CHUNK_CHARS) { chunks.push(cur); cur = ''; }
+    cur = cur ? cur + ' ' + s : s;
+  });
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
+function buildSpeech(email) {
+  const from = parseSender(email.sender || '');
+  const who = from.name || from.addr || 'an unknown sender';
+  const preamble = 'From ' + who + '. Subject: ' + (email.subject || 'no subject') + '.';
+  const source = email.bodyText || (email.bodyHtml ? htmlToText(email.bodyHtml) : '');
+  const body = cleanForSpeech(source);
+  const chunks = chunkSentences([preamble].concat(splitSentences(body)));
+  // How much of the email on screen is actually being spoken. The page is
+  // scrolled against this, so a mail that's half quoted history doesn't race
+  // to the bottom while the voice is still near the top.
+  const coverage = source.length ? Math.min(body.length / source.length, 1) : 1;
+  return { chunks, coverage };
+}
+
+// ── Playback ───────────────────────────────────────────────
+function ttsAudioEl() {
+  if (ttsAudio) return ttsAudio;
+  ttsAudio = new Audio();
+  ttsAudio.preload = 'auto';
+  // Speed changes shouldn't raise the pitch into chipmunk territory.
+  ['preservesPitch', 'mozPreservesPitch', 'webkitPreservesPitch'].forEach(p => {
+    try { ttsAudio[p] = true; } catch(e) {}
+  });
+  ttsAudio.addEventListener('ended', () => { if (ttsSession) ttsPlayIndex(ttsSession.i + 1); });
+  return ttsAudio;
+}
+
+// Must run inside the click that starts reading: once an element has played
+// under a gesture, later programmatic play() calls on it are allowed.
+function ttsUnlockAudio() {
+  try {
+    const a = ttsAudioEl();
+    if (a._unlocked) return;
+    a._unlocked = true;
+    a.src = TTS_SILENCE;
+    const p = a.play();
+    if (p && p.catch) p.catch(() => { a._unlocked = false; });
+  } catch(e) {}
+}
+
+// Read-aloud takes the reader's scroll from auto-scroll, but only when it's
+// actually going to start — a leftover auto-start setting with read-aloud
+// switched off must not leave the reader with neither.
+function ttsWillAutoStart() {
+  return !!(ttsEnabled && ttsAutoStart);
+}
+
+function toggleReadAloud() {
+  if (ttsSession) { stopReadAloud(); return; }
+  ttsUnlockAudio();
+  startReadAloud(readerEmail);
+}
+
+async function startReadAloud(email) {
+  if (!email) return;
+  const built = buildSpeech(email);
+  if (!built.chunks.length) { toast('Nothing here to read aloud'); return; }
+  stopReadAloud({ silent: true });
+  // Speech and the words-per-minute auto-scroll both move the page. While the
+  // voice is running it owns the scroll, and the pill steps aside.
+  stopAutoScrollEngine();
+  const asPill = document.getElementById('reader-autoscroll');
+  if (asPill) asPill.style.display = 'none';
+  ttsSession = {
+    email, chunks: built.chunks, coverage: built.coverage,
+    i: 0, playing: true, mode: ttsBackend === 'device' ? 'device' : 'cloud',
+    chunkStarted: Date.now(), userScrolled: false, resumeTimer: null, lastTop: null
+  };
+  ttsWatchManualScroll();
+  ttsShowBar(true);
+  ttsUpdateUI();
+  ttsSyncTimer = setInterval(ttsSyncScroll, 250);
+  await ttsPlayIndex(0);
+}
+
+async function ttsPlayIndex(i) {
+  const s = ttsSession;
+  if (!s) return;
+  if (i < 0) i = 0;
+  if (i >= s.chunks.length) { finishReadAloud(); return; }
+  s.i = i;
+  s.chunkStarted = Date.now();
+  ttsUpdateUI();
+
+  if (s.mode === 'device') { ttsSpeakOnDevice(s.chunks[i]); return; }
+  try {
+    const url = await ttsFetchChunk(s.chunks[i]);
+    if (ttsSession !== s || s.i !== i) return;  // stopped, or skipped past it
+    const a = ttsAudioEl();
+    a.src = url;
+    a.playbackRate = ttsRate;
+    await a.play();
+    ttsSetMediaSession();
+    ttsPrefetch(i + 1);
+  } catch(e) {
+    if (ttsSession !== s) return;
+    if (ttsSwitchToDevice(e)) { s.mode = 'device'; ttsSpeakOnDevice(s.chunks[s.i]); return; }
+    toast(ttsErrorMessage(e));
+    stopReadAloud();
+  }
+}
+
+// One chunk of MP3 from the Worker, remembered for the session so stepping back
+// a sentence — or re-reading the email — doesn't spend the quota twice.
+async function ttsFetchChunk(text) {
+  const key = ttsVoice + '|' + text;
+  if (ttsMemo.has(key)) return ttsMemo.get(key);
+  const res = await fetch('/api/tts/speak', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text, voice: ttsVoice })
+  });
+  if (!res.ok) {
+    let payload = {};
+    try { payload = await res.json(); } catch(e) {}
+    const err = new Error(payload.error || ('http_' + res.status));
+    err.status = res.status;
+    err.detail = payload.detail || '';
+    throw err;
+  }
+  recordTtsChars(parseInt(res.headers.get('x-tts-chars') || '0', 10) || text.length);
+  const url = URL.createObjectURL(await res.blob());
+  ttsMemo.set(key, url);
+  // Bound the memo: an object URL holds its blob in memory until it's revoked.
+  while (ttsMemo.size > 40) {
+    const oldest = ttsMemo.keys().next().value;
+    try { URL.revokeObjectURL(ttsMemo.get(oldest)); } catch(e) {}
+    ttsMemo.delete(oldest);
+  }
+  return url;
+}
+
+// Fetch the next chunk while this one plays, so sentences run together instead
+// of pausing for the network between each.
+function ttsPrefetch(i) {
+  const s = ttsSession;
+  if (!s || s.mode !== 'cloud' || i >= s.chunks.length) return;
+  ttsFetchChunk(s.chunks[i]).catch(() => {});
+}
+
+// Whether to finish the email with the device's own voice. A missing key or a
+// spent quota means the good voice isn't coming back this session; a network
+// blip only means this one request failed.
+function ttsSwitchToDevice(e) {
+  if (!('speechSynthesis' in window)) return false;
+  const permanent = e && (e.status === 501 || e.status === 401 || e.status === 403 || e.status === 429);
+  // The free-tier counter is about the Google voices, so it goes away with them.
+  if (permanent) { ttsBackend = 'device'; renderTtsUsage(); }
+  if (permanent || (e && !e.status)) { toast(ttsErrorMessage(e)); return true; }
+  return false;
+}
+
+function ttsErrorMessage(e) {
+  if (!e) return 'Couldn’t read this aloud';
+  if (e.status === 501) return 'Natural voice isn’t set up — using the device voice';
+  if (e.status === 401) return 'Sign in again for the natural voice — using the device voice';
+  if (e.status === 403) return 'Voice service refused the key — using the device voice';
+  if (e.status === 429) return 'Google voice quota reached — using the device voice';
+  if (e.status === 413) return 'That passage was too long to speak';
+  if (!e.status) return 'Voice service unreachable — using the device voice';
+  return 'Couldn’t reach the voice service';
+}
+
+// ── The device's own voice ─────────────────────────────────
+// Not as good, but it keeps read-aloud working offline, before the Worker key
+// is set up, and if a request fails mid-email.
+function ttsSpeakOnDevice(text) {
+  if (!('speechSynthesis' in window)) { toast('This browser can’t speak text'); stopReadAloud(); return; }
+  try { speechSynthesis.cancel(); } catch(e) {}
+  const u = new SpeechSynthesisUtterance(text);
+  const v = bestDeviceVoice();
+  if (v) { u.voice = v; u.lang = v.lang; }
+  u.rate = ttsRate;
+  const s = ttsSession;
+  u.onstart = () => { if (ttsSession === s) s.deviceSpoke = true; };
+  u.onend = () => { if (ttsSession === s && s.playing) ttsPlayIndex(s.i + 1); };
+  u.onerror = () => {
+    if (ttsSession !== s || !s.playing) return;
+    // Nothing has been spoken yet and the first utterance already failed: this
+    // browser has no usable voice. Say so, rather than running silently
+    // through the whole email in a fraction of a second.
+    if (!s.deviceSpoke) { toast('No speech voice available on this device'); stopReadAloud(); return; }
+    ttsPlayIndex(s.i + 1);
+  };
+  try { speechSynthesis.speak(u); } catch(e) { stopReadAloud(); return; }
+  ttsKeepAlive(true);
+  ttsSetMediaSession();
+  ttsUpdateUI();
+}
+
+// Ranked by what actually sounds human: the browser's networked neural voices
+// first (Edge's "Natural", Chrome's Google voices), then Apple's downloadable
+// Premium and Enhanced voices, and the tiny "Compact" ones last of all.
+function bestDeviceVoice() {
+  if (!ttsDeviceVoices.length) loadDeviceVoices();
+  if (!ttsDeviceVoices.length) return null;
+  const lang = (navigator.language || 'en-US').slice(0, 2).toLowerCase();
+  const score = v => {
+    const n = (v.name || '').toLowerCase();
+    let s = ((v.lang || '').slice(0, 2).toLowerCase() === lang) ? 40 : 0;
+    if (n.indexOf('natural') !== -1) s += 30;
+    if (n.indexOf('neural') !== -1) s += 25;
+    if (n.indexOf('premium') !== -1) s += 22;
+    if (n.indexOf('enhanced') !== -1) s += 18;
+    if (n.indexOf('siri') !== -1) s += 15;
+    if (n.indexOf('google') !== -1) s += 12;
+    if (n.indexOf('online') !== -1) s += 8;
+    if (v.default) s += 2;
+    if (n.indexOf('compact') !== -1) s -= 30;
+    if (n.indexOf('espeak') !== -1) s -= 40;
+    return s;
+  };
+  return ttsDeviceVoices.slice().sort((a, b) => score(b) - score(a))[0] || null;
+}
+
+// getVoices() fills in asynchronously, and on some browsers only after the
+// voiceschanged event — so it's read on init and again whenever that fires.
+function loadDeviceVoices() {
+  if (!('speechSynthesis' in window)) return;
+  try { ttsDeviceVoices = speechSynthesis.getVoices() || []; } catch(e) { ttsDeviceVoices = []; }
+}
+
+// Chrome stops speaking partway through a long utterance unless it's nudged.
+function ttsKeepAlive(on) {
+  if (ttsKeepTimer) { clearInterval(ttsKeepTimer); ttsKeepTimer = null; }
+  if (!on || (navigator.userAgent || '').indexOf('Chrome') === -1) return;
+  ttsKeepTimer = setInterval(() => {
+    if (!ttsSession || ttsSession.mode !== 'device' || !ttsSession.playing) return;
+    try { speechSynthesis.pause(); speechSynthesis.resume(); } catch(e) {}
+  }, 9000);
+}
+
+// ── Transport ──────────────────────────────────────────────
+function ttsTogglePlay(force) {
+  const s = ttsSession;
+  if (!s) return;
+  s.playing = (force === undefined) ? !s.playing : !!force;
+  if (s.mode === 'device') {
+    try { s.playing ? speechSynthesis.resume() : speechSynthesis.pause(); } catch(e) {}
+  } else if (ttsAudio) {
+    if (s.playing) { const p = ttsAudio.play(); if (p && p.catch) p.catch(() => {}); }
+    else ttsAudio.pause();
+  }
+  try { navigator.mediaSession.playbackState = s.playing ? 'playing' : 'paused'; } catch(e) {}
+  ttsUpdateUI();
+}
+
+function ttsSkip(delta) {
+  const s = ttsSession;
+  if (!s) return;
+  const next = Math.min(Math.max(s.i + delta, 0), s.chunks.length - 1);
+  s.playing = true;
+  s.lastTop = null;
+  s.userScrolled = false;  // a deliberate jump re-arms the scroll sync
+  ttsPlayIndex(next);
+}
+
+function cycleTtsRate() {
+  const i = TTS_RATES.indexOf(ttsRate);
+  setTtsRate(TTS_RATES[(i + 1) % TTS_RATES.length] || 1);
+}
+
+function finishReadAloud() {
+  const email = ttsSession && ttsSession.email;
+  stopReadAloud();
+  // Reaching the end by ear is still reaching the end — offer Mark as read.
+  if (email && readerEmail === email) revealReaderFooter(email);
+}
+
+function stopReadAloud(opts = {}) {
+  const s = ttsSession;
+  ttsSession = null;
+  if (ttsSyncTimer) { clearInterval(ttsSyncTimer); ttsSyncTimer = null; }
+  ttsKeepAlive(false);
+  try { speechSynthesis.cancel(); } catch(e) {}
+  if (ttsAudio) { try { ttsAudio.pause(); } catch(e) {} }
+  if (s) {
+    if (s.resumeTimer) clearTimeout(s.resumeTimer);
+    ttsUnwatchManualScroll(s);
+  }
+  ttsClearMediaSession();
+  if (opts.silent) return;
+  ttsShowBar(false);
+  updateListenButton();
+  // Hand the reader back to auto-scroll if that's what the user had running.
+  if (s && autoScrollEnabled && readerEmail) {
+    const t = readerScrollTarget();
+    if (t) startAutoScroll(t.scroller, t.doc);
+  }
+}
+
+// ── Keeping the page under the voice ───────────────────────
+// Where the open email actually scrolls: the iframe's document for HTML mail
+// (reachable only when the reader was opened with same-origin access), or the
+// plain-text pane.
+function readerScrollTarget() {
+  const bodyEl = document.getElementById('reader-body');
+  if (!bodyEl) return null;
+  const iframe = bodyEl.querySelector('iframe');
+  if (iframe) {
+    try {
+      const doc = iframe.contentDocument;
+      if (doc) return { scroller: doc.scrollingElement || doc.documentElement || doc.body, doc };
+    } catch(e) {}
+    return null;  // sandboxed without same-origin — its scroll isn't ours to drive
+  }
+  const el = bodyEl.querySelector('.reader-text');
+  return el ? { scroller: el, doc: null } : null;
+}
+
+// Progress through the current chunk, 0–1. The cloud path knows exactly (the
+// audio element's own clock); the device path estimates from elapsed time.
+function ttsChunkProgress(s) {
+  if (s.mode === 'cloud' && ttsAudio && ttsAudio.duration) {
+    return Math.min(ttsAudio.currentTime / ttsAudio.duration, 1);
+  }
+  const words = s.chunks[s.i].split(/\s+/).length;
+  const expected = (words / (175 * ttsRate)) * 60000;
+  return Math.min((Date.now() - (s.chunkStarted || Date.now())) / Math.max(expected, 1), 1);
+}
+
+function ttsSyncScroll() {
+  const s = ttsSession;
+  if (!s || !s.playing || s.userScrolled) return;
+  const t = readerScrollTarget();
+  if (!t) return;
+  const span = t.scroller.scrollHeight - t.scroller.clientHeight;
+  if (span <= 4) return;
+  // Moved away from where we put it — the reader is scrolling, so stop pushing.
+  if (s.lastTop != null && Math.abs(t.scroller.scrollTop - s.lastTop) > 8) { ttsManualScroll(); return; }
+  const done = (s.i + ttsChunkProgress(s)) / s.chunks.length;
+  const target = Math.round(span * Math.min(done * s.coverage, 1));
+  if (target > t.scroller.scrollTop) {   // only ever forward, never yank back
+    t.scroller.scrollTop = target;
+    s.lastTop = t.scroller.scrollTop;
+  }
+}
+
+// A touch or wheel hands the scroll back to the reader; the voice keeps going.
+// The sync picks up again once the scrolling settles.
+function ttsManualScroll() {
+  const s = ttsSession;
+  if (!s) return;
+  s.userScrolled = true;
+  if (s.resumeTimer) clearTimeout(s.resumeTimer);
+  s.resumeTimer = setTimeout(() => {
+    if (ttsSession !== s) return;
+    s.resumeTimer = null;
+    s.userScrolled = false;
+    s.lastTop = null;
+  }, 2500);
+}
+
+function ttsWatchManualScroll() {
+  const s = ttsSession;
+  const t = readerScrollTarget();
+  if (!s || !t) return;
+  s.scrollTarget = t.doc || t.scroller;
+  s.scrollHandler = () => ttsManualScroll();
+  ['touchstart', 'wheel'].forEach(evt => {
+    try { s.scrollTarget.addEventListener(evt, s.scrollHandler, { passive: true }); } catch(e) {}
+  });
+}
+
+function ttsUnwatchManualScroll(s) {
+  if (!s || !s.scrollTarget || !s.scrollHandler) return;
+  ['touchstart', 'wheel'].forEach(evt => {
+    try { s.scrollTarget.removeEventListener(evt, s.scrollHandler); } catch(e) {}
+  });
+  s.scrollTarget = null;
+}
+
+// ── Lock-screen controls ───────────────────────────────────
+function ttsSetMediaSession() {
+  if (!('mediaSession' in navigator) || !ttsSession) return;
+  const e = ttsSession.email;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: e.subject || '(no subject)',
+      artist: parseSender(e.sender || '').name || e.sender || '',
+      album: 'Inbox Cleaner',
+      artwork: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+                { src: '/icon-512.png', sizes: '512x512', type: 'image/png' }]
+    });
+    navigator.mediaSession.playbackState = ttsSession.playing ? 'playing' : 'paused';
+  } catch(e) {}
+  const set = (action, fn) => { try { navigator.mediaSession.setActionHandler(action, fn); } catch(e) {} };
+  set('play', () => ttsTogglePlay(true));
+  set('pause', () => ttsTogglePlay(false));
+  set('stop', () => stopReadAloud());
+  set('previoustrack', () => ttsSkip(-1));
+  set('nexttrack', () => ttsSkip(1));
+}
+
+function ttsClearMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  try { navigator.mediaSession.playbackState = 'none'; navigator.mediaSession.metadata = null; } catch(e) {}
+  ['play', 'pause', 'stop', 'previoustrack', 'nexttrack'].forEach(a => {
+    try { navigator.mediaSession.setActionHandler(a, null); } catch(e) {}
+  });
+}
+
+// ── Reader controls ────────────────────────────────────────
+function ttsShowBar(on) {
+  const bar = document.getElementById('reader-tts');
+  if (bar) bar.classList.toggle('open', !!on);
+}
+
+function ttsUpdateUI() {
+  const s = ttsSession;
+  const btn = document.getElementById('rtts-toggle');
+  if (btn) {
+    btn.innerHTML = (s && s.playing)
+      ? '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+    btn.setAttribute('aria-label', (s && s.playing) ? 'Pause' : 'Play');
+  }
+  const prog = document.getElementById('rtts-progress');
+  if (prog) prog.textContent = s ? (s.i + 1) + ' / ' + s.chunks.length : '';
+  const rate = document.getElementById('rtts-rate');
+  if (rate) rate.innerHTML = ttsRateLabel(ttsRate) + '&times;';
+  const note = document.getElementById('rtts-note');
+  // Only name the voice when it isn't the good one — otherwise a fallback just
+  // looks like the feature sounds bad.
+  if (note) note.textContent = (s && s.mode === 'device') ? 'device voice' : '';
+  updateListenButton();
+}
+
+function ttsRateLabel(r) {
+  return String(Math.round(r * 100) / 100);
+}
+
+function updateListenButton() {
+  const btn = document.getElementById('reader-listen');
+  if (!btn) return;
+  btn.classList.toggle('available', !!ttsEnabled);
+  btn.classList.toggle('speaking', !!ttsSession);
+  btn.setAttribute('aria-label', ttsSession ? 'Stop reading aloud' : 'Read aloud');
+}
+
+// ── Settings ───────────────────────────────────────────────
+function loadTts() {
+  try { ttsEnabled = localStorage.getItem('ic_tts') === '1'; } catch(e) {}
+  try { ttsAutoStart = localStorage.getItem('ic_tts_autostart') === '1'; } catch(e) {}
+  try { ttsVoice = localStorage.getItem('ic_tts_voice') || ''; } catch(e) {}
+  try {
+    const r = parseFloat(localStorage.getItem('ic_tts_rate') || '1');
+    if (r >= 0.7 && r <= 1.8) ttsRate = r;
+  } catch(e) {}
+  try { ttsUsage = JSON.parse(localStorage.getItem('ic_tts_usage') || 'null'); } catch(e) {}
+  const cb = document.getElementById('tts-enabled');
+  if (cb) cb.checked = ttsEnabled;
+  const auto = document.getElementById('tts-autostart');
+  if (auto) auto.checked = ttsAutoStart;
+  syncTtsUI();
+  loadDeviceVoices();
+  if ('speechSynthesis' in window) {
+    try { speechSynthesis.addEventListener('voiceschanged', loadDeviceVoices); } catch(e) {}
+  }
+  if (ttsEnabled) {
+    // Unlock audio on the first tap anywhere, so auto-start can begin speaking
+    // on an email opened later without a gesture of its own.
+    document.addEventListener('pointerdown', ttsUnlockAudio, { once: true, passive: true });
+    populateTtsVoices();
+  }
+}
+
+function setTtsEnabled(on) {
+  ttsEnabled = !!on;
+  try { localStorage.setItem('ic_tts', on ? '1' : '0'); } catch(e) {}
+  if (!on) stopReadAloud();
+  syncTtsUI();
+  if (on) { ttsUnlockAudio(); populateTtsVoices(); }
+}
+
+function setTtsVoice(name) {
+  ttsVoice = name || '';
+  try { localStorage.setItem('ic_tts_voice', ttsVoice); } catch(e) {}
+  // The memo is keyed by voice, so nothing has to be thrown away; an email
+  // already being read changes voice at its next chunk.
+}
+
+function setTtsRate(r) {
+  ttsRate = Math.min(Math.max(parseFloat(r) || 1, 0.7), 1.8);
+  try { localStorage.setItem('ic_tts_rate', String(ttsRate)); } catch(e) {}
+  syncTtsUI();
+  if (ttsAudio) { try { ttsAudio.playbackRate = ttsRate; } catch(e) {} }
+  // The device voice bakes the rate into the utterance, so it has to start the
+  // current sentence again to change pace.
+  if (ttsSession && ttsSession.mode === 'device' && ttsSession.playing) {
+    ttsSpeakOnDevice(ttsSession.chunks[ttsSession.i]);
+  }
+  ttsUpdateUI();
+}
+
+function setTtsAutoStart(on) {
+  ttsAutoStart = !!on;
+  try { localStorage.setItem('ic_tts_autostart', on ? '1' : '0'); } catch(e) {}
+}
+
+function syncTtsUI() {
+  const cb = document.getElementById('tts-enabled');
+  if (cb) cb.checked = ttsEnabled;
+  ['tts-voice-row', 'tts-rate-row', 'tts-auto-row'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = ttsEnabled ? '' : 'none';
+  });
+  const slider = document.getElementById('tts-rate');
+  if (slider && parseFloat(slider.value) !== ttsRate) slider.value = ttsRate;
+  const label = document.getElementById('tts-rate-label');
+  if (label) label.textContent = ttsRateLabel(ttsRate);
+  renderTtsUsage();
+  updateListenButton();
+}
+
+// navigator.language can carry things a BCP-47 parser won't take ("en-US@posix",
+// "en_GB"), and Google rejects the request rather than guessing.
+function ttsLanguageTag() {
+  const raw = (navigator.language || 'en-US').replace(/_/g, '-').split('@')[0];
+  const m = raw.match(/^([A-Za-z]{2,3})(?:-([A-Za-z]{2}|[0-9]{3}))?/);
+  if (!m) return 'en-US';
+  return m[2] ? m[1].toLowerCase() + '-' + m[2].toUpperCase() : m[1].toLowerCase();
+}
+
+// Voices come from the Worker (which holds the key) rather than a list baked
+// in here, so new Google voices show up without a release.
+async function populateTtsVoices() {
+  const sel = document.getElementById('tts-voice');
+  const desc = document.getElementById('tts-voice-desc');
+  if (!sel) return;
+  const lang = ttsLanguageTag();
+  try {
+    const res = await fetch('/api/tts/voices?languageCode=' + encodeURIComponent(lang));
+    if (!res.ok) {
+      let payload = {};
+      try { payload = await res.json(); } catch(e) {}
+      const err = new Error(payload.error || ('http_' + res.status));
+      err.status = res.status;
+      throw err;
+    }
+    const voices = (await res.json()).voices || [];
+    if (!voices.length) throw new Error('no_voices');
+    sel.innerHTML = voices.map(v =>
+      '<option value="' + esc(v.name) + '">' + esc(ttsVoiceLabel(v)) + '</option>').join('');
+    if (!ttsVoice || !voices.some(v => v.name === ttsVoice)) setTtsVoice(voices[0].name);
+    sel.value = ttsVoice;
+    sel.disabled = false;
+    ttsBackend = 'cloud';
+    if (desc) desc.textContent = voices.length + ' natural voices available for ' + lang + '.';
+  } catch(e) {
+    ttsBackend = 'device';
+    sel.innerHTML = '<option>Device voice</option>';
+    sel.disabled = true;
+    if (desc) desc.textContent = ttsVoiceUnavailableReason(e);
+  }
+  renderTtsUsage();
+}
+
+// "en-US-Chirp3-HD-Achernar" reads as "Achernar · Chirp3-HD · Female".
+function ttsVoiceLabel(v) {
+  const at = v.name.toLowerCase().indexOf('-' + v.tier.toLowerCase());
+  const short = (at === -1 ? '' : v.name.slice(at + v.tier.length + 2)) || v.name;
+  const gender = v.gender ? v.gender.charAt(0) + v.gender.slice(1).toLowerCase() : '';
+  return short + ' · ' + v.tier + (gender ? ' · ' + gender : '');
+}
+
+function ttsVoiceUnavailableReason(e) {
+  if (e && e.status === 501) return 'No Google voice key on the server — the device’s own voice will be used. See AUTH-SETUP.md.';
+  if (e && e.status === 401) return 'Sign in again to use the Google voices; the device voice will be used until then.';
+  if (e && e.status === 403) return 'The server’s voice key was refused — check its API restrictions.';
+  return 'Couldn’t reach the voice service — the device’s own voice will be used.';
+}
+
+// ── Free-tier counter ──────────────────────────────────────
+// A local estimate of what's been sent to Google this month, so the free
+// allowance doesn't run out unnoticed. Google's billing page is the authority;
+// this counts only what this browser asked for.
+function recordTtsChars(n) {
+  if (!n) return;
+  const month = new Date().toISOString().slice(0, 7);
+  let rec = ttsUsage;
+  if (!rec || rec.month !== month) rec = { month, chars: 0 };
+  rec.chars += n;
+  ttsUsage = rec;
+  try { localStorage.setItem('ic_tts_usage', JSON.stringify(rec)); } catch(e) {}
+  renderTtsUsage();
+}
+
+function renderTtsUsage() {
+  const el = document.getElementById('tts-usage');
+  if (!el) return;
+  const month = new Date().toISOString().slice(0, 7);
+  const used = (ttsUsage && ttsUsage.month === month) ? ttsUsage.chars : 0;
+  if (!ttsEnabled || ttsBackend === 'device' || !used) { el.style.display = 'none'; return; }
+  const pct = Math.min(Math.round((used / TTS_FREE_CHARS) * 100), 999);
+  el.style.display = '';
+  el.textContent = 'Spoken this month: ' + used.toLocaleString() + ' characters — about ' + pct +
+                   '% of Google’s monthly free allowance, as counted on this device.';
+}
 
 // ── Bulk UI ────────────────────────────────────────────────
 function setSortMode(mode) {
@@ -5662,6 +6559,7 @@ loadKeepOfflineOnly();
 loadKeepMarksRead();
 loadSwipeSortBySender();
 loadAutoScroll();
+loadTts();
 loadClientId();
 setSwipeMode('triage'); // reflect the keep setting in the action labels/hint
 updateAccountChip();
