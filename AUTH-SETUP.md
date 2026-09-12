@@ -115,8 +115,9 @@ become a bill.
 In the [Google Cloud Console](https://console.cloud.google.com/), in the same
 project as the OAuth client:
 
-1. Enable **Cloud Text-to-Speech API**. (Billing must be enabled on the
-   project even to use the free tier.)
+1. Enable **Cloud Text-to-Speech API**. Link a billing account if the console
+   asks for one — the recurring free tier still sits behind a billing account,
+   though nothing is charged inside the allowance.
 2. **APIs & Services → Credentials → Create credentials → API key.**
 3. Restrict the key: under **API restrictions** choose *Restrict key* and
    select only **Cloud Text-to-Speech API**. Leave application restrictions
@@ -132,11 +133,21 @@ npx wrangler secret put GOOGLE_TTS_API_KEY
 Redeploy (`npx wrangler deploy`). The voice list in Settings fills in on the
 next load; pick any voice and it's remembered per browser.
 
-## Step 3 — Cap the quota
+## Step 3 — Guard the spend
 
-**APIs & Services → Cloud Text-to-Speech API → Quotas**, and set a daily
-character limit near what you actually expect. This is the real backstop: it
-bounds the damage if the endpoint is ever found and hammered.
+Two controls, which do different things:
+
+- **IAM & Admin → Quotas**, filtered to *Cloud Text-to-Speech API*. Lower any
+  per-minute request or character quota you're allowed to edit. This is the
+  one that hard-stops, so it's what bounds the damage if the endpoint is ever
+  found and hammered. (The quotas here are per-minute, not per-day — there's
+  no monthly ceiling to set.)
+- **Billing → Budgets & alerts**, scoped to this project, with alerts at
+  50/90/100% of a few dollars. This only notifies; it doesn't stop anything,
+  but it's what catches slow drift past the free allowance.
+
+Also note the restrictions in step 1 do real work here: a key restricted to
+the Text-to-Speech API can't be spent on anything else.
 
 ## How it works
 
