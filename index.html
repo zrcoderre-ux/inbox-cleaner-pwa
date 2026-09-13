@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v97'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v98'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6227,9 +6227,15 @@ function chunkSentences(sentences, outLines) {
 // aside, a proper noun — and reading those with stress on every word is worse
 // than reading them flat.
 const TTS_ITALIC_MAX_WORDS = 2;
-// Per passage. Each one costs about 45 billed characters, and a passage that
+// Per passage. Each one costs about 40 billed characters, and a passage that
 // needs more emphasis than this is a stylistic tic rather than a point.
 const TTS_MAX_EMPHASIS = 6;
+// How an italic phrase is actually said. <emphasis> is the tag for the job on
+// paper, but what the voice does with it is set a pause on either side of the
+// phrase and read the words themselves no differently — which is the reverse
+// of how a person reads an italic, leaning on the word without stopping around
+// it. Slowing the phrase down does that, and inserts nothing.
+const TTS_EMPHASIS_RATE = '80%';
 // The request has to stay inside what the Worker will take, tags and all.
 const TTS_SSML_BUDGET = 950;
 
@@ -6419,7 +6425,8 @@ function ttsSsmlFor(s, i) {
   for (const h of spans) {
     if (h.at < pos || used >= TTS_MAX_EMPHASIS) continue;
     out += ttsEscapeSsml(text.slice(pos, h.at)) +
-           '<emphasis level="moderate">' + ttsEscapeSsml(text.slice(h.at, h.end)) + '</emphasis>';
+           '<prosody rate="' + TTS_EMPHASIS_RATE + '">' +
+           ttsEscapeSsml(text.slice(h.at, h.end)) + '</prosody>';
     pos = h.end;
     used++;
   }
