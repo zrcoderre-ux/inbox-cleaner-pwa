@@ -306,6 +306,16 @@ the *next* request rather than being shrugged off — spend the counter can't
 see is spend the cap can't bound. Either way the app drops to the device
 voice and says why. Once the counter is writable again it resumes on its own.
 
+Emphasis is charged too. When an email has italicised words, the passage is
+sent as SSML so the voice leans on them, and Google bills every character of
+the request including the tags (`<mark>` is the one exemption). The app only
+does this for a passage that actually has something to emphasise, and caps it
+at six phrases, so the usual cost is nothing and the worst case is a few
+hundred characters on a passage — counted against the cap exactly as the words
+are. Voices differ on whether they accept SSML at all; the app asks once, and
+a voice that refuses is remembered and sent plain text from then on, with the
+player saying "no emphasis" so the silence is explained.
+
 The margin under the allowance is doing real work too. KV has no atomic
 increment, so two requests in flight can read the same total and one of their
 additions is lost. The app sends at most two at a time, so the drift is small
