@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v101'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v102'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6416,22 +6416,86 @@ function ttsEscapeSsml(t) {
 
 // The passage as SSML, or '' for "send it as plain text" — which is most
 // passages, and costs nothing extra.
-function ttsSsmlFor(s, i) {
-  const spans = s && s.emph && s.emph[i];
-  if (!spans || !spans.length) return '';
-  if (ttsNoSsml[s.voice]) return '';
-  const text = s.chunks[i] || '';
-  let out = '', pos = 0, used = 0;
-  for (const h of spans) {
-    if (h.at < pos || used >= TTS_MAX_EMPHASIS) continue;
-    out += ttsEscapeSsml(text.slice(pos, h.at)) +
-           '<prosody rate="' + TTS_EMPHASIS_RATE + '">' +
-           ttsEscapeSsml(text.slice(h.at, h.end)) + '</prosody>';
-    pos = h.end;
-    used++;
+// Quotation marks are punctuation for the eye. The newer voices say them —
+// "quote … quote" around every quotation — which is both wrong and the loss of
+// what the marks were for. They are kept out of everything sent to a voice,
+// and what they held is handed to <emphasis> instead: the pauses that tag puts
+// either side of a phrase are exactly the job the marks were doing, telling
+// the listener where the quotation starts and where it stops. It is the one
+// place those pauses are wanted, which is why italics no longer use that tag.
+const TTS_QUOTES = '"\u201C\u201D\u201E\u201F\u00AB\u00BB';
+
+function ttsIsQuote(c) {
+  return TTS_QUOTES.indexOf(c) !== -1;
+}
+
+// What a voice is given: the passage with the marks taken out. The passage
+// itself keeps them — the scrubber counts its characters and the page is
+// searched for its words.
+function ttsSpeakable(text) {
+  let out = '';
+  for (let i = 0; i < text.length; i++) if (!ttsIsQuote(text[i])) out += text[i];
+  return out.replace(/\s{2,}/g, ' ');
+}
+
+// Quotations as pairs of positions, opening mark to closing mark. A quotation
+// running across two passages leaves an odd mark behind; it is dropped like
+// the rest, and only what is closed inside this passage is emphasised.
+function ttsQuoteSpans(text) {
+  const spans = [];
+  let open = -1;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (!ttsIsQuote(c)) continue;
+    const closing = c === '\u201D' || c === '\u00BB';
+    const opening = c === '\u201C' || c === '\u201F' || c === '\u201E' || c === '\u00AB';
+    if (open === -1) { if (!closing) open = i; continue; }
+    if (opening) continue;                 // an opening mark can't close anything
+    if (i > open + 1) spans.push({ at: open, end: i + 1 });
+    open = -1;
   }
-  if (!used) return '';
-  out = '<speak>' + out + ttsEscapeSsml(text.slice(pos)) + '</speak>';
+  return spans;
+}
+
+// The passage as SSML, or '' for "send it as plain text" — which is most
+// passages, and costs nothing extra.
+function ttsSsmlFor(s, i) {
+  if (!s || ttsNoSsml[s.voice]) return '';
+  const text = s.chunks[i] || '';
+  const quotes = ttsQuoteSpans(text);
+  const italics = (s.emph && s.emph[i]) || [];
+  if (!quotes.length && !italics.length) return '';
+
+  const tags = [];
+  quotes.forEach(q => tags.push({ at: q.at + 1, end: q.end - 1,
+    open: '<emphasis level="moderate">', close: '</emphasis>' }));
+  let used = 0;
+  italics.forEach(h => {
+    if (used >= TTS_MAX_EMPHASIS) return;
+    // A phrase that straddles a quotation mark can't sit inside the quotation
+    // and can't hold it either, so it goes unmarked rather than out of order.
+    const straddles = quotes.some(q =>
+      (h.at < q.at + 1 && h.end > q.at + 1) || (h.at < q.end - 1 && h.end > q.end - 1));
+    if (straddles) return;
+    tags.push({ at: h.at, end: h.end,
+      open: '<prosody rate="' + TTS_EMPHASIS_RATE + '">', close: '</prosody>' });
+    used++;
+  });
+  if (!tags.length) return '';
+
+  // Outermost first where two begin together, so a phrase inside a quotation
+  // opens after it and closes before it.
+  tags.sort((a, b) => a.at - b.at || (b.end - b.at) - (a.end - a.at));
+  const opens = new Map();
+  tags.forEach(t => { (opens.get(t.at) || opens.set(t.at, []).get(t.at)).push(t); });
+
+  let out = '', stack = [];
+  for (let k = 0; k <= text.length; k++) {
+    while (stack.length && stack[stack.length - 1].end === k) out += stack.pop().close;
+    (opens.get(k) || []).forEach(t => { out += t.open; stack.push(t); });
+    if (k < text.length && !ttsIsQuote(text[k])) out += ttsEscapeSsml(text[k]);
+  }
+  out = '<speak>' + out.replace(/\s{2,}/g, ' ') + '</speak>';
   return out.length > TTS_SSML_BUDGET ? '' : out;
 }
 
@@ -6718,7 +6782,7 @@ async function ttsPlayIndex(i, opts = {}) {
     return;
   }
   try {
-    const got = await ttsFetchChunk(s.chunks[i], false, s.voice, ttsSsmlFor(s, i));
+    const got = await ttsFetchChunk(ttsSpeakable(s.chunks[i]), false, s.voice, ttsSsmlFor(s, i));
     if (ttsSession !== s || s.i !== i) return;  // stopped, or skipped past it
     const a = ttsAudioEl();
     ttsDropPendingSeek(a);   // anything waiting on the last load is void now
@@ -6933,7 +6997,9 @@ function ttsPrefetch(from, depth) {
   const s = ttsSession;
   if (!s || s.mode !== 'cloud') return;
   const upto = Math.min(from + (depth || TTS_PREFETCH), s.chunks.length);
-  for (let i = from; i < upto; i++) ttsFetchChunk(s.chunks[i], false, s.voice, ttsSsmlFor(s, i)).catch(() => {});
+  for (let i = from; i < upto; i++) {
+    ttsFetchChunk(ttsSpeakable(s.chunks[i]), false, s.voice, ttsSsmlFor(s, i)).catch(() => {});
+  }
 }
 
 // The screen going off is the last moment this page can be sure of getting a
