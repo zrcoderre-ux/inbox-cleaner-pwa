@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v116'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v117'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6346,7 +6346,7 @@ const TTS_MAX_EMPHASIS = 6;
 // it: a tag boundary inside a word is a word boundary as far as it is
 // concerned, so "mandatory" came back as "m", "andato" and "ry", said as
 // letters. Tags go where the spaces are.
-const TTS_EMPHASIS_RATE = '95%';
+const TTS_EMPHASIS_RATE = '98%';
 // The request has to stay inside what the Worker will take, tags and all.
 const TTS_SSML_BUDGET = 950;
 
