@@ -1874,7 +1874,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v76'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v77'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5711,6 +5711,10 @@ window.addEventListener('keydown', e => {
 const TTS_CHUNK_CHARS = 700;
 const TTS_RATES = [0.8, 1, 1.15, 1.35, 1.6];
 const TTS_AUTO_BATCH = 5;
+const TTS_PREFETCH = 2;           // chunks kept ahead of the voice
+const TTS_PREFETCH_HIDDEN = 5;    // and when the screen is about to go off
+const TTS_RETRY_VISIBLE = 2;      // tries before giving up on the good voice
+const TTS_RETRY_HIDDEN = 8;       // backgrounded, waiting beats downgrading
 // Google publishes a monthly free allowance for the Chirp 3 HD voices; the
 // counter below is a local estimate of how much of it has gone.
 const TTS_FREE_CHARS = 1000000;
@@ -5945,6 +5949,7 @@ async function ttsPlayIndex(i, opts = {}) {
     if (opts.resumeFrac) ttsSeekFraction(a, opts.resumeFrac);
     // Pausing while this chunk was in flight has to hold: the audio is ready
     // and cued, but nothing starts until play is asked for again.
+    s.tries = 0;
     if (!s.playing) { ttsSetMediaSession(); ttsUpdateUI(); return; }
     await a.play();
     ttsSetMediaSession();
@@ -5953,6 +5958,28 @@ async function ttsPlayIndex(i, opts = {}) {
     if (i === 0) ttsPrefetchNextEmail(s.email);
   } catch(e) {
     if (ttsSession !== s) return;
+    // A backgrounded page often can't get a request away, and the device voice
+    // can't play in the background at all — so switching there guarantees
+    // silence AND loses the good voice. Wait and ask again instead.
+    // Only a request that never landed is retried here; a rate limit already
+    // gets its own wait inside the fetch, and doubling that just adds silence.
+    const networkish = e && !e.status;
+    const limit = document.hidden ? TTS_RETRY_HIDDEN : TTS_RETRY_VISIBLE;
+    if (networkish && (s.tries || 0) < limit) {
+      s.tries = (s.tries || 0) + 1;
+      setTimeout(() => {
+        if (ttsSession === s && s.i === i && s.playing) ttsPlayIndex(i, opts);
+      }, Math.min(600 * s.tries, 4000));
+      return;
+    }
+    // Out of tries with the screen still off: hold the place rather than
+    // announce a fallback into silence. Play picks it up on unlocking.
+    if (document.hidden) {
+      s.tries = 0;
+      s.playing = false;
+      ttsUpdateUI();
+      return;
+    }
     if (ttsSwitchToDevice(e)) { s.mode = 'device'; ttsSpeakOnDevice(s.chunks[s.i]); return; }
     toast(ttsErrorMessage(e));
     stopReadAloud();
@@ -6015,10 +6042,26 @@ async function ttsFetchChunk(text, retried, voice) {
 
 // Fetch the next chunk while this one plays, so sentences run together instead
 // of pausing for the network between each.
-function ttsPrefetch(i) {
+// Fetch a little ahead of the voice. One chunk was enough while the screen was
+// on; it isn't with the screen locked, where a backgrounded page may not get
+// its request away at all. Audio already in hand plays regardless.
+//
+// The cost of reaching further is chunks paid for and then not heard, if
+// listening stops mid-email — a couple of hundred characters. Cheap against
+// the alternative, which is the voice dying at the first chunk boundary after
+// the phone goes in a pocket.
+function ttsPrefetch(from, depth) {
   const s = ttsSession;
-  if (!s || s.mode !== 'cloud' || i >= s.chunks.length) return;
-  ttsFetchChunk(s.chunks[i], false, s.voice).catch(() => {});
+  if (!s || s.mode !== 'cloud') return;
+  const upto = Math.min(from + (depth || TTS_PREFETCH), s.chunks.length);
+  for (let i = from; i < upto; i++) ttsFetchChunk(s.chunks[i], false, s.voice).catch(() => {});
+}
+
+// The screen going off is the last moment this page can be sure of getting a
+// request away, so it buys as much audio as it sensibly can on the way out.
+function ttsOnVisibilityChange() {
+  if (!ttsSession || !document.hidden) return;
+  ttsPrefetch(ttsSession.i + 1, TTS_PREFETCH_HIDDEN);
 }
 
 // Whether to finish the email with the device's own voice.
@@ -6631,6 +6674,7 @@ function loadTts() {
   if ('speechSynthesis' in window) {
     try { speechSynthesis.addEventListener('voiceschanged', loadDeviceVoices); } catch(e) {}
   }
+  document.addEventListener('visibilitychange', ttsOnVisibilityChange);
   if (ttsEnabled) {
     // Unlock audio on the first tap anywhere, so auto-start can begin speaking
     // on an email opened later without a gesture of its own.
