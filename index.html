@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v119'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v120'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6346,14 +6346,23 @@ const TTS_MAX_EMPHASIS = 6;
 // it: a tag boundary inside a word is a word boundary as far as it is
 // concerned, so "mandatory" came back as "m", "andato" and "ry", said as
 // letters. Tags go where the spaces are.
-const TTS_EMPHASIS_RATE = '98%';
+const TTS_EMPHASIS_RATE = '100%';
 // And a change in pitch with it. Two per cent of duration on a word of half a
 // second is a few milliseconds, which is near enough nothing to hear; the ear
 // picks up pitch far more readily than length. Down rather than up: a rise is
 // how a question ends and how surprise sounds, where dropping into a word is
 // how a person weights one they mean. Semitones, because that is how the ear
 // hears pitch — a whole tone, which is a lean rather than a lurch.
-const TTS_EMPHASIS_PITCH = '-2st';
+const TTS_EMPHASIS_PITCH = '-1st';
+
+// Only what actually changes goes in the tag: at full speed there is no reason
+// to send a rate at all, and a tag with nothing in it is no tag.
+function ttsEmphasisOpen() {
+  const parts = [];
+  if (TTS_EMPHASIS_RATE !== '100%') parts.push('rate="' + TTS_EMPHASIS_RATE + '"');
+  if (TTS_EMPHASIS_PITCH !== '0st') parts.push('pitch="' + TTS_EMPHASIS_PITCH + '"');
+  return parts.length ? '<prosody ' + parts.join(' ') + '>' : '';
+}
 // The request has to stay inside what the Worker will take, tags and all —
 // which is the reason for the margin: 700 characters of words, and room for
 // the tags that mark the italics and the quotations in them.
@@ -6635,9 +6644,9 @@ function ttsSsmlFor(s, i) {
     const straddles = quotes.some(q =>
       (h.at < q.at + 1 && h.end > q.at + 1) || (h.at < q.end - 1 && h.end > q.end - 1));
     if (straddles) return;
-    tags.push({ at: h.at, end: h.end,
-      open: '<prosody rate="' + TTS_EMPHASIS_RATE + '" pitch="' + TTS_EMPHASIS_PITCH + '">',
-      close: '</prosody>' });
+    const open = ttsEmphasisOpen();
+    if (!open) return;                 // nothing set to mark it with
+    tags.push({ at: h.at, end: h.end, open, close: '</prosody>' });
     used++;
   });
   if (!tags.length) return '';
