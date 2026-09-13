@@ -1874,7 +1874,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v74'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v75'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6331,11 +6331,106 @@ function ttsChunkProgress(s) {
   return Math.min((Date.now() - (s.chunkStarted || Date.now())) / Math.max(expected, 1), 1);
 }
 
+// ── Where the words actually are ───────────────────────────
+// Scrolling by "fraction of the email spoken" assumes the words are spread
+// evenly down the page. They aren't: a picture at the top takes a third of the
+// height and none of the text, so the page sits behind the voice for the first
+// minute of every newsletter. Each passage is instead looked up where it
+// actually appears, and the scroll moves between those anchors — which steps
+// over anything that occupies height without being read.
+
+// One pass over the rendered email, collecting its text and which node each
+// stretch came from. Rebuilt when the height changes, since an image finishing
+// its load moves everything below it.
+function ttsTextIndex(t) {
+  const root = t.doc ? t.doc.body : t.scroller;
+  const docRef = t.doc || document;
+  if (!root || !docRef.createTreeWalker) return null;
+  const nodes = [];
+  let text = '';
+  try {
+    const walk = docRef.createTreeWalker(root, 4 /* SHOW_TEXT */);
+    let n;
+    while ((n = walk.nextNode())) {
+      const raw = n.nodeValue || '';
+      const norm = raw.replace(/\s+/g, ' ');
+      if (!norm.trim()) continue;
+      nodes.push({ node: n, start: text.length, len: norm.length, rawLen: raw.length });
+      text += norm;
+    }
+  } catch(e) { return null; }
+  return nodes.length ? { text, nodes, height: t.scroller.scrollHeight } : null;
+}
+
+function ttsNodeAt(index, pos) {
+  let lo = 0, hi = index.nodes.length - 1, best = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (index.nodes[mid].start <= pos) { best = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return index.nodes[best];
+}
+
+// How far down the scroller a given point in the text sits.
+function ttsTopOf(t, index, pos) {
+  const entry = ttsNodeAt(index, pos);
+  if (!entry || !entry.rawLen) return null;
+  const within = Math.max(0, Math.min(pos - entry.start, Math.max(entry.len - 1, 0)));
+  const off = entry.len ? Math.round(within / entry.len * entry.rawLen) : 0;
+  try {
+    const start = Math.min(off, entry.rawLen - 1);
+    const r = (t.doc || document).createRange();
+    r.setStart(entry.node, start);
+    r.setEnd(entry.node, Math.min(start + 1, entry.rawLen));
+    const rect = r.getBoundingClientRect();
+    if (!rect || (!rect.top && !rect.height)) return null;
+    // An iframe's rects are already relative to its own viewport; the plain
+    // text pane is an element inside this one, so its own box comes off first.
+    if (t.doc) return rect.top + t.scroller.scrollTop;
+    const host = t.scroller.getBoundingClientRect();
+    return rect.top - host.top + t.scroller.scrollTop;
+  } catch(e) { return null; }
+}
+
+// A passage's opening words, found on the page. Searching forward from the
+// last match keeps a repeated phrase resolving in reading order.
+function ttsChunkTop(s, t, i) {
+  if (i < 0 || i >= s.chunks.length) return null;
+  if (!s.index || s.index.height !== t.scroller.scrollHeight) {
+    s.index = ttsTextIndex(t);
+    s.anchors = {};
+    s.searchFrom = 0;
+  }
+  if (!s.index) return null;
+  if (s.anchors[i] != null) return s.anchors[i];
+  const norm = s.chunks[i].replace(/\s+/g, ' ').trim();
+  // The opening words may not be on the page at all — the first passage begins
+  // with the spoken "From … Subject …", and any sentence can have had an
+  // address lifted out of it. So try each of the next few sentence starts
+  // before giving up, rather than falling back to a guess over one word.
+  const starts = [0];
+  const breaks = /[.!?]\s+/g;
+  let m;
+  while ((m = breaks.exec(norm)) && starts.length < 5) starts.push(m.index + m[0].length);
+  for (const from of starts) {
+    const needle = norm.slice(from, from + 28);
+    if (needle.length < 8) continue;
+    let at = s.index.text.indexOf(needle, s.searchFrom || 0);
+    if (at === -1) at = s.index.text.indexOf(needle);
+    if (at === -1) continue;
+    s.searchFrom = at + 1;
+    const top = ttsTopOf(t, s.index, at);
+    if (top != null) { s.anchors[i] = top; return top; }
+  }
+  return null;
+}
+
 // Every frame, not every quarter second, and easing towards the voice's
 // position rather than snapping to it. The audio clock is continuous, so the
 // target is too; what made this jump was sampling it coarsely and writing it
 // to a whole-pixel scrollTop. Now it glides the way auto-scroll does.
 const TTS_SCROLL_FOLLOW = 0.08;   // how hard it chases; lower is gentler
+const TTS_READ_LINE = 0.3;        // where the line being read sits in the view
 
 function ttsSyncScroll() {
   const s = ttsSession;
@@ -6349,8 +6444,21 @@ function ttsSyncScroll() {
   // Moved away from where we put it — the reader is scrolling, so stop pushing.
   if (s.lastTop != null && Math.abs(t.scroller.scrollTop - s.lastTop) > 8) { ttsManualScroll(); return; }
 
-  const done = (s.i + ttsChunkProgress(s)) / s.chunks.length;
-  const target = span * Math.min(done * s.coverage, 1);
+  const within = ttsChunkProgress(s);
+  let target = null;
+  const here = ttsChunkTop(s, t, s.i);
+  if (here != null) {
+    // Move from this passage towards the next as it's read, so whatever sits
+    // between them — a picture, a pull quote — is crossed on the way.
+    const next = ttsChunkTop(s, t, s.i + 1);
+    const to = (next != null && next > here) ? next : here;
+    // The line being read belongs a little below the top edge, not against it.
+    target = here + (to - here) * within - t.scroller.clientHeight * TTS_READ_LINE;
+  } else {
+    const done = (s.i + within) / s.chunks.length;
+    target = span * Math.min(done * s.coverage, 1);
+  }
+  target = Math.max(0, Math.min(target, span));
   if (s.scrollPos == null) s.scrollPos = t.scroller.scrollTop;
   // Never behind where the reader already is, and never backwards: a voice
   // that has just moved on shouldn't drag the page up to meet it.
