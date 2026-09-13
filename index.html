@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v95'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v96'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6077,6 +6077,7 @@ function cleanForSpeech(raw) {
   t = t.split('\n')
        .map(l => l.replace(/^[\s*·•\-–—=_~#|]+/, '').replace(/[\s*=_~|]+$/, '').trim())
        .filter(l => l && /[A-Za-z0-9]/.test(l))        // rules, spacers, emoji-only
+       .filter(l => !TTS_BUTTON_RE.test(l))            // buttons standing on their own
        .join('\n');
   return t.replace(/[ \t]{2,}/g, ' ').replace(/\n{2,}/g, '\n').trim();
 }
@@ -6106,6 +6107,26 @@ const TTS_NEVER_RE = new RegExp([
   'subscribe (?:here|now) for more',
   'was this (?:email|post) forwarded to you'
 ].map(p => '\\b(?:' + p + ')\\b').join('|'), 'i');
+
+// A line that is nothing but a button. A platform drops these through the
+// middle of a post — Share, Restack, Leave a comment — and each one lands in
+// the reading as a word of its own with no sentence around it. Matched whole,
+// so a line that opens "Share this with anyone who still thinks…" is the
+// writer talking and stays. The trailing \W* takes the arrow or the bullet a
+// button label is drawn with.
+const TTS_BUTTON_RE = new RegExp('^\\W*(?:' + [
+  'share(?: this(?: post| article| one)?)?',
+  'share on (?:twitter|x|facebook|linkedin|threads|bluesky)',
+  'restack(?: this(?: post)?)?',
+  'likes?', 'comments?', 'leave a comment', 'view (?:all )?comments?',
+  'repl(?:y|ies)', 'forward(?: this(?: email)?)?',
+  'subscribe(?: now)?', 'upgrade(?: to paid| your subscription)?',
+  'read (?:more|in app|online|it in the app)',
+  'listen(?: now| in app)?', 'watch(?: now| in app)?', 'open in app',
+  'give a gift subscription', 'gift a subscription', 'refer a friend',
+  'pledge(?: your support)?', 'donate', 'follow', 'tweet',
+  'get the app', 'download the app', 'view in browser'
+].join('|') + ')\\W*$', 'i');
 
 // Abbreviations whose full stop doesn't end a sentence.
 const TTS_ABBREV = /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Inc|Ltd|Co|Corp|Dept|Approx|No|vs|etc|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec|v|Cal|App|Cir|Ct|Civ|Proc|Supp|Stat|Rptr|Ed|Rev|Ann|Reg|Art|Sec|Para|Ch|Fig|Vol|pp|ibid|cf|e\.g|i\.e|a\.m|p\.m|U\.S|U\.K)\.(?=\s)/gi;
