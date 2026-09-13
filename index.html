@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v111'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v112'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6072,6 +6072,20 @@ function ttsCutFooter(text) {
   return text;
 }
 
+// A newsletter signs off with what else to read — "Recommended reading:" and a
+// list of links under it. The piece is over at that line, so the reading is
+// too. It has to be the whole of a line's opening: an essay that mentions
+// somebody's recommended reading in a sentence is still the essay.
+const TTS_END_RE = /^[ \t]*(?:recommended|further|related|suggested|more)\s+(?:reading|listening|links)\b[ \t]*:?/im;
+// And not in the opening stretch of the mail, where a letter that leads with
+// its recommendations would otherwise be cut to nothing.
+const TTS_END_MIN_SHARE = 0.3;
+
+function ttsCutAtEnd(text) {
+  const m = text.match(TTS_END_RE);
+  return (m && m.index > text.length * TTS_END_MIN_SHARE) ? text.slice(0, m.index) : text;
+}
+
 function cleanForSpeech(raw) {
   let t = String(raw || '').replace(/\r\n?/g, '\n');
   t = t.replace(/[\u200B-\u200D\uFEFF\u00AD]/g, '');   // zero-width padding
@@ -6089,6 +6103,7 @@ function cleanForSpeech(raw) {
   t = t.split('\n').filter(l => !/^\s*>/.test(l)).join('\n');
   t = ttsCutAt(t, [/^\s*--\s*$/m]);                    // signature block
   t = ttsCutFooter(t);
+  t = ttsCutAtEnd(t);
   // An address is never worth hearing, and neither is the word that was only
   // there to introduce it — "read more at <address>" wants to end at "more".
   const URL = '(?:https?:\\/\\/|www\\.)[^\\s)\\]>]*[^\\s)\\]>.,;:!?]';
