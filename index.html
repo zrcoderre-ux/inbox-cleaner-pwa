@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v110'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v111'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6314,6 +6314,27 @@ const TTS_EMPHASIS_RATE = '90%';
 // whole, since there is not enough of it left to slow.
 const TTS_ONSET_MIN_LETTERS = 4;
 
+// And the sound the word ends on comes back to speed before the word does. A
+// slowdown that runs to the last letter is still being heard when the next word
+// starts, so the lean is over while there is still a little of the word left to
+// carry it out on. Only where enough of the word is left slowed to be worth
+// slowing.
+const TTS_ONSET_MIN_SLOWED = 3;
+
+function ttsEmphasisEnd(text, at, end) {
+  const span = text.slice(at, end);
+  const word = (/\S+$/.exec(span) || [''])[0];
+  if (word.replace(/[^A-Za-z]/g, '').length < TTS_ONSET_MIN_LETTERS) return end;
+  let tail = (/[^aeiou\s]*$/i.exec(word) || [''])[0].length;
+  if (!tail) tail = (/[aeiou]+$/i.exec(word) || [''])[0].length;
+  // A word whose closing cluster is most of what is left — "really" ends on
+  // three letters of its six — gives back its last letter instead of all of
+  // them, rather than giving back nothing.
+  if (tail > 0 && end - tail - at < TTS_ONSET_MIN_SLOWED) tail = 1;
+  const cut = end - tail;
+  return (tail > 0 && cut - at >= TTS_ONSET_MIN_SLOWED) ? cut : end;
+}
+
 function ttsEmphasisStart(text, at, end) {
   const span = text.slice(at, end);
   const word = (span.split(/\s/)[0] || '');
@@ -6608,7 +6629,8 @@ function ttsSsmlFor(s, i) {
     const straddles = quotes.some(q =>
       (h.at < q.at + 1 && h.end > q.at + 1) || (h.at < q.end - 1 && h.end > q.end - 1));
     if (straddles) return;
-    tags.push({ at: ttsEmphasisStart(text, h.at, h.end), end: h.end,
+    const from = ttsEmphasisStart(text, h.at, h.end);
+    tags.push({ at: from, end: ttsEmphasisEnd(text, from, h.end),
       open: '<prosody rate="' + TTS_EMPHASIS_RATE + '">', close: '</prosody>' });
     used++;
   });
