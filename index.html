@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v87'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v88'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6034,8 +6034,17 @@ const TTS_NEVER_RE = /\b(?:unsubscribe|manage (?:your )?(?:email )?preferences|u
 // Abbreviations whose full stop doesn't end a sentence.
 const TTS_ABBREV = /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Inc|Ltd|Co|Corp|Dept|Approx|No|vs|etc|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec|v|Cal|App|Cir|Ct|Civ|Proc|Supp|Stat|Rptr|Ed|Rev|Ann|Reg|Art|Sec|Para|Ch|Fig|Vol|pp|ibid|cf|e\.g|i\.e|a\.m|p\.m|U\.S|U\.K)\.(?=\s)/gi;
 
+// A dot between digits is a decimal point, not a full stop. It is masked along
+// with the abbreviations, because breaking there and joining the halves back up
+// puts a space in the middle of the number — "1.6" reaches the voice as "1. 6"
+// and is read "one, six" instead of "one point six". Version numbers and
+// section numbers ride the same rule and stay in one piece.
+const TTS_DECIMAL = /(\d)\.(?=\d)/g;
+
 function splitSentences(text) {
-  const masked = String(text || '').replace(TTS_ABBREV, m => m.replace(/\./g, TTS_DOT));
+  const masked = String(text || '')
+    .replace(TTS_ABBREV, m => m.replace(/\./g, TTS_DOT))
+    .replace(TTS_DECIMAL, '$1' + TTS_DOT);
   const out = [];
   masked.split('\n').forEach(line => {
     // Runs of text up to a terminator (or the end of the line). The leading
