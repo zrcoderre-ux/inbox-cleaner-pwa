@@ -1708,7 +1708,7 @@ body {
               <label class="keep-filter"><input type="checkbox" id="keep-offline-only" onchange="setKeepOfflineOnly(this.checked)"> Offline only</label>
             </div>
             <div class="toolbar-right">
-              <button class="btn-sm keep-listen" id="keep-listen" onclick="toggleKeepListen()" aria-pressed="false" title="Long reads only, cut-off previews skipped, played as you open them">
+              <button class="btn-sm keep-listen" id="keep-listen" onclick="toggleKeepListen()" aria-pressed="false" title="Long reads only, cut-off previews and video notes skipped, played as you open them">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-3a8 8 0 0 1 16 0v3"/><path d="M4 14a2 2 0 0 1 2-2h1v6H6a2 2 0 0 1-2-2zM20 14a2 2 0 0 0-2-2h-1v6h1a2 2 0 0 0 2-2z"/></svg>
                 Listen
               </button>
@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v93'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v94'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2859,7 +2859,8 @@ function idbGetAllMeta() {
         hasBody: !!(r.bodyHtml || (r.bodyText && r.bodyText !== '(could not load body)')),
         // Records saved before lengths were kept are measured here instead.
         words: typeof r.words === 'number' ? r.words : bodyWordCount(r.bodyText, r.bodyHtml),
-        paywalled: typeof r.paywalled === 'boolean' ? r.paywalled : bodyPaywalled(r.bodyText, r.bodyHtml)
+        paywalled: typeof r.paywalled === 'boolean' ? r.paywalled : bodyPaywalled(r.bodyText, r.bodyHtml),
+        videoLead: typeof r.videoLead === 'boolean' ? r.videoLead : bodyVideoLead(r.bodyText, r.bodyHtml)
       });
       c.continue();
     };
@@ -2908,6 +2909,28 @@ const KEEP_PAYWALL_RE = new RegExp([
   'read the (?:full|rest of (?:this|the)) (?:post|story|article) (?:with|by subscribing)'
 ].join('|'), 'i');
 
+// The link a video or podcast post leads with. Substack opens these with a
+// thumbnail and "Watch now", then a paragraph saying what it is — the piece is
+// the video, and the email is its caption. There is nothing there to listen to.
+const KEEP_VIDEO_RE = new RegExp([
+  '(?:watch|listen) now',
+  'watch (?:the |this )?(?:full )?(?:video|episode|interview|conversation)',
+  'listen to (?:the|this) (?:full )?(?:episode|interview|conversation)'
+].join('|'), 'i');
+// Only at the top, where a post that is about the video puts it. Far enough in
+// to clear a preheader, a nav row and a byline first.
+const KEEP_VIDEO_LEAD_CHARS = 800;
+// And only for a post with little of its own to say. An essay that happens to
+// open with a video is still an essay, so the link disqualifies nothing once
+// there are this many words around it — twice the length that makes a
+// newsletter worth hearing in the first place.
+const KEEP_VIDEO_WORDS = 600;
+
+function bodyVideoLead(text, html) {
+  const t = bodyPlainText(text, html);
+  return !!t && KEEP_VIDEO_RE.test(t.slice(0, KEEP_VIDEO_LEAD_CHARS));
+}
+
 // Only the tail counts. A sample ends on the offer; the same words higher up
 // are a link to something else, and cutting a whole newsletter for them would
 // be worse than reading one that stops early.
@@ -2947,6 +2970,7 @@ async function cacheKeptEmail(email) {
       bodyHtml: html,
       words: bodyWordCount(text, html),
       paywalled: bodyPaywalled(text, html),
+      videoLead: bodyVideoLead(text, html),
       savedAt: Date.now()
     });
   } catch(e) { /* best-effort */ }
@@ -4582,7 +4606,9 @@ async function renderKeepList() {
       words: rec ? rec.words
         : (mem && mem.bodyLoaded ? bodyWordCount(mem.bodyText, mem.bodyHtml) : 0),
       paywalled: rec ? !!rec.paywalled
-        : !!(mem && mem.bodyLoaded && bodyPaywalled(mem.bodyText, mem.bodyHtml))
+        : !!(mem && mem.bodyLoaded && bodyPaywalled(mem.bodyText, mem.bodyHtml)),
+      videoLead: rec ? !!rec.videoLead
+        : !!(mem && mem.bodyLoaded && bodyVideoLead(mem.bodyText, mem.bodyHtml))
     });
   }
 
@@ -4601,9 +4627,12 @@ async function renderKeepList() {
   if (keepOfflineOnly) items = items.filter(i => i.saved);
   // Listening is for the long stuff. Receipts and one-liners are quicker read
   // than heard, and a playlist of them is all announcement and no article.
-  // A cut-off sample is long enough to pass for a whole post, so length alone
-  // doesn't catch it.
-  if (keepListenMode) items = items.filter(i => i.words >= KEEP_NEWSLETTER_WORDS && !i.paywalled);
+  // Length alone catches neither of the two that get through it: a cut-off
+  // sample runs long enough to pass for a whole post, and a video announcement
+  // reaches the word count on its footer rather than its argument.
+  if (keepListenMode) items = items.filter(i =>
+    i.words >= KEEP_NEWSLETTER_WORDS && !i.paywalled &&
+    !(i.videoLead && i.words < KEEP_VIDEO_WORDS));
   const q = keepSearch.trim().toLowerCase();
   if (q) {
     items = items.filter(e =>
@@ -4623,7 +4652,7 @@ async function renderKeepList() {
   }
   if (!items.length) {
     el.innerHTML = `<div class="list-empty">${
-      keepListenMode ? 'Nothing to listen to yet — listen mode shows emails of about ' + KEEP_NEWSLETTER_WORDS + ' words or more, skipping posts cut off behind a paywall, and an email is measured once its body has been saved.'
+      keepListenMode ? 'Nothing to listen to yet — listen mode shows emails of about ' + KEEP_NEWSLETTER_WORDS + ' words or more, skipping posts cut off behind a paywall and short ones that only announce a video, and an email is measured once its body has been saved.'
       : keepOfflineOnly ? 'No kept emails are saved for offline yet.'
       : 'No kept emails match your search.'}</div>`;
     return;
