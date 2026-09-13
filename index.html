@@ -1874,7 +1874,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v73'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v74'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5079,22 +5079,7 @@ function startAutoScroll(scroller, doc) {
   asState.target = target;
   asState.handlers = h;
   Object.keys(h).forEach(evt => { try { target.addEventListener(evt, h[evt], { passive: true }); } catch(e) {} });
-  // Sub-pixel smoothness: scrollTop only moves in whole pixels (jumpy at slow
-  // speeds), so we render the fractional part with a GPU transform on the
-  // content. For plain text we wrap the content in .ras-inner; for an HTML
-  // email we transform the iframe body.
-  if (doc) {
-    asState.fracEl = doc.body;
-  } else {
-    let inner = scroller.querySelector('.ras-inner');
-    if (!inner) {
-      inner = document.createElement('div');
-      inner.className = 'ras-inner';
-      while (scroller.firstChild) inner.appendChild(scroller.firstChild);
-      scroller.appendChild(inner);
-    }
-    asState.fracEl = inner;
-  }
+  asState.fracEl = readerFracEl(scroller, doc);
   if (asState.fracEl) { try { asState.fracEl.style.willChange = 'transform'; } catch(e) {} }
   const pill = document.getElementById('reader-autoscroll');
   if (pill) { pill.style.display = 'flex'; applyAutoScrollPos(); }
@@ -5142,6 +5127,23 @@ function autoScrollWrite() {
   if (asState.fracEl) {
     try { asState.fracEl.style.transform = 'translate3d(0,' + (-frac) + 'px,0)'; } catch(e) {}
   }
+}
+
+// Sub-pixel smoothness: scrollTop only moves in whole pixels, which steps
+// visibly at reading pace, so the fractional part is rendered as a GPU
+// transform on the content instead. For plain text that means wrapping it in
+// .ras-inner; for an HTML email, transforming the iframe's body. Shared by
+// auto-scroll and by read-aloud's scroll sync, which need the same trick.
+function readerFracEl(scroller, doc) {
+  if (doc) return doc.body;
+  let inner = scroller.querySelector('.ras-inner');
+  if (!inner) {
+    inner = document.createElement('div');
+    inner.className = 'ras-inner';
+    while (scroller.firstChild) inner.appendChild(scroller.firstChild);
+    scroller.appendChild(inner);
+  }
+  return inner;
 }
 
 function autoScrollResetFrac() {
@@ -5722,7 +5724,7 @@ const TTS_DOT = '\u0001';
 
 let ttsAudio = null;
 let ttsMemo = new Map();    // voice|text → object URL, so a re-listen is free
-let ttsSyncTimer = null;
+let ttsScrollRaf = null;
 let ttsKeepTimer = null;
 let ttsDeviceVoices = [];
 
@@ -5915,11 +5917,12 @@ async function startReadAloud(email, opts = {}) {
   ttsWatchManualScroll();
   ttsShowBar(true);
   ttsUpdateUI();
-  ttsSyncTimer = setInterval(ttsSyncScroll, 250);
+  if (ttsScrollRaf) cancelAnimationFrame(ttsScrollRaf);
+  ttsScrollRaf = requestAnimationFrame(ttsSyncScroll);
   await ttsPlayIndex(0);
 }
 
-async function ttsPlayIndex(i) {
+async function ttsPlayIndex(i, opts = {}) {
   const s = ttsSession;
   if (!s) return;
   if (i < 0) i = 0;
@@ -5939,6 +5942,7 @@ async function ttsPlayIndex(i) {
     const a = ttsAudioEl();
     a.src = url;
     a.playbackRate = ttsRate;
+    if (opts.resumeFrac) ttsSeekFraction(a, opts.resumeFrac);
     // Pausing while this chunk was in flight has to hold: the audio is ready
     // and cued, but nothing starts until play is asked for again.
     if (!s.playing) { ttsSetMediaSession(); ttsUpdateUI(); return; }
@@ -6158,13 +6162,32 @@ function setReaderVoice(name) {
   const s = ttsSession;
   hideVoicePicker();
   if (!s || !name || name === s.voice) return;
+  // Where the outgoing voice had got to, as a proportion of the passage. Read
+  // it before anything is swapped, or the old position is already gone.
+  const frac = (s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration > 0)
+    ? Math.min(ttsAudio.currentTime / ttsAudio.duration, 0.98) : 0;
   s.voice = name;
   rememberVoiceForSender(s.email, name);
   ttsUpdateUI();
   if (s.mode === 'cloud') {
     s.playing = true;
-    ttsPlayIndex(s.i);   // re-speak this chunk in the new voice
+    ttsPlayIndex(s.i, { resumeFrac: frac });   // same passage, carrying on
   }
+}
+
+// A different voice reads the same words at its own pace, so the place to pick
+// up is the same proportion through the passage rather than the same number of
+// seconds into it. Approximate by nature — voices don't breathe in the same
+// places — but far closer than starting the passage again.
+function ttsSeekFraction(a, frac) {
+  const apply = () => {
+    try {
+      const d = a.duration;
+      if (isFinite(d) && d > 0) a.currentTime = Math.min(frac * d, Math.max(d - 0.05, 0));
+    } catch(e) {}
+  };
+  if (isFinite(a.duration) && a.duration > 0) apply();
+  else a.addEventListener('loadedmetadata', apply, { once: true });
 }
 
 function toggleVoicePicker() {
@@ -6257,7 +6280,8 @@ async function finishReadAloud() {
 function stopReadAloud(opts = {}) {
   const s = ttsSession;
   ttsSession = null;
-  if (ttsSyncTimer) { clearInterval(ttsSyncTimer); ttsSyncTimer = null; }
+  if (ttsScrollRaf) { cancelAnimationFrame(ttsScrollRaf); ttsScrollRaf = null; }
+  ttsResetScrollFrac(s);
   ttsKeepAlive(false);
   try { speechSynthesis.cancel(); } catch(e) {}
   if (ttsAudio) { try { ttsAudio.pause(); } catch(e) {} }
@@ -6307,21 +6331,42 @@ function ttsChunkProgress(s) {
   return Math.min((Date.now() - (s.chunkStarted || Date.now())) / Math.max(expected, 1), 1);
 }
 
+// Every frame, not every quarter second, and easing towards the voice's
+// position rather than snapping to it. The audio clock is continuous, so the
+// target is too; what made this jump was sampling it coarsely and writing it
+// to a whole-pixel scrollTop. Now it glides the way auto-scroll does.
+const TTS_SCROLL_FOLLOW = 0.08;   // how hard it chases; lower is gentler
+
 function ttsSyncScroll() {
   const s = ttsSession;
-  if (!s || !s.playing || s.userScrolled) return;
+  if (!s) { ttsScrollRaf = null; return; }
+  ttsScrollRaf = requestAnimationFrame(ttsSyncScroll);
+  if (!s.playing || s.userScrolled) return;
   const t = readerScrollTarget();
   if (!t) return;
   const span = t.scroller.scrollHeight - t.scroller.clientHeight;
   if (span <= 4) return;
   // Moved away from where we put it — the reader is scrolling, so stop pushing.
   if (s.lastTop != null && Math.abs(t.scroller.scrollTop - s.lastTop) > 8) { ttsManualScroll(); return; }
+
   const done = (s.i + ttsChunkProgress(s)) / s.chunks.length;
-  const target = Math.round(span * Math.min(done * s.coverage, 1));
-  if (target > t.scroller.scrollTop) {   // only ever forward, never yank back
-    t.scroller.scrollTop = target;
-    s.lastTop = t.scroller.scrollTop;
-  }
+  const target = span * Math.min(done * s.coverage, 1);
+  if (s.scrollPos == null) s.scrollPos = t.scroller.scrollTop;
+  // Never behind where the reader already is, and never backwards: a voice
+  // that has just moved on shouldn't drag the page up to meet it.
+  if (s.scrollPos < t.scroller.scrollTop) s.scrollPos = t.scroller.scrollTop;
+  if (target > s.scrollPos) s.scrollPos += (target - s.scrollPos) * TTS_SCROLL_FOLLOW;
+
+  const whole = Math.floor(s.scrollPos);
+  const frac = s.scrollPos - whole;
+  t.scroller.scrollTop = whole;
+  s.lastTop = t.scroller.scrollTop;
+  s.fracEl = s.fracEl || readerFracEl(t.scroller, t.doc);
+  if (s.fracEl) { try { s.fracEl.style.transform = 'translate3d(0,' + (-frac) + 'px,0)'; } catch(e) {} }
+}
+
+function ttsResetScrollFrac(s) {
+  if (s && s.fracEl) { try { s.fracEl.style.transform = ''; s.fracEl.style.willChange = ''; } catch(e) {} }
 }
 
 // A touch or wheel hands the scroll back to the reader; the voice keeps going.
