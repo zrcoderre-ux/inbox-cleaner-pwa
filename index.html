@@ -929,9 +929,10 @@ body {
   transform: translateX(-50%);
   bottom: calc(18px + env(safe-area-inset-bottom, 0px));
   display: none;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 10px;
+  flex-direction: column;
+  gap: 7px;
+  width: min(360px, calc(100% - 24px));
+  padding: 10px 12px 11px;
   background: rgba(20,20,20,0.82);
   color: #fff;
   border-radius: 26px;
@@ -942,6 +943,70 @@ body {
   backdrop-filter: blur(6px);
 }
 .reader-tts.open { display: flex; }
+.rtts-row { display: flex; align-items: center; gap: 6px; }
+/* The line being read, so the bar has something to point at. */
+.rtts-line {
+  font-family: var(--sans);
+  font-size: 11.5px;
+  line-height: 1.35;
+  opacity: 0.82;
+  max-height: 2.7em;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.rtts-line:empty { display: none; }
+/* A generous hit area around a slim bar: easy to grab, quiet to look at. */
+.rtts-track {
+  position: relative;
+  height: 22px;
+  margin: -6px 0;
+  cursor: pointer;
+  touch-action: none;
+  flex-shrink: 0;
+}
+.rtts-track::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: 10px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.25);
+}
+.rtts-fill {
+  position: absolute;
+  left: 0; top: 10px;
+  height: 3px;
+  width: 0;
+  border-radius: 2px;
+  background: #fff;
+}
+.rtts-thumb {
+  position: absolute;
+  top: 5.5px;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  transition: transform 0.12s ease;
+}
+.rtts-track.dragging .rtts-thumb { transform: scale(1.35); }
+.rtts-secs {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -42%);
+  font-family: var(--sans);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  pointer-events: none;
+}
+.rtts-btn { position: relative; }
 .rtts-btn {
   width: 30px; height: 30px;
   border-radius: 50%;
@@ -1827,20 +1892,32 @@ body {
     <span class="ras-wpm" id="ras-wpm-label">250 wpm</span>
   </div>
   <div class="reader-tts" id="reader-tts">
-    <button class="rtts-btn" onclick="ttsSkip(-1)" aria-label="Previous sentence">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 6h2v12H7zM19 6v12l-9-6z"/></svg>
-    </button>
-    <button class="rtts-btn primary" id="rtts-toggle" onclick="ttsTogglePlay()" aria-label="Pause"></button>
-    <button class="rtts-btn" onclick="ttsSkip(1)" aria-label="Next sentence">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 6h2v12h-2zM5 6l9 6-9 6z"/></svg>
-    </button>
-    <span class="rtts-progress" id="rtts-progress"></span>
-    <button class="rtts-rate" id="rtts-rate" onclick="cycleTtsRate()" aria-label="Speaking speed">1&times;</button>
-    <button class="rtts-rate rtts-voicebtn" id="rtts-voice" onclick="toggleVoicePicker()" aria-label="Change voice"></button>
-    <span class="rtts-note" id="rtts-note"></span>
-    <button class="rtts-btn" onclick="stopReadAloud()" aria-label="Stop reading">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
-    </button>
+    <div class="rtts-line" id="rtts-line"></div>
+    <div class="rtts-track" id="rtts-track" role="slider" tabindex="0"
+         aria-label="Position in the email" aria-valuemin="0" aria-valuemax="100">
+      <div class="rtts-fill" id="rtts-fill"></div>
+      <div class="rtts-thumb" id="rtts-thumb"></div>
+    </div>
+    <div class="rtts-row">
+      <button class="rtts-btn" onclick="ttsSkipSeconds(-15)" aria-label="Back 15 seconds">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M12 6a7.5 7.5 0 1 1-7.1 5.1"/><path d="M4.4 3.6v3.6h3.6"/>
+        </svg><span class="rtts-secs">15</span>
+      </button>
+      <button class="rtts-btn primary" id="rtts-toggle" onclick="ttsTogglePlay()" aria-label="Pause"></button>
+      <button class="rtts-btn" onclick="ttsSkipSeconds(30)" aria-label="Forward 30 seconds">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M12 6a7.5 7.5 0 1 0 7.1 5.1"/><path d="M19.6 3.6v3.6H16"/>
+        </svg><span class="rtts-secs">30</span>
+      </button>
+      <span class="rtts-progress" id="rtts-progress"></span>
+      <button class="rtts-rate" id="rtts-rate" onclick="cycleTtsRate()" aria-label="Speaking speed">1&times;</button>
+      <button class="rtts-rate rtts-voicebtn" id="rtts-voice" onclick="toggleVoicePicker()" aria-label="Change voice"></button>
+      <span class="rtts-note" id="rtts-note"></span>
+      <button class="rtts-btn" onclick="stopReadAloud()" aria-label="Stop reading">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
   </div>
   <div class="rtts-voices" id="rtts-voices"></div>
 </div>
@@ -1874,7 +1951,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v78'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v79'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5839,19 +5916,29 @@ function splitLongSentence(s) {
   return parts;
 }
 
-function chunkSentences(sentences) {
+// Passages are what gets synthesised; lines are what the reader thinks in. The
+// optional second argument collects where each line begins — which passage and
+// how far into it — so the scrubber can name the line being read and land on
+// one when dragged.
+function chunkSentences(sentences, outLines) {
   const chunks = [];
   let cur = '';
+  const flush = () => { if (cur) { chunks.push(cur); cur = ''; } };
   sentences.forEach(s => {
     if (s.length > TTS_CHUNK_CHARS) {
-      if (cur) { chunks.push(cur); cur = ''; }
-      splitLongSentence(s).forEach(p => chunks.push(p));
+      flush();
+      splitLongSentence(s).forEach(p => {
+        if (outLines) outLines.push({ chunk: chunks.length, at: 0, text: p });
+        chunks.push(p);
+      });
       return;
     }
-    if (cur && cur.length + s.length + 1 > TTS_CHUNK_CHARS) { chunks.push(cur); cur = ''; }
+    if (cur && cur.length + s.length + 1 > TTS_CHUNK_CHARS) flush();
+    // While cur is being built, chunks.length is the index it will be given.
+    if (outLines) outLines.push({ chunk: chunks.length, at: cur ? cur.length + 1 : 0, text: s });
     cur = cur ? cur + ' ' + s : s;
   });
-  if (cur) chunks.push(cur);
+  flush();
   return chunks;
 }
 
@@ -5861,12 +5948,18 @@ function buildSpeech(email) {
   const preamble = 'From ' + who + '. Subject: ' + (email.subject || 'no subject') + '.';
   const source = email.bodyText || (email.bodyHtml ? htmlToText(email.bodyHtml) : '');
   const body = cleanForSpeech(source);
-  const chunks = chunkSentences([preamble].concat(splitSentences(body)));
+  const lines = [];
+  const chunks = chunkSentences([preamble].concat(splitSentences(body)), lines);
+  // Running character totals, so a position anywhere in the email is one
+  // number and the scrubber has something continuous to sit on.
+  const starts = [];
+  let total = 0;
+  chunks.forEach(c => { starts.push(total); total += c.length; });
   // How much of the email on screen is actually being spoken. The page is
   // scrolled against this, so a mail that's half quoted history doesn't race
   // to the bottom while the voice is still near the top.
   const coverage = source.length ? Math.min(body.length / source.length, 1) : 1;
-  return { chunks, coverage };
+  return { chunks, coverage, lines, starts, total };
 }
 
 // ── Playback ───────────────────────────────────────────────
@@ -5923,12 +6016,14 @@ async function startReadAloud(email, opts = {}) {
   if (asPill) asPill.style.display = 'none';
   ttsSession = {
     email, chunks: built.chunks, coverage: built.coverage,
+    lines: built.lines, starts: built.starts, total: built.total,
     i: 0, playing: !opts.paused, mode: ttsBackend === 'device' ? 'device' : 'cloud',
     voice: voiceForEmail(email),
     chunkStarted: Date.now(), userScrolled: false, resumeTimer: null, lastTop: null
   };
   ttsWatchManualScroll();
   ttsShowBar(true);
+  initTtsTrack();
   ttsUpdateUI();
   if (ttsScrollRaf) cancelAnimationFrame(ttsScrollRaf);
   ttsScrollRaf = requestAnimationFrame(ttsSyncScroll);
@@ -6208,6 +6303,130 @@ function ttsTogglePlay(force) {
   }
   try { navigator.mediaSession.playbackState = s.playing ? 'playing' : 'paused'; } catch(e) {}
   ttsUpdateUI();
+}
+
+// ── How long is left ───────────────────────────────────────
+// Only the passage in hand has a duration the browser will tell us, so the
+// rest is estimated from its length at the pace actually being spoken — and
+// every passage that plays replaces its estimate with the real figure.
+function ttsSecondsPerChar(s) {
+  let chars = 0, secs = 0;
+  if (s && s.durations) {
+    for (let i = 0; i < s.chunks.length; i++) {
+      if (s.durations[i]) { chars += s.chunks[i].length; secs += s.durations[i]; }
+    }
+  }
+  return chars > 40 ? secs / chars : 1 / 15;   // ~15 characters a second
+}
+
+function ttsChunkSeconds(s, i, perChar) {
+  if (s.durations && s.durations[i]) return s.durations[i];
+  return (s.chunks[i] || '').length * perChar;
+}
+
+// Media seconds, which don't change with the speed setting; wall-clock time is
+// these divided by it.
+function ttsTiming(s) {
+  if (!s || !s.chunks.length) return null;
+  const perChar = ttsSecondsPerChar(s);
+  let total = 0, before = 0;
+  for (let i = 0; i < s.chunks.length; i++) {
+    const d = ttsChunkSeconds(s, i, perChar);
+    if (i < s.i) before += d;
+    total += d;
+  }
+  const here = (s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration)
+    ? ttsAudio.currentTime
+    : ttsChunkProgress(s) * ttsChunkSeconds(s, s.i, perChar);
+  const position = Math.min(before + here, total);
+  return { total, position, remaining: Math.max(total - position, 0) };
+}
+
+function ttsFormatTime(sec) {
+  if (!isFinite(sec) || sec < 0) sec = 0;
+  const whole = Math.round(sec);
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor((whole % 3600) / 60);
+  const ss = whole % 60;
+  const pad = n => (n < 10 ? '0' : '') + n;
+  return h ? h + ':' + pad(m) + ':' + pad(ss) : m + ':' + pad(ss);
+}
+
+// ── Position, in characters ────────────────────────────────
+// One number for "where we are in this email", so skipping and scrubbing can
+// cross passage boundaries without caring where they fall. Characters rather
+// than seconds because only the passage in hand has a known duration.
+function ttsCharPos(s) {
+  if (!s || !s.starts) return 0;
+  return s.starts[s.i] + ttsChunkProgress(s) * s.chunks[s.i].length;
+}
+
+// Characters per second, measured from the passage playing rather than
+// assumed — voices and speeds differ, and this is what turns "back 15
+// seconds" into a distance.
+function ttsCharsPerSecond(s) {
+  if (s && s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration > 0) {
+    return (s.chunks[s.i].length / ttsAudio.duration) * (ttsAudio.playbackRate || 1);
+  }
+  return 15 * ttsRate;   // a reasonable speaking pace, for the device voice
+}
+
+function ttsChunkAtChar(s, pos) {
+  let lo = 0, hi = s.chunks.length - 1, best = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (s.starts[mid] <= pos) { best = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return best;
+}
+
+function ttsLineAtChar(s, pos) {
+  if (!s || !s.lines || !s.lines.length) return 0;
+  const chunk = ttsChunkAtChar(s, pos);
+  const within = pos - s.starts[chunk];
+  let best = 0;
+  for (let i = 0; i < s.lines.length; i++) {
+    const l = s.lines[i];
+    if (l.chunk < chunk || (l.chunk === chunk && l.at <= within)) best = i; else break;
+  }
+  return best;
+}
+
+// Move to a point in the email, given in characters from its start.
+function ttsSeekToChar(s, pos) {
+  if (!s || !s.starts) return;
+  const at = Math.max(0, Math.min(pos, s.total - 1));
+  const chunk = ttsChunkAtChar(s, at);
+  const len = s.chunks[chunk].length || 1;
+  const frac = Math.max(0, Math.min((at - s.starts[chunk]) / len, 0.98));
+  s.scrollPos = null;      // the page will be somewhere else entirely now
+  s.playing = true;
+  if (chunk === s.i && s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration) {
+    ttsAudio.currentTime = frac * ttsAudio.duration;
+    const p = ttsAudio.play(); if (p && p.catch) p.catch(() => {});
+    ttsUpdateUI();
+    return;
+  }
+  ttsPlayIndex(chunk, { resumeFrac: frac });
+}
+
+// The podcast controls: back a little, forward rather more. Within the
+// passage in hand this is exact; across a boundary it converts to characters
+// at the pace being spoken.
+function ttsSkipSeconds(delta) {
+  const s = ttsSession;
+  if (!s) return;
+  if (s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration > 0) {
+    const t = ttsAudio.currentTime + delta * (ttsAudio.playbackRate || 1);
+    if (t >= 0 && t < ttsAudio.duration) {
+      ttsAudio.currentTime = t;
+      s.scrollPos = null;
+      if (s.playing) { const p = ttsAudio.play(); if (p && p.catch) p.catch(() => {}); }
+      ttsUpdateUI();
+      return;
+    }
+  }
+  ttsSeekToChar(s, ttsCharPos(s) + delta * ttsCharsPerSecond(s));
 }
 
 function ttsSkip(delta) {
@@ -6522,7 +6741,14 @@ function ttsSyncScroll() {
   const s = ttsSession;
   if (!s) { ttsScrollRaf = null; return; }
   ttsScrollRaf = requestAnimationFrame(ttsSyncScroll);
-  if (!s.playing || s.userScrolled) return;
+  // A passage that has loaded knows its real length; keep it, so what's left
+  // of the email stops being a guess as it goes.
+  if (s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration > 0) {
+    if (!s.durations) s.durations = [];
+    if (!s.durations[s.i]) { s.durations[s.i] = ttsAudio.duration; ttsSetPositionState(); }
+  }
+  if (!s.playing || ttsDrag) { ttsPaintTrack(); return; }
+  if (s.userScrolled) return;
   const t = readerScrollTarget();
   if (!t) return;
   const span = t.scroller.scrollHeight - t.scroller.clientHeight;
@@ -6551,6 +6777,7 @@ function ttsSyncScroll() {
   if (s.scrollPos < t.scroller.scrollTop) s.scrollPos = t.scroller.scrollTop;
   if (target > s.scrollPos) s.scrollPos += (target - s.scrollPos) * TTS_SCROLL_FOLLOW;
 
+  ttsPaintTrack();
   const whole = Math.floor(s.scrollPos);
   const frac = s.scrollPos - whole;
   t.scroller.scrollTop = whole;
@@ -6611,12 +6838,29 @@ function ttsSetMediaSession() {
     });
     navigator.mediaSession.playbackState = ttsSession.playing ? 'playing' : 'paused';
   } catch(e) {}
+  ttsSetPositionState();
   const set = (action, fn) => { try { navigator.mediaSession.setActionHandler(action, fn); } catch(e) {} };
   set('play', () => ttsTogglePlay(true));
   set('pause', () => ttsTogglePlay(false));
   set('stop', () => stopReadAloud());
   set('previoustrack', () => ttsSkip(-1));
   set('nexttrack', () => ttsSkip(1));
+}
+
+// Without this the lock screen counts down the passage in hand, which is a
+// minute or so and means nothing to anyone. Handing it the whole email's
+// figures makes the bar there the email's bar.
+function ttsSetPositionState() {
+  if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+  const t = ttsTiming(ttsSession);
+  if (!t || !(t.total > 0)) return;
+  try {
+    navigator.mediaSession.setPositionState({
+      duration: t.total,
+      position: Math.min(t.position, t.total),
+      playbackRate: ttsRate
+    });
+  } catch(e) {}
 }
 
 function ttsClearMediaSession() {
@@ -6628,6 +6872,101 @@ function ttsClearMediaSession() {
 }
 
 // ── Reader controls ────────────────────────────────────────
+// ── The scrubber ───────────────────────────────────────────
+// Dragging lands on a line rather than an arbitrary instant: mid-sentence is
+// never where anyone means to be, and a line is the smallest unit the reader
+// thinks in.
+let ttsDrag = null;
+
+function initTtsTrack() {
+  const track = document.getElementById('rtts-track');
+  if (!track || track._bound) return;
+  track._bound = true;
+
+  const fractionAt = ev => {
+    const r = track.getBoundingClientRect();
+    return r.width ? Math.max(0, Math.min((ev.clientX - r.left) / r.width, 1)) : 0;
+  };
+
+  track.addEventListener('pointerdown', ev => {
+    const s = ttsSession;
+    if (!s) return;
+    ttsDrag = { id: ev.pointerId, frac: fractionAt(ev) };
+    try { track.setPointerCapture(ev.pointerId); } catch(e) {}
+    track.classList.add('dragging');
+    ttsPaintTrack();
+    ev.preventDefault();
+  });
+
+  track.addEventListener('pointermove', ev => {
+    if (!ttsDrag || ev.pointerId !== ttsDrag.id) return;
+    ttsDrag.frac = fractionAt(ev);
+    ttsPaintTrack();     // the label follows the thumb, so you can see where you'd land
+    ev.preventDefault();
+  });
+
+  const release = ev => {
+    if (!ttsDrag || (ev.pointerId != null && ev.pointerId !== ttsDrag.id)) return;
+    const frac = ttsDrag.frac;
+    try { track.releasePointerCapture(ttsDrag.id); } catch(e) {}
+    ttsDrag = null;
+    track.classList.remove('dragging');
+    const s = ttsSession;
+    if (!s) return;
+    // Snap to the top of whichever line was under the thumb.
+    const line = s.lines[ttsLineAtChar(s, frac * s.total)];
+    if (line) ttsSeekToChar(s, s.starts[line.chunk] + line.at);
+    else ttsSeekToChar(s, frac * s.total);
+  };
+  track.addEventListener('pointerup', release);
+  track.addEventListener('pointercancel', release);
+
+  // Arrow keys move a line at a time once the bar has focus.
+  track.addEventListener('keydown', ev => {
+    const s = ttsSession;
+    if (!s || !s.lines.length) return;
+    const step = (ev.key === 'ArrowRight') ? 1 : (ev.key === 'ArrowLeft') ? -1 : 0;
+    if (!step) return;
+    ev.preventDefault();
+    const at = Math.max(0, Math.min(ttsLineAtChar(s, ttsCharPos(s)) + step, s.lines.length - 1));
+    const line = s.lines[at];
+    if (line) ttsSeekToChar(s, s.starts[line.chunk] + line.at);
+  });
+}
+
+function ttsPaintTrack() {
+  const s = ttsSession;
+  const fill = document.getElementById('rtts-fill');
+  const thumb = document.getElementById('rtts-thumb');
+  const label = document.getElementById('rtts-line');
+  const track = document.getElementById('rtts-track');
+  if (!fill || !thumb) return;
+  const frac = !s ? 0
+    : ttsDrag ? ttsDrag.frac
+    : (s.total ? Math.max(0, Math.min(ttsCharPos(s) / s.total, 1)) : 0);
+  fill.style.width = (frac * 100) + '%';
+  thumb.style.left = (frac * 100) + '%';
+  if (track) track.setAttribute('aria-valuenow', Math.round(frac * 100));
+  // The countdown belongs here rather than in ttsUpdateUI, which only runs when
+  // a passage changes — it looked frozen for a minute at a time. Recomputed a
+  // few times a second, which is as often as a figure in seconds can change.
+  const now = Date.now();
+  if (s && (!s.clockAt || now - s.clockAt > 240)) {
+    s.clockAt = now;
+    const prog = document.getElementById('rtts-progress');
+    const t = ttsTiming(s);
+    if (prog && t) {
+      const text = ttsFormatTime(t.remaining / (ttsRate || 1)) + ' left';
+      if (prog.textContent !== text) prog.textContent = text;
+    }
+  }
+  if (label) {
+    const line = s && s.lines && s.lines.length ? s.lines[ttsLineAtChar(s, frac * s.total)] : null;
+    const text = line ? line.text : '';
+    if (label.textContent !== text) label.textContent = text;
+  }
+}
+
 function ttsShowBar(on) {
   const bar = document.getElementById('reader-tts');
   if (bar) bar.classList.toggle('open', !!on);
@@ -6642,8 +6981,12 @@ function ttsUpdateUI() {
       : '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
     btn.setAttribute('aria-label', (s && s.playing) ? 'Pause' : 'Play');
   }
-  const prog = document.getElementById('rtts-progress');
-  if (prog) prog.textContent = s ? (s.i + 1) + ' / ' + s.chunks.length : '';
+  if (s) s.clockAt = 0;      // let the next paint recompute what's left
+  else {
+    const prog = document.getElementById('rtts-progress');
+    if (prog) prog.textContent = '';
+  }
+  ttsPaintTrack();
   const rate = document.getElementById('rtts-rate');
   if (rate) rate.innerHTML = ttsRateLabel(ttsRate) + '&times;';
   const voiceBtn = document.getElementById('rtts-voice');
@@ -6784,6 +7127,7 @@ function setTtsRate(r) {
   if (ttsSession && ttsSession.mode === 'device' && ttsSession.playing) {
     ttsSpeakOnDevice(ttsSession.chunks[ttsSession.i]);
   }
+  ttsSetPositionState();
   ttsUpdateUI();
 }
 
