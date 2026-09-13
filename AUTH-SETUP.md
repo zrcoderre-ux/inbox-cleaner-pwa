@@ -69,6 +69,17 @@ consent once; after that the app renews silently from the refresh token.
 
 ---
 
+## A voice per sender
+
+The reader's player has a voice button. Picking from it applies to the
+sentence being read — you hear the change immediately rather than at the next
+paragraph — and sticks to that sender, keyed on their address so a rename
+doesn't lose it. Choosing the default again drops the override rather than
+pinning it, so changing the default still carries.
+
+Settings counts how many senders have their own voice and offers a reset.
+These are per account, alongside the keep list and sender rules.
+
 ## How it works
 
 - **Sign in** → `response_type=code` with `access_type=offline` &
@@ -256,6 +267,12 @@ npx wrangler kv namespace create TTS_BUDGET
 Wrangler prints an id. Uncomment the `[[kv_namespaces]]` block in
 `wrangler.toml`, paste the id in, and commit — the deploy picks it up.
 
+No CLI to hand? The dashboard does the same: **Storage & Databases → KV →
+Create a namespace**, name it `TTS_BUDGET`, and copy the id it shows. The id
+still has to go into `wrangler.toml`, because a deploy from the repo replaces
+whatever bindings the dashboard holds. It isn't a secret — every Cloudflare
+project keeps these in config.
+
 From then on the Worker keeps a character total per calendar month and refuses
 requests that would pass the cap, answering before it calls Google so a refusal
 costs nothing. The app drops to the device voice for the rest of the month and
@@ -266,7 +283,13 @@ Two things this buys beyond the in-app counter: the total covers **every
 device** rather than one browser's share, and it's a stop rather than a
 notice. Settings shows the Worker's figure once the namespace is bound.
 
-The margin under the allowance is doing real work. KV has no atomic
+The cap fails closed, which is the whole point of it. A budget that can't be
+read refuses the request rather than assuming zero, and a failed write stops
+the *next* request rather than being shrugged off — spend the counter can't
+see is spend the cap can't bound. Either way the app drops to the device
+voice and says why. Once the counter is writable again it resumes on its own.
+
+The margin under the allowance is doing real work too. KV has no atomic
 increment, so two requests in flight can read the same total and one of their
 additions is lost. The app sends at most two at a time, so the drift is small
 and always an undercount — the 50,000-character gap absorbs it. Exact
@@ -274,6 +297,17 @@ accounting would want a Durable Object; this is a budget, not a ledger.
 
 Leave the namespace uncreated and nothing is enforced: the Worker skips the
 whole mechanism and the app falls back to its own per-browser estimate.
+
+## A voice per sender
+
+The reader's player has a voice button. Picking from it applies to the
+sentence being read — you hear the change immediately rather than at the next
+paragraph — and sticks to that sender, keyed on their address so a rename
+doesn't lose it. Choosing the default again drops the override rather than
+pinning it, so changing the default still carries.
+
+Settings counts how many senders have their own voice and offers a reset.
+These are per account, alongside the keep list and sender rules.
 
 ## How it works
 
