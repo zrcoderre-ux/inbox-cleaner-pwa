@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v88'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v89'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6140,49 +6140,110 @@ function ttsMarkNoSsml(voice) {
 // them is part of that phrase rather than a phrase of its own.
 const ITALIC_SEL = 'i, em, cite, [style*="italic"]';
 
-// The italicised phrases in an email, shortest-lived reading of the HTML there
-// is: the text pipeline never sees this, so nothing downstream has to carry a
-// marker through sentence splitting or the character positions the scrubber
-// counts in.
-//
-// Because a phrase is carried as text and found again by searching for it, a
-// phrase is only usable when every place it appears in the email is italicised.
-// A word italicised once in a pull quote and written plainly four more times
-// would otherwise have the stress land wherever the search happened to reach
-// first — which is how an upright word ends up spoken as though it were
-// leaning. So each phrase is counted both ways, and kept only where the two
-// counts agree.
-function italicRuns(html) {
-  if (!html) return [];
-  const out = [];
+// Marks put into the text itself as it is built, and taken out again at the
+// end. Nothing searches for an italic phrase afterwards — a word italicised in
+// a pull quote and written plainly four times over can't be told from its
+// copies by its spelling, which is how an upright word came to be read as
+// though it leaned. Carried in the text, the marks go through cleaning,
+// sentence splitting and chunking with the words they belong to, and what
+// comes out the other end is the exact character range of every italic phrase
+// in every passage.
+const TTS_MARK_ON = '\u0002';
+const TTS_MARK_OFF = '\u0003';
+// Where one block of the page ends. Inserted rather than relied upon, since
+// whitespace in the source is only indentation: without these a table-based
+// newsletter reads "Read moreSubscribe", one cell running into the next, and
+// with the source's own newlines kept instead, a paragraph wrapped at 78
+// columns would be read as four separate sentences.
+const TTS_MARK_BREAK = '\u0004';
+const TTS_BLOCK_SEL = 'p,div,br,li,tr,td,th,h1,h2,h3,h4,h5,h6,blockquote,section,' +
+                      'article,header,footer,ul,ol,table,figcaption,pre,hr';
+
+// Whether an italic phrase is emphasis at all, or just something set in italics:
+// one or two words — past that it is a title, a case name, a quoted passage, a
+// whole indented aside — and no capitals, which mean a name, a company, a
+// defined term, or a word already SHOUTED and carrying its own stress.
+function ttsWorthEmphasis(run) {
+  if (!run || run.length < 2) return false;
+  if (run.split(' ').length > TTS_ITALIC_MAX_WORDS) return false;
+  if (!/[A-Za-z]/.test(run)) return false;
+  return !ttsHasCapital(run);
+}
+
+// The email as the voice should receive it: the text of the page the reader is
+// looking at, with every italic phrase marked where it stands. This is the
+// source for any mail that has HTML, because the plain-text part is a different
+// rendering of the same mail and has no way of saying where the italics fall.
+function ttsTextFromHtml(html) {
+  if (!html) return '';
   try {
     const div = document.createElement('div');
     div.innerHTML = html;
-    div.querySelectorAll('style, script, head').forEach(el => el.remove());
-    const marked = new Map();
+    div.querySelectorAll('style, script, head, [hidden]').forEach(el => el.remove());
+    // The preheader: the line an email hides in its HTML so the inbox preview
+    // reads well. It isn't on the page, so it isn't read out — and a hidden
+    // copy of a phrase isn't an italic phrase either.
+    div.querySelectorAll('[style]').forEach(el => {
+      const css = (el.getAttribute('style') || '').replace(/\s+/g, '').toLowerCase();
+      if (/display:none|visibility:hidden|opacity:0|mso-hide:all|(?:font-size|max-height|line-height):0/.test(css)) el.remove();
+    });
     div.querySelectorAll(ITALIC_SEL).forEach(el => {
       // An <em> inside an <i> is one italicised phrase, not two of them.
       if (el.parentElement && el.parentElement.closest(ITALIC_SEL)) return;
-      const run = (el.textContent || '').replace(/\s+/g, ' ').trim();
-      if (run.length < 2) return;
-      if (run.split(' ').length > TTS_ITALIC_MAX_WORDS) return;
-      if (!/[A-Za-z]/.test(run)) return;
-      if (ttsHasCapital(run)) return;
-      marked.set(run, (marked.get(run) || 0) + 1);
+      if (!ttsWorthEmphasis((el.textContent || '').replace(/\s+/g, ' ').trim())) return;
+      el.insertBefore(document.createTextNode(TTS_MARK_ON), el.firstChild);
+      el.appendChild(document.createTextNode(TTS_MARK_OFF));
     });
-    if (!marked.size) return out;
-    // Every word in the email, italic or not — hidden preheaders, footers and
-    // quoted history included, since a copy of the phrase in any of them is
-    // another copy the search could land on. Read after the phrases are taken,
-    // so the separators can't run two blocks' words together into one and
-    // can't split a phrase that spans a tag.
-    div.querySelectorAll('*').forEach(el => el.appendChild(document.createTextNode(' ')));
-    const all = (div.textContent || '').replace(/\s+/g, ' ');
-    marked.forEach((n, run) => {
-      if (wholeWordHits(all, run).length === n) out.push(run);
-    });
-  } catch(e) {}
-  return out;
+    // After the phrases, so a break can never be inserted inside one.
+    div.querySelectorAll(TTS_BLOCK_SEL).forEach(el => el.after(TTS_MARK_BREAK));
+    return (div.textContent || '')
+      .replace(/\s+/g, ' ')            // source whitespace is indentation, nothing more
+      .split(TTS_MARK_BREAK)
+      .map(line => line.trim())
+      .filter(Boolean)
+      .join('\n');
+  } catch(e) { return ''; }
+}
+
+// Takes the marks back out of a passage and reports where they were. The spans
+// are trimmed inwards, so an <em> written with spaces inside it doesn't leave
+// the voice leaning on the space before the word.
+function ttsTakeMarks(text) {
+  const spans = [];
+  let out = '', open = -1;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === TTS_MARK_ON) { open = out.length; continue; }
+    if (c === TTS_MARK_OFF) {
+      if (open !== -1) {
+        let at = open, end = out.length;
+        while (at < end && /\s/.test(out[at])) at++;
+        while (end > at && /\s/.test(out[end - 1])) end--;
+        if (end > at) spans.push({ at, end });
+      }
+      open = -1;
+      continue;
+    }
+    out += c;
+  }
+  return { text: out, spans };
+}
+
+// The same position in a marked passage, counted in the passage the marks have
+// been taken out of.
+function ttsUnmarkedIndex(marked, at) {
+  let n = 0;
+  for (let i = 0; i < at && i < marked.length; i++) {
+    const c = marked[i];
+    if (c !== TTS_MARK_ON && c !== TTS_MARK_OFF) n++;
+  }
+  return n;
+}
+
+// How many phrases this email has to lean on, for the note that says when a
+// voice won't do them at all.
+function ttsEmphasisCount(s) {
+  return (s && s.emph) ? s.emph.reduce((n, spans) => n + spans.length, 0) : 0;
 }
 
 // A capital anywhere in an italic run means it is almost certainly not
@@ -6200,51 +6261,22 @@ function ttsEscapeSsml(t) {
           .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
-// Every place a phrase sits in a piece of text, as whole words only — so "not"
-// doesn't light up "nothing", and a phrase written twice is reported twice
-// rather than quietly taken as the first.
-function wholeWordHits(text, run) {
-  const out = [];
-  if (!text || !run) return out;
-  let at = text.indexOf(run);
-  while (at !== -1) {
-    const before = at ? text[at - 1] : ' ';
-    const after = text[at + run.length] || ' ';
-    if (!/[A-Za-z0-9]/.test(before) && !/[A-Za-z0-9]/.test(after)) out.push(at);
-    at = text.indexOf(run, at + 1);
-  }
-  return out;
-}
-
-// Where a phrase sits in a passage, but only when there is no doubt about it:
-// two of them in one passage can't be told apart by text alone, so neither is
-// emphasised.
-function ttsSoleOccurrence(text, run) {
-  const hits = wholeWordHits(text, run);
-  return hits.length === 1 ? hits[0] : -1;
-}
-
 // The passage as SSML, or '' for "send it as plain text" — which is most
 // passages, and costs nothing extra.
 function ttsSsmlFor(s, i) {
-  if (!s || !s.italics || !s.italics.length) return '';
+  const spans = s && s.emph && s.emph[i];
+  if (!spans || !spans.length) return '';
   if (ttsNoSsml[s.voice]) return '';
   const text = s.chunks[i] || '';
-  const hits = [];
-  for (const run of s.italics) {
-    const at = ttsSoleOccurrence(text, run);
-    if (at !== -1) hits.push({ at, end: at + run.length });
-    if (hits.length >= TTS_MAX_EMPHASIS) break;
-  }
-  if (!hits.length) return '';
-  hits.sort((a, b) => a.at - b.at);
-  let out = '', pos = 0;
-  for (const h of hits) {
-    if (h.at < pos) continue;            // overlapping phrases: keep the first
+  let out = '', pos = 0, used = 0;
+  for (const h of spans) {
+    if (h.at < pos || used >= TTS_MAX_EMPHASIS) continue;
     out += ttsEscapeSsml(text.slice(pos, h.at)) +
            '<emphasis level="moderate">' + ttsEscapeSsml(text.slice(h.at, h.end)) + '</emphasis>';
     pos = h.end;
+    used++;
   }
+  if (!used) return '';
   out = '<speak>' + out + ttsEscapeSsml(text.slice(pos)) + '</speak>';
   return out.length > TTS_SSML_BUDGET ? '' : out;
 }
@@ -6253,10 +6285,28 @@ function buildSpeech(email) {
   const from = parseSender(email.sender || '');
   const who = from.name || from.addr || 'an unknown sender';
   const preamble = 'From ' + who + '. Subject: ' + (email.subject || 'no subject') + '.';
-  const source = email.bodyText || (email.bodyHtml ? htmlToText(email.bodyHtml) : '');
+  // The page's own text where there is any, so the italics arrive with the
+  // words they belong to; the plain-text part only where a mail has no HTML.
+  const source = (email.bodyHtml && ttsTextFromHtml(email.bodyHtml)) || email.bodyText || '';
   const body = cleanForSpeech(source);
   const lines = [];
-  const chunks = chunkSentences([preamble].concat(splitSentences(body)), lines);
+  const marked = chunkSentences([preamble].concat(splitSentences(body)), lines);
+  // The marks have ridden this far with the text. Taking them out now leaves
+  // every passage as the voice will hear it, and every italic phrase as a pair
+  // of offsets into it.
+  const chunks = [], emph = [];
+  marked.forEach(m => {
+    const taken = ttsTakeMarks(m);
+    chunks.push(taken.text);
+    emph.push(taken.spans);
+  });
+  // Lines were measured against the marked passages, so they move too.
+  lines.forEach(l => {
+    l.at = ttsUnmarkedIndex(marked[l.chunk] || '', l.at);
+    const taken = ttsTakeMarks(l.text);
+    l.text = taken.text;
+    l.emph = taken.spans;
+  });
   // Running character totals, so a position anywhere in the email is one
   // number and the scrubber has something continuous to sit on.
   const starts = [];
@@ -6265,8 +6315,10 @@ function buildSpeech(email) {
   // How much of the email on screen is actually being spoken. The page is
   // scrolled against this, so a mail that's half quoted history doesn't race
   // to the bottom while the voice is still near the top.
-  const coverage = source.length ? Math.min(body.length / source.length, 1) : 1;
-  return { chunks, coverage, lines, starts, total, italics: italicRuns(email.bodyHtml) };
+  const measure = t => t.replace(/[\u0002\u0003]/g, '').length;   // marks aren't words
+  const srcLen = measure(source);
+  const coverage = srcLen ? Math.min(measure(body) / srcLen, 1) : 1;
+  return { chunks, emph, coverage, lines, starts, total };
 }
 
 // ── Playback ───────────────────────────────────────────────
@@ -6344,6 +6396,15 @@ function ttsSplitRemainder(s, i, frac) {
   if (!head || !tail) return false;
   s.splits = (s.splits || 0) + 1;
   s.chunks.splice(i, 1, head, tail);
+  // The tail is trimmed, so its offsets move by the cut and by whatever
+  // whitespace the trim took with it. A phrase straddling the cut belongs to
+  // neither half and is dropped rather than misplaced.
+  const spans = (s.emph && s.emph[i]) || [];
+  const lead = text.slice(cut).length - text.slice(cut).replace(/^\s+/, '').length;
+  if (s.emph) s.emph.splice(i, 1,
+    spans.filter(sp => sp.end <= cut),
+    spans.filter(sp => sp.at >= cut + lead)
+         .map(sp => ({ at: sp.at - cut - lead, end: sp.end - cut - lead })));
   // What the head is worth is what was actually heard of it; the tail has no
   // audio yet and no figure to give.
   const heard = (ttsAudio && isFinite(ttsAudio.currentTime)) ? ttsAudio.currentTime : 0;
@@ -6407,7 +6468,7 @@ async function startReadAloud(email, opts = {}) {
   if (asPill) asPill.style.display = 'none';
   ttsSession = {
     email, chunks: built.chunks, coverage: built.coverage,
-    lines: built.lines, starts: built.starts, total: built.total, italics: built.italics,
+    lines: built.lines, starts: built.starts, total: built.total, emph: built.emph,
     i: 0, playing: !opts.paused, mode: ttsBackend === 'device' ? 'device' : 'cloud',
     durations: [], trueDur: [],
     voice: voiceForEmail(email),
@@ -7540,23 +7601,18 @@ function ttsPaintTrack() {
       // leaning on is something you can see rather than have to take on trust
       // — and an email whose italics didn't survive the mail's HTML shows a
       // line with nothing marked in it.
-      label.innerHTML = ttsMarkEmphasis(s, text);
+      label.innerHTML = ttsMarkEmphasis(s, line);
     }
   }
 }
 
 // The line as HTML, with any phrase this passage is emphasising set in italics.
-function ttsMarkEmphasis(s, text) {
-  if (!s || !s.italics || !s.italics.length || !text || ttsNoSsml[s.voice]) return esc(text);
-  const hits = [];
-  for (const run of s.italics) {
-    const at = ttsSoleOccurrence(text, run);
-    if (at !== -1) hits.push({ at, end: at + run.length });
-  }
-  if (!hits.length) return esc(text);
-  hits.sort((a, b) => a.at - b.at);
+function ttsMarkEmphasis(s, line) {
+  const text = (line && line.text) || '';
+  const spans = line && line.emph;
+  if (!s || !spans || !spans.length || ttsNoSsml[s.voice]) return esc(text);
   let out = '', pos = 0;
-  for (const h of hits) {
+  for (const h of spans) {
     if (h.at < pos) continue;
     out += esc(text.slice(pos, h.at)) + '<em>' + esc(text.slice(h.at, h.end)) + '</em>';
     pos = h.end;
@@ -7602,7 +7658,7 @@ function ttsUpdateUI() {
   // The italics themselves are shown in the line above, where they cost no
   // room; all that is left to say here is when a voice won't do them at all.
   if (note) {
-    const runs = s && s.italics ? s.italics.length : 0;
+    const runs = ttsEmphasisCount(s);
     note.textContent = (s && s.mode === 'device') ? 'device voice'
       : (runs && ttsNoSsml[s.voice]) ? 'no emphasis' : '';
   }
