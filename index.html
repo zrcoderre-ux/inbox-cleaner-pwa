@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v94'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v95'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6130,7 +6130,8 @@ function splitSentences(text) {
     while ((m = re.exec(line)) !== null) {
       const sentence = m[0].split(TTS_DOT).join('.').trim();
       if (!sentence) continue;
-      if (TTS_CHROME_RE.test(sentence) || TTS_NEVER_RE.test(sentence)) continue;
+      if (TTS_CHROME_RE.test(sentence) || TTS_NEVER_RE.test(sentence) ||
+          TTS_CAPTION_RE.test(sentence)) continue;
       // A break before a digit or a lowercase word wasn't the end of a
       // sentence — "Sept. 14", "No. 3", an initial. Put it back together.
       if (out.length && /^[0-9a-z]/.test(sentence)) out[out.length - 1] += ' ' + sentence;
@@ -6244,6 +6245,26 @@ const TTS_MARK_BREAK = '\u0004';
 const TTS_BLOCK_SEL = 'p,div,br,li,tr,td,th,h1,h2,h3,h4,h5,h6,blockquote,section,' +
                       'article,header,footer,ul,ol,table,figcaption,pre,hr';
 
+// Where a caption says so itself.
+const TTS_CAPTION_SEL = 'figcaption, [class*="caption" i], [id*="caption" i], ' +
+                        '[class*="image-credit" i], [class*="photo-credit" i]';
+// The credit a caption carries, wherever it is written. The bracket and the
+// colon are what keep this off an article that happens to discuss a
+// photograph — naming an agency on its own would take "Getty Images sued three
+// companies this week" for a credit line.
+const TTS_CREDIT_RE = new RegExp(
+  '[(\\[]\\s*(?:photo|photograph|image|illustration|artwork|art|chart|map|video)s?\\s+(?:by|credit|courtesy|from)\\b' +
+  '|\\b(?:photo|photograph|image|illustration|artwork|chart|map)s?\\s*(?:credit|courtesy)\\s*:', 'i');
+// No caption runs longer than this, and anything that does is the page around
+// one rather than the caption itself.
+const TTS_CAPTION_MAX_CHARS = 400;
+// A credit line standing on its own, for a caption that survived the markup:
+// anchored at the start of the sentence, so an article can still talk about a
+// photograph or the illustration of a point.
+const TTS_CAPTION_RE = new RegExp(
+  '^\\s*[(\\[]?\\s*(?:photo|photograph|image|illustration|artwork|art|chart|map|video)s?' +
+  '\\s*(?::|\\b(?:by|credit|courtesy|from)\\b)', 'i');
+
 // Whether an italic phrase is emphasis at all, or just something set in italics:
 // one or two words — past that it is a title, a case name, a quoted passage, a
 // whole indented aside — and no capitals, which mean a name, a company, a
@@ -6272,6 +6293,22 @@ function ttsTextFromHtml(html) {
       const css = (el.getAttribute('style') || '').replace(/\s+/g, '').toLowerCase();
       if (/display:none|visibility:hidden|opacity:0|mso-hide:all|(?:font-size|max-height|line-height):0/.test(css)) el.remove();
     });
+    // The line under a picture: what the picture shows, and who took it. It is
+    // written for something the listener can't see, and read aloud it arrives
+    // as a paragraph about a photograph in the middle of an argument.
+    div.querySelectorAll(TTS_CAPTION_SEL).forEach(el => el.remove());
+    // A caption with no class to say so still names where the picture came
+    // from, and the description sits in the same block as the credit — so the
+    // whole block goes. Only the innermost one that carries it, and only one
+    // small enough to be a caption, so a wrapper holding the article can't be
+    // taken for one.
+    const credited = [].slice.call(div.querySelectorAll('p, div, td, small, figure, span'))
+      .filter(el => {
+        const t = el.textContent || '';
+        return t.length <= TTS_CAPTION_MAX_CHARS && TTS_CREDIT_RE.test(t);
+      });
+    credited.filter(el => !credited.some(other => other !== el && el.contains(other)))
+            .forEach(el => el.remove());
     div.querySelectorAll(ITALIC_SEL).forEach(el => {
       // An <em> inside an <i> is one italicised phrase, not two of them.
       if (el.parentElement && el.parentElement.closest(ITALIC_SEL)) return;
