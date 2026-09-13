@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v100'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v101'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6439,11 +6439,27 @@ function ttsSsmlFor(s, i) {
 // subtitle, a byline, a date and a row of buttons, and no further.
 const TTS_TITLE_HEAD_CHARS = 1500;
 
-// A title stripped to what it says. Case, punctuation, and the difference
-// between a curly quote and a straight one are all ways for the same words to
-// come back looking different.
-function ttsTitleKey(t) {
-  return String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+// A title reduced to the words in it. Case, punctuation, a curly quote against
+// a straight one, and an emoji the page draws as a picture where the subject
+// line spells it out — all of it goes, leaving what the two copies can be
+// compared on.
+function ttsTitleWords(t) {
+  return String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+}
+
+// Enough of the words in common to be the same title. Not equality: one copy
+// may carry the publication's name in front of it, or lose a word where the
+// page breaks the heading, or spell what the other draws. Measured against the
+// longer of the two, so a paragraph that merely contains the title is nothing
+// like a match.
+const TTS_TITLE_MATCH = 0.7;
+
+function ttsSameTitle(a, b) {
+  if (a.length < 2 || b.length < 2) return false;
+  const words = new Set(b);
+  let hit = 0;
+  a.forEach(w => { if (words.has(w)) hit++; });
+  return hit / Math.max(a.length, b.length) >= TTS_TITLE_MATCH;
 }
 
 // Newsletter platforms print the post's title at the top of the page as well as
@@ -6452,8 +6468,8 @@ function ttsTitleKey(t) {
 // that goes: the opener is where a listener expects to be told what they are
 // about to hear.
 function ttsDropTitleLine(body, subject) {
-  const want = ttsTitleKey(subject);
-  if (!want || want.length < 8) return body;
+  const want = ttsTitleWords(subject);
+  if (want.length < 2) return body;
   const lines = body.split('\n');
   // Only in the header: the run of short lines a page opens with, before the
   // first line long enough to be prose, and no further than a header ever
@@ -6461,13 +6477,16 @@ function ttsDropTitleLine(body, subject) {
   // title in a sentence, which is theirs to say.
   for (let i = 0, seen = 0; i < lines.length && seen < TTS_TITLE_HEAD_CHARS; seen += lines[i].length + 1, i++) {
     if (lines[i].length > 200) break;
-    const key = ttsTitleKey(lines[i]);
-    // A platform that prefixes the subject with the publication's name, or
-    // trims the title to fit, still leaves the two carrying each other.
-    const same = key && (key === want ||
-      (key.length >= 24 && want.indexOf(key) !== -1) ||
-      (want.length >= 24 && key.indexOf(want) !== -1));
-    if (same) { lines.splice(i, 1); break; }
+    // A heading the page breaks across lines is still one heading, so a short
+    // run of them is tried together as well as each on its own.
+    for (let span = 1; span <= 3 && i + span <= lines.length; span++) {
+      const joined = lines.slice(i, i + span).join(' ');
+      if (joined.length > 200) break;
+      if (ttsSameTitle(ttsTitleWords(joined), want)) {
+        lines.splice(i, span);
+        return lines.join('\n');
+      }
+    }
   }
   return lines.join('\n');
 }
