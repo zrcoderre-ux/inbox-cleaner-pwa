@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v118'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v119'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6347,12 +6347,13 @@ const TTS_MAX_EMPHASIS = 6;
 // concerned, so "mandatory" came back as "m", "andato" and "ry", said as
 // letters. Tags go where the spaces are.
 const TTS_EMPHASIS_RATE = '98%';
-// And a lift in pitch with it. Two per cent of duration on a word of half a
+// And a change in pitch with it. Two per cent of duration on a word of half a
 // second is a few milliseconds, which is near enough nothing to hear; the ear
-// picks up a change in pitch far more readily than one in length, and a rise
-// is what a person does with a word they mean. Semitones, because that is how
-// the ear hears pitch — a whole tone up, which is a lean rather than a leap.
-const TTS_EMPHASIS_PITCH = '+2st';
+// picks up pitch far more readily than length. Down rather than up: a rise is
+// how a question ends and how surprise sounds, where dropping into a word is
+// how a person weights one they mean. Semitones, because that is how the ear
+// hears pitch — a whole tone, which is a lean rather than a lurch.
+const TTS_EMPHASIS_PITCH = '-2st';
 // The request has to stay inside what the Worker will take, tags and all —
 // which is the reason for the margin: 700 characters of words, and room for
 // the tags that mark the italics and the quotations in them.
