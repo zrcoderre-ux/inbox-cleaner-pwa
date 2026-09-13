@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v92'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v93'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6064,7 +6064,19 @@ const TTS_CHROME_RE = /^\s*(?:view|read|open)\b[^.!?]{0,80}?\b(?:on the web|in (
 // whenever the mail doesn't break into lines the way it expects — one long
 // run of text, or the footer sitting higher than the last few lines — so any
 // sentence carrying one is dropped outright, wherever it sits.
-const TTS_NEVER_RE = /\b(?:unsubscribe|manage (?:your )?(?:email )?preferences|update your preferences)\b/i;
+// The line a newsletter platform puts above the post itself — "Forwarded this
+// email? Subscribe here for more." — belongs to the delivery, not the writing.
+// It sits at the top rather than the bottom, so neither the footer rule nor the
+// tail-cutting reaches it, and the question mark splits it into two sentences
+// that each have to be named.
+const TTS_NEVER_RE = new RegExp([
+  'unsubscribe',
+  'manage (?:your )?(?:email )?preferences',
+  'update your preferences',
+  'forwarded this (?:email|message|post)',
+  'subscribe (?:here|now) for more',
+  'was this (?:email|post) forwarded to you'
+].map(p => '\\b(?:' + p + ')\\b').join('|'), 'i');
 
 // Abbreviations whose full stop doesn't end a sentence.
 const TTS_ABBREV = /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Inc|Ltd|Co|Corp|Dept|Approx|No|vs|etc|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec|v|Cal|App|Cir|Ct|Civ|Proc|Supp|Stat|Rptr|Ed|Rev|Ann|Reg|Art|Sec|Para|Ch|Fig|Vol|pp|ibid|cf|e\.g|i\.e|a\.m|p\.m|U\.S|U\.K)\.(?=\s)/gi;
@@ -6325,6 +6337,43 @@ function ttsSsmlFor(s, i) {
   return out.length > TTS_SSML_BUDGET ? '' : out;
 }
 
+// How far into an email its own heading can still be sitting: a title, a
+// subtitle, a byline, a date and a row of buttons, and no further.
+const TTS_TITLE_HEAD_CHARS = 1500;
+
+// A title stripped to what it says. Case, punctuation, and the difference
+// between a curly quote and a straight one are all ways for the same words to
+// come back looking different.
+function ttsTitleKey(t) {
+  return String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// Newsletter platforms print the post's title at the top of the page as well as
+// putting it in the subject line, so the opening line and the first line of the
+// email are the same sentence and it gets read twice. The heading is the copy
+// that goes: the opener is where a listener expects to be told what they are
+// about to hear.
+function ttsDropTitleLine(body, subject) {
+  const want = ttsTitleKey(subject);
+  if (!want || want.length < 8) return body;
+  const lines = body.split('\n');
+  // Only in the header: the run of short lines a page opens with, before the
+  // first line long enough to be prose, and no further than a header ever
+  // reasonably runs. Past that the same words are the writer using their own
+  // title in a sentence, which is theirs to say.
+  for (let i = 0, seen = 0; i < lines.length && seen < TTS_TITLE_HEAD_CHARS; seen += lines[i].length + 1, i++) {
+    if (lines[i].length > 200) break;
+    const key = ttsTitleKey(lines[i]);
+    // A platform that prefixes the subject with the publication's name, or
+    // trims the title to fit, still leaves the two carrying each other.
+    const same = key && (key === want ||
+      (key.length >= 24 && want.indexOf(key) !== -1) ||
+      (want.length >= 24 && key.indexOf(want) !== -1));
+    if (same) { lines.splice(i, 1); break; }
+  }
+  return lines.join('\n');
+}
+
 function buildSpeech(email) {
   const from = parseSender(email.sender || '');
   const who = from.name || from.addr || 'an unknown sender';
@@ -6336,7 +6385,7 @@ function buildSpeech(email) {
   // The page's own text where there is any, so the italics arrive with the
   // words they belong to; the plain-text part only where a mail has no HTML.
   const source = (email.bodyHtml && ttsTextFromHtml(email.bodyHtml)) || email.bodyText || '';
-  const body = cleanForSpeech(source);
+  const body = ttsDropTitleLine(cleanForSpeech(source), subject);
   const lines = [];
   const marked = chunkSentences([preamble].concat(splitSentences(body)), lines);
   // The marks have ridden this far with the text. Taking them out now leaves
