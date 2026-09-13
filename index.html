@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v108'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v109'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6519,12 +6519,21 @@ function ttsIsQuote(c) {
   return TTS_QUOTES.indexOf(c) !== -1;
 }
 
+// The square brackets an editor puts round a word they have changed inside a
+// quotation — "[go] from lecturing to listening". A person reads the word and
+// takes the brackets as a note to the eye; a voice takes them for markup and
+// drops the word inside them altogether. The brackets are kept out of what is
+// sent, and the word they held is read like any other.
+function ttsIsUnspoken(c) {
+  return ttsIsQuote(c) || c === '[' || c === ']';
+}
+
 // What a voice is given: the passage with the marks taken out. The passage
 // itself keeps them — the scrubber counts its characters and the page is
 // searched for its words.
 function ttsSpeakable(text) {
   let out = '';
-  for (let i = 0; i < text.length; i++) if (!ttsIsQuote(text[i])) out += text[i];
+  for (let i = 0; i < text.length; i++) if (!ttsIsUnspoken(text[i])) out += text[i];
   // An initialism is a word made of letters, not a run of sentences. The voice
   // is handed it without its stops — "A.I." as "AI" — so it says the letters
   // straight through. Lower case is left alone: "e.g." without its stops is a
@@ -6593,7 +6602,7 @@ function ttsSsmlFor(s, i) {
   for (let k = 0; k <= text.length; k++) {
     while (stack.length && stack[stack.length - 1].end === k) out += stack.pop().close;
     (opens.get(k) || []).forEach(t => { out += t.open; stack.push(t); });
-    if (k < text.length && !ttsIsQuote(text[k])) out += ttsEscapeSsml(text[k]);
+    if (k < text.length && !ttsIsUnspoken(text[k])) out += ttsEscapeSsml(text[k]);
   }
   out = '<speak>' + out.replace(/\s{2,}/g, ' ') + '</speak>';
   return out.length > TTS_SSML_BUDGET ? '' : out;
