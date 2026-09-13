@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v91'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v92'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2116,7 +2116,7 @@ let ttsUsage = null;        // { month, chars } — this browser's own estimate
 // What the Worker reports when it's enforcing a monthly budget: authoritative,
 // and counts every device rather than just this one.
 let ttsBudget = null;       // { used, cap } or null when nothing is enforced
-// Voices chosen per sender, so a correspondent keeps the voice you gave them.
+// Voices chosen per author, so a writer keeps the voice you gave them.
 // Sender-keyed like the block rules, so it's namespaced per account.
 let ttsSenderVoices = {};
 let ttsVoiceList = [];      // what the Worker offered, for the in-reader picker
@@ -7773,9 +7773,10 @@ function setTtsEnabled(on) {
   if (on) { ttsUnlockAudio(); populateTtsVoices(); }
 }
 
-// ── A voice per sender ─────────────────────────────────────
+// ── A voice per author ─────────────────────────────────────
 // One voice for everything gets tiring, and mail from different people wants
-// different readers. A voice chosen while listening sticks to that sender.
+// different readers. A voice chosen while listening sticks to whoever wrote
+// what you were listening to.
 function loadSenderVoices() {
   try { ttsSenderVoices = JSON.parse(localStorage.getItem(nsKey('ic_tts_sender_voices')) || '{}') || {}; }
   catch(e) { ttsSenderVoices = {}; }
@@ -7785,22 +7786,39 @@ function saveSenderVoices() {
   try { localStorage.setItem(nsKey('ic_tts_sender_voices'), JSON.stringify(ttsSenderVoices)); } catch(e) {}
 }
 
-// The address is the key, not the display name — people rename themselves.
+// The byline, not the address. A publication posts every writer's work from the
+// same list address — Kelsey Piper and the writer after her both arrive as
+// theargument+the-opening-argument@substack.com — so keying on the address
+// gives a whole masthead one voice, which is the opposite of the point. The
+// display name is the byline, and a writer keeps their own reader across
+// everything they publish, wherever it is sent from. Mail with no name to it
+// falls back to the address.
 function senderKey(email) {
   const from = parseSender((email && email.sender) || '');
-  return (from.addr || from.name || '').toLowerCase();
+  const name = (from.name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return name || (from.addr || '').toLowerCase();
+}
+
+// What the voice was filed under before it was filed by byline. Still read, so
+// nobody loses a voice they chose; nothing new is written here.
+function senderAddrKey(email) {
+  const from = parseSender((email && email.sender) || '');
+  return (from.addr || '').toLowerCase();
 }
 
 function voiceForEmail(email) {
   const key = senderKey(email);
-  return (key && ttsSenderVoices[key]) || ttsVoice;
+  if (key && ttsSenderVoices[key]) return ttsSenderVoices[key];
+  const addr = senderAddrKey(email);
+  if (addr && addr !== key && ttsSenderVoices[addr]) return ttsSenderVoices[addr];
+  return ttsVoice;
 }
 
 function rememberVoiceForSender(email, voice) {
   const key = senderKey(email);
   if (!key || !voice) return;
   // Matching the default isn't worth a row of its own — and storing it would
-  // freeze this sender if the default later changed.
+  // freeze this author if the default later changed.
   if (voice === ttsVoice) delete ttsSenderVoices[key];
   else ttsSenderVoices[key] = voice;
   saveSenderVoices();
@@ -7811,7 +7829,7 @@ function clearSenderVoices() {
   ttsSenderVoices = {};
   saveSenderVoices();
   renderSenderVoiceCount();
-  toast('Per-sender voices cleared');
+  toast('Per-author voices cleared');
 }
 
 function renderSenderVoiceCount() {
@@ -7820,7 +7838,7 @@ function renderSenderVoiceCount() {
   const n = Object.keys(ttsSenderVoices).length;
   if (!ttsEnabled || !n) { el.style.display = 'none'; return; }
   el.style.display = '';
-  el.innerHTML = n + (n === 1 ? ' sender has' : ' senders have') + ' their own voice. ' +
+  el.innerHTML = n + (n === 1 ? ' author has' : ' authors have') + ' their own voice. ' +
     '<button class="tts-linkbtn" onclick="clearSenderVoices()">Reset all</button>';
 }
 
