@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v104'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v105'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6075,6 +6075,11 @@ function ttsCutFooter(text) {
 function cleanForSpeech(raw) {
   let t = String(raw || '').replace(/\r\n?/g, '\n');
   t = t.replace(/[\u200B-\u200D\uFEFF\u00AD]/g, '');   // zero-width padding
+  // Footnote markers written into the prose rather than marked up: a raised
+  // digit, or a bracketed number. Taken out before anything else reads the
+  // line, so what they were attached to is left as an ordinary word.
+  t = t.replace(/[\u2070-\u2079\u00B9\u00B2\u00B3]+/g, '');
+  t = t.replace(/\[\d{1,3}\]/g, '');
   t = ttsCutAt(t, [
     /^\s*On\b[\s\S]{5,200}?\bwrote:\s*$/m,             // Gmail-style quote header
     /^\s*-{2,}\s*Original Message\s*-{2,}\s*$/im,
@@ -6297,6 +6302,15 @@ const TTS_MARK_BREAK = '\u0004';
 const TTS_BLOCK_SEL = 'p,div,br,li,tr,td,th,h1,h2,h3,h4,h5,h6,blockquote,section,' +
                       'article,header,footer,ul,ol,table,figcaption,pre,hr';
 
+// Footnote markers as the page writes them: a raised number, or the link a
+// newsletter hangs on one.
+const TTS_FOOTNOTE_SEL = 'sup, [class*="footnote-anchor" i], [class*="footnote-number" i], ' +
+                         'a[href*="#footnote" i], a[href*="#fn" i]';
+// And what one says: digits, the daggers and asterisks that stand in for them,
+// and the brackets some of them are drawn with. Nothing else, so an ordinal's
+// raised "th" keeps its word whole.
+const TTS_FOOTNOTE_TEXT = /^[\[\(]?[\d\u2070-\u2079\u00B9\u00B2\u00B3\u2020\u2021\u00A7*]{1,3}[\]\)]?$/;
+
 // Where a caption says so itself.
 const TTS_CAPTION_SEL = 'figcaption, [class*="caption" i], [id*="caption" i], ' +
                         '[class*="image-credit" i], [class*="photo-credit" i]';
@@ -6344,6 +6358,14 @@ function ttsTextFromHtml(html) {
     div.querySelectorAll('[style]').forEach(el => {
       const css = (el.getAttribute('style') || '').replace(/\s+/g, '').toLowerCase();
       if (/display:none|visibility:hidden|opacity:0|mso-hide:all|(?:font-size|max-height|line-height):0/.test(css)) el.remove();
+    });
+    // Footnote markers. On the page they are a small raised number beside a
+    // word; in a line of speech they are a digit stuck to it, and a voice reads
+    // "the plan2" as "the plan squared". The marker is only a pointer to the
+    // note, and the note is at the bottom either way, so none of them is read.
+    // A superscript that isn't a marker — the "th" in a date — is left alone.
+    div.querySelectorAll(TTS_FOOTNOTE_SEL).forEach(el => {
+      if (TTS_FOOTNOTE_TEXT.test((el.textContent || '').trim())) el.remove();
     });
     // The line under a picture: what the picture shows, and who took it. It is
     // written for something the listener can't see, and read aloud it arrives
