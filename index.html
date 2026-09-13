@@ -1951,7 +1951,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v80'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v81'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6803,7 +6803,14 @@ function ttsSyncScroll() {
     if (!s.durations) s.durations = [];
     if (!s.durations[s.i]) { s.durations[s.i] = ttsAudio.duration; ttsSetPositionState(); }
   }
-  if (!s.playing || ttsDrag) { ttsPaintTrack(); return; }
+  // The bar shows where the voice is, which has nothing to do with whether the
+  // page can be scrolled — so it is painted before any of the reasons for not
+  // moving the page. It used to sit below them, and froze at nought whenever
+  // the email was too short to scroll, the reader had just scrolled it by
+  // hand, or the mail was HTML the reader can't reach into. Which looked, from
+  // the outside, like no bar at all.
+  ttsPaintTrack();
+  if (!s.playing || ttsDrag) return;
   if (s.userScrolled) return;
   const t = readerScrollTarget();
   if (!t) return;
@@ -6833,7 +6840,6 @@ function ttsSyncScroll() {
   if (s.scrollPos < t.scroller.scrollTop) s.scrollPos = t.scroller.scrollTop;
   if (target > s.scrollPos) s.scrollPos += (target - s.scrollPos) * TTS_SCROLL_FOLLOW;
 
-  ttsPaintTrack();
   const whole = Math.floor(s.scrollPos);
   const frac = s.scrollPos - whole;
   t.scroller.scrollTop = whole;
