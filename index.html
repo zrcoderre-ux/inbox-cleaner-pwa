@@ -1978,7 +1978,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v83'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v84'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5980,9 +5980,10 @@ function chunkSentences(sentences, outLines) {
 
 // ── Emphasis ───────────────────────────────────────────────
 // Words the writer italicised, spoken as though they meant them. Kept to runs
-// of one or two words: past that, italics are almost never emphasis — they are
-// a title, a case name, a quoted passage, a whole indented aside — and reading
-// those with stress on every word is worse than reading them flat.
+// of one or two words, all in lower case: past that, italics are almost never
+// emphasis — they are a title, a case name, a quoted passage, a whole indented
+// aside, a proper noun — and reading those with stress on every word is worse
+// than reading them flat.
 const TTS_ITALIC_MAX_WORDS = 2;
 // Per passage. Each one costs about 45 billed characters, and a passage that
 // needs more emphasis than this is a stylistic tic rather than a point.
@@ -6020,11 +6021,22 @@ function italicRuns(html) {
       if (run.length < 2 || seen.has(run)) return;
       if (run.split(' ').length > TTS_ITALIC_MAX_WORDS) return;
       if (!/[A-Za-z]/.test(run)) return;
+      if (ttsHasCapital(run)) return;
       seen.add(run);
       out.push(run);
     });
   } catch(e) {}
   return out;
+}
+
+// A capital anywhere in an italic run means it is almost certainly not
+// emphasis: a name, a company, a case, a title, a defined term, or a word
+// already SHOUTED in capitals and carrying its own stress. Leaning on any of
+// those makes the voice sound like it has misread the word rather than made a
+// point, so italics with a capital in them are read flat. Lower-casing is the
+// test so accented capitals count too.
+function ttsHasCapital(run) {
+  return run.toLowerCase() !== run;
 }
 
 function ttsEscapeSsml(t) {
