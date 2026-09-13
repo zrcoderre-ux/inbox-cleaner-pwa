@@ -1874,7 +1874,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v72'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v73'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5761,7 +5761,13 @@ function cleanForSpeech(raw) {
   t = t.split('\n').filter(l => !/^\s*>/.test(l)).join('\n');
   t = ttsCutAt(t, [/^\s*--\s*$/m]);                    // signature block
   t = ttsCutFooter(t);
-  t = t.replace(/\b(?:https?:\/\/|www\.)\S+/gi, ' (link) ');
+  // An address is never worth hearing, and neither is the word that was only
+  // there to introduce it — "read more at <address>" wants to end at "more".
+  const URL = '(?:https?:\\/\\/|www\\.)[^\\s)\\]>]*[^\\s)\\]>.,;:!?]';
+  t = t.replace(new RegExp('\\s*\\b(?:at|to|via|from|here|see)\\s+' + URL, 'gi'), '');
+  t = t.replace(new RegExp('\\s*' + URL, 'gi'), '');
+  t = t.replace(/\(\s*\)|\[\s*\]|<\s*>/g, '');       // brackets the address left behind
+  t = t.replace(/[ \t]+([,.;:!?])/g, '$1');         // and the gap before its punctuation
   t = t.replace(/<[^<>\s@]+@[^<>\s@]+>/g, ' ');        // bare <addr> after a name
   t = t.split('\n')
        .map(l => l.replace(/^[\s*·•\-–—=_~#|]+/, '').replace(/[\s*=_~|]+$/, '').trim())
