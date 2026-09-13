@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v114'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v115'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6354,10 +6354,18 @@ const TTS_ONSET_MIN_LETTERS = 4;
 // slowing.
 const TTS_ONSET_MIN_SLOWED = 3;
 
+// A word the rate change can be started inside. A contraction can't: split
+// "didn't" and the pieces are "d", "idn'" and "t", none of which is a word, and
+// the voice says them as letters. It is slowed whole instead.
+function ttsSplittableWord(word) {
+  return word.replace(/[^A-Za-z]/g, '').length >= TTS_ONSET_MIN_LETTERS &&
+         !/['\u2019\u02BC]/.test(word);
+}
+
 function ttsEmphasisEnd(text, at, end) {
   const span = text.slice(at, end);
   const word = (/\S+$/.exec(span) || [''])[0];
-  if (word.replace(/[^A-Za-z]/g, '').length < TTS_ONSET_MIN_LETTERS) return end;
+  if (!ttsSplittableWord(word)) return end;
   let tail = (/[^aeiou\s]*$/i.exec(word) || [''])[0].length;
   if (!tail) tail = (/[aeiou]+$/i.exec(word) || [''])[0].length;
   // A word whose closing cluster is most of what is left — "really" ends on
@@ -6371,7 +6379,7 @@ function ttsEmphasisEnd(text, at, end) {
 function ttsEmphasisStart(text, at, end) {
   const span = text.slice(at, end);
   const word = (span.split(/\s/)[0] || '');
-  if (word.replace(/[^A-Za-z]/g, '').length < TTS_ONSET_MIN_LETTERS) {
+  if (!ttsSplittableWord(word)) {
     // Too short to split, but a phrase of two words can give the whole of the
     // first one at speed instead — "of course" leans on the course.
     const gap = span.search(/\s\S/);
