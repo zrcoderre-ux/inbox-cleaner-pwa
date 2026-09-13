@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v99'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v100'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -7484,22 +7484,29 @@ function ttsTopOf(t, index, pos) {
   } catch(e) { return null; }
 }
 
-// A passage's opening words, found on the page. Searching forward from the
-// last match keeps a repeated phrase resolving in reading order.
-function ttsChunkTop(s, t, i) {
-  if (i < 0 || i >= s.chunks.length) return null;
+// Where a stretch of the spoken text sits on the page: both ends of it, not
+// just the start. Both ends matter because following the start of one stretch
+// to the start of the next is what walks the page over a picture while the
+// voice is still on the paragraph above it — the gap between two stretches is
+// height with nothing being read in it. A stretch is followed across its own
+// lines only, and whatever stands between it and the next is crossed when the
+// voice arrives on the far side of it.
+//
+// Searching forward from the last match keeps a repeated phrase resolving in
+// reading order. A stretch that isn't on the page at all — the spoken opening
+// line, a sentence an address was lifted out of — is remembered as not found,
+// so it isn't looked for again every frame.
+function ttsAnchorFor(s, t, key, text) {
   if (!s.index || s.index.height !== t.scroller.scrollHeight) {
     s.index = ttsTextIndex(t);
     s.anchors = {};
     s.searchFrom = 0;
   }
   if (!s.index) return null;
-  if (s.anchors[i] != null) return s.anchors[i];
-  const norm = s.chunks[i].replace(/\s+/g, ' ').trim();
-  // The opening words may not be on the page at all — the first passage begins
-  // with the spoken "From … Subject …", and any sentence can have had an
-  // address lifted out of it. So try each of the next few sentence starts
-  // before giving up, rather than falling back to a guess over one word.
+  if (s.anchors[key] !== undefined) return s.anchors[key];
+  const norm = String(text || '').replace(/\s+/g, ' ').trim();
+  // Try the next few sentence starts before giving up, rather than falling
+  // back to a guess over one word.
   const starts = [0];
   const breaks = /[.!?]\s+/g;
   let m;
@@ -7512,8 +7519,13 @@ function ttsChunkTop(s, t, i) {
     if (at === -1) continue;
     s.searchFrom = at + 1;
     const top = ttsTopOf(t, s.index, at);
-    if (top != null) { s.anchors[i] = top; return top; }
+    if (top == null) continue;
+    const far = Math.min(at + Math.max(norm.length - from - 1, 0), s.index.text.length - 1);
+    const end = ttsTopOf(t, s.index, far);
+    s.anchors[key] = { top, end: (end != null && end > top) ? end : top };
+    return s.anchors[key];
   }
+  s.anchors[key] = null;
   return null;
 }
 
@@ -7552,15 +7564,28 @@ function ttsSyncScroll() {
   if (s.lastTop != null && Math.abs(t.scroller.scrollTop - s.lastTop) > 8) { ttsManualScroll(); return; }
 
   const within = ttsChunkProgress(s);
+  const pos = s.starts[s.i] + within * s.chunks[s.i].length;
+  // The sentence being spoken, found where it actually sits. A sentence is a
+  // short enough stretch that following it across its own lines keeps the words
+  // being read on the screen, and a picture below it stays below it until the
+  // voice is reading the other side of it.
+  let anchor = null, across = within;
+  const li = ttsLineAtChar(s, pos);
+  const line = s.lines && s.lines[li];
+  if (line && line.chunk === s.i && line.text) {
+    anchor = ttsAnchorFor(s, t, 'l' + li, line.text);
+    if (anchor) {
+      const from = s.starts[line.chunk] + line.at;
+      across = Math.max(0, Math.min((pos - from) / Math.max(line.text.length, 1), 1));
+    }
+  }
+  // A sentence that can't be found falls back to its passage, and a passage
+  // that can't either falls back to the share of the email already spoken.
+  if (!anchor) { anchor = ttsAnchorFor(s, t, 'c' + s.i, s.chunks[s.i]); across = within; }
   let target = null;
-  const here = ttsChunkTop(s, t, s.i);
-  if (here != null) {
-    // Move from this passage towards the next as it's read, so whatever sits
-    // between them — a picture, a pull quote — is crossed on the way.
-    const next = ttsChunkTop(s, t, s.i + 1);
-    const to = (next != null && next > here) ? next : here;
+  if (anchor) {
     // The line being read belongs a little below the top edge, not against it.
-    target = here + (to - here) * within - t.scroller.clientHeight * TTS_READ_LINE;
+    target = anchor.top + (anchor.end - anchor.top) * across - t.scroller.clientHeight * TTS_READ_LINE;
   } else {
     const done = (s.i + within) / s.chunks.length;
     target = span * Math.min(done * s.coverage, 1);
