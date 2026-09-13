@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v85'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v86'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5771,8 +5771,13 @@ function revealReaderFooter(email) {
   ttsShowBar(false);
   const footer = document.createElement('div');
   footer.className = 'reader-footer';
-  footer.innerHTML = '<div class="reader-footer-hint">Done reading?</div>' +
-    '<button class="reader-mark-read" onclick="markReadFromReader()">Mark as read</button>';
+  // An email heard to the end has already been marked; the bottom of the page
+  // is then a way out rather than a question.
+  footer.innerHTML = (email && email.markedRead)
+    ? '<div class="reader-footer-hint">Marked as read</div>' +
+      '<button class="reader-mark-read" onclick="closeReader()">Close</button>'
+    : '<div class="reader-footer-hint">Done reading?</div>' +
+      '<button class="reader-mark-read" onclick="markReadFromReader()">Mark as read</button>';
   overlay.appendChild(footer);
 }
 
@@ -5839,6 +5844,31 @@ async function markReadFromReader() {
     enqueueOp({ type: 'read', id });
     toast('Marked as read — will sync when online');
   }
+}
+
+// Marks an email read without closing the reader, for an email finished by ear:
+// the page stays where the voice left it, and with play-through on the next
+// email is already opening over it. Same local-first path as the button —
+// dropped here, told to Gmail when there's a connection and queued when there
+// isn't. The local work is done before this returns; the mailbox round trip is
+// handed back as a promise rather than waited on, so play-through starts the
+// next email now instead of after it — a silence with the screen locked is the
+// thing most likely to end playback.
+function markListenedRead(email) {
+  const id = email && email.id;
+  if (!id) return Promise.resolve(false);
+  email.markedRead = true;
+  emails = emails.filter(e => e.id !== id);
+  swipeQueue = swipeQueue.filter(e => e.id !== id);
+  selectedIds.delete(id);
+  dropKeptLocally(id);
+  renderKeepList();
+  renderSwipeStack();
+  renderEmailList();
+  return sendReadToGmail(id).then(ok => {
+    if (!ok) enqueueOp({ type: 'read', id });
+    return ok;
+  });
 }
 
 // Toggles pinch-to-zoom. Enabled while the reader is open; the rest of the app
@@ -7015,13 +7045,26 @@ async function ttsPrefetchNextEmail(current) {
 async function finishReadAloud() {
   const email = ttsSession && ttsSession.email;
   stopReadAloud();
-  // Reaching the end by ear is still reaching the end — offer Mark as read.
-  if (email && readerEmail === email) revealReaderFooter(email);
-  if (!ttsPlayThrough || !email || readerEmail !== email) return;
-
-  const next = await ttsNextEmail(email);
-  if (!next) { toast('End of the list'); return; }
-  // Reading is never a reason to touch the mailbox: moving on marks nothing.
+  // Only an email still open finished where you could hear it; one the reader
+  // has already moved off was left behind, not listened to.
+  const here = !!(email && readerEmail === email);
+  // Where to go next is settled before the mailbox changes: marking this email
+  // read takes it out of the Keep list the queue is read from, and the row
+  // after it can't be found from a row that is no longer there.
+  const next = (here && ttsPlayThrough) ? await ttsNextEmail(email) : null;
+  // Heard to the end is read. This is the one place listening touches the
+  // mailbox, and only ever after the last passage has played out — pausing,
+  // skipping out or closing the reader partway leaves the email where it was.
+  const sync = here ? markListenedRead(email) : null;
+  if (!here) return;
+  // Nothing left to play: the bottom of the email says what became of it.
+  if (!ttsPlayThrough || !next) {
+    revealReaderFooter(email);
+    const ok = await sync;
+    toast((ttsPlayThrough ? 'End of the list — ' : 'Finished — ') +
+          (ok ? 'marked as read' : 'marked read, will sync'));
+    return;
+  }
   const restAfterThis = ttsBatchCount >= TTS_AUTO_BATCH;
   await openReader(next, { markRead: true, speak: true, paused: restAfterThis });
   if (readerEmail !== next) return;   // the reader moved on while we waited
