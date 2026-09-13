@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v105'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v106'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6542,22 +6542,18 @@ function ttsSsmlFor(s, i) {
   return out.length > TTS_SSML_BUDGET ? '' : out;
 }
 
+// Nothing is announced before the email. Who it is from and what it is called
+// are both on the screen the whole time it plays, and an envelope read out
+// before every piece is a preamble to sit through rather than anything anyone
+// needed told: the page opens with its own title, which is where a reader
+// would start.
 function buildSpeech(email) {
-  const from = parseSender(email.sender || '');
-  const who = from.name || from.addr || 'an unknown sender';
-  // Only who it is from. The subject line is the same words as the heading at
-  // the top of the page nine times in ten, and reading both meant hearing the
-  // title twice — matching the two copies to drop one of them turned on the
-  // page spelling its title the way the subject line does, which is not
-  // something a newsletter can be relied on to do. The page's own heading is
-  // the copy that survives, because it is the one that is really there.
-  const preamble = 'From ' + who + '.';
   // The page's own text where there is any, so the italics arrive with the
   // words they belong to; the plain-text part only where a mail has no HTML.
   const source = (email.bodyHtml && ttsTextFromHtml(email.bodyHtml)) || email.bodyText || '';
   const body = cleanForSpeech(source);
   const lines = [];
-  const marked = chunkSentences([preamble].concat(splitSentences(body)), lines);
+  const marked = chunkSentences(splitSentences(body), lines);
   // The marks have ridden this far with the text. Taking them out now leaves
   // every passage as the voice will hear it, and every italic phrase as a pair
   // of offsets into it.
@@ -7521,6 +7517,12 @@ function ttsTextIndex(t) {
       const raw = n.nodeValue || '';
       const norm = raw.replace(/\s+/g, ' ');
       if (!norm.trim()) continue;
+      // A space where one block ends and the next begins. The page has no
+      // character there, but the spoken text does — a heading and the line
+      // under it are two sentences to the voice — and without it a phrase that
+      // starts at the top of a block can never be found here, which is how a
+      // passage beginning with the email's own title went unanchored.
+      if (text && !/\s$/.test(text) && !/^\s/.test(norm)) text += ' ';
       nodes.push({ node: n, start: text.length, len: norm.length, rawLen: raw.length });
       text += norm;
     }
