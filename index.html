@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v86'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v87'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6127,25 +6127,50 @@ function ttsMarkNoSsml(voice) {
   try { localStorage.setItem('ic_tts_no_ssml', JSON.stringify(ttsNoSsml)); } catch(e) {}
 }
 
+// Elements an italic phrase can be written with. Anything nested inside one of
+// them is part of that phrase rather than a phrase of its own.
+const ITALIC_SEL = 'i, em, cite, [style*="italic"]';
+
 // The italicised phrases in an email, shortest-lived reading of the HTML there
 // is: the text pipeline never sees this, so nothing downstream has to carry a
 // marker through sentence splitting or the character positions the scrubber
 // counts in.
+//
+// Because a phrase is carried as text and found again by searching for it, a
+// phrase is only usable when every place it appears in the email is italicised.
+// A word italicised once in a pull quote and written plainly four more times
+// would otherwise have the stress land wherever the search happened to reach
+// first — which is how an upright word ends up spoken as though it were
+// leaning. So each phrase is counted both ways, and kept only where the two
+// counts agree.
 function italicRuns(html) {
   if (!html) return [];
-  const out = [], seen = new Set();
+  const out = [];
   try {
     const div = document.createElement('div');
     div.innerHTML = html;
     div.querySelectorAll('style, script, head').forEach(el => el.remove());
-    div.querySelectorAll('i, em, cite, [style*="italic"]').forEach(el => {
+    const marked = new Map();
+    div.querySelectorAll(ITALIC_SEL).forEach(el => {
+      // An <em> inside an <i> is one italicised phrase, not two of them.
+      if (el.parentElement && el.parentElement.closest(ITALIC_SEL)) return;
       const run = (el.textContent || '').replace(/\s+/g, ' ').trim();
-      if (run.length < 2 || seen.has(run)) return;
+      if (run.length < 2) return;
       if (run.split(' ').length > TTS_ITALIC_MAX_WORDS) return;
       if (!/[A-Za-z]/.test(run)) return;
       if (ttsHasCapital(run)) return;
-      seen.add(run);
-      out.push(run);
+      marked.set(run, (marked.get(run) || 0) + 1);
+    });
+    if (!marked.size) return out;
+    // Every word in the email, italic or not — hidden preheaders, footers and
+    // quoted history included, since a copy of the phrase in any of them is
+    // another copy the search could land on. Read after the phrases are taken,
+    // so the separators can't run two blocks' words together into one and
+    // can't split a phrase that spans a tag.
+    div.querySelectorAll('*').forEach(el => el.appendChild(document.createTextNode(' ')));
+    const all = (div.textContent || '').replace(/\s+/g, ' ');
+    marked.forEach((n, run) => {
+      if (wholeWordHits(all, run).length === n) out.push(run);
     });
   } catch(e) {}
   return out;
@@ -6166,22 +6191,28 @@ function ttsEscapeSsml(t) {
           .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
-// Where a phrase sits in a passage, but only when there is no doubt about it:
-// a phrase that turns up twice can't be told apart, and the writer italicised
-// one of them, not both. Whole words only, so "not" doesn't light up
-// "nothing".
-function ttsSoleOccurrence(text, run) {
-  let at = text.indexOf(run), found = -1;
+// Every place a phrase sits in a piece of text, as whole words only — so "not"
+// doesn't light up "nothing", and a phrase written twice is reported twice
+// rather than quietly taken as the first.
+function wholeWordHits(text, run) {
+  const out = [];
+  if (!text || !run) return out;
+  let at = text.indexOf(run);
   while (at !== -1) {
     const before = at ? text[at - 1] : ' ';
     const after = text[at + run.length] || ' ';
-    if (!/[A-Za-z0-9]/.test(before) && !/[A-Za-z0-9]/.test(after)) {
-      if (found !== -1) return -1;   // more than one: no way to choose
-      found = at;
-    }
+    if (!/[A-Za-z0-9]/.test(before) && !/[A-Za-z0-9]/.test(after)) out.push(at);
     at = text.indexOf(run, at + 1);
   }
-  return found;
+  return out;
+}
+
+// Where a phrase sits in a passage, but only when there is no doubt about it:
+// two of them in one passage can't be told apart by text alone, so neither is
+// emphasised.
+function ttsSoleOccurrence(text, run) {
+  const hits = wholeWordHits(text, run);
+  return hits.length === 1 ? hits[0] : -1;
 }
 
 // The passage as SSML, or '' for "send it as plain text" — which is most
