@@ -1226,6 +1226,21 @@ body {
 
 .keep-item .email-item-subject { white-space: normal; }
 
+/* Listen mode's own button: on, it reads as the mode the tab is in rather than
+   one more filter, so it takes the accent rather than the toolbar's grey. */
+.keep-listen {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.keep-listen svg { width: 14px; height: 14px; }
+.keep-listen.on {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+.keep-listen.on:active { background: #C5221F; }
+
 /* Swipe-left-to-mark-read on Keep rows (iOS-Mail style). The row slides left to
    reveal a red "Mark read" action behind it. */
 .keep-row { position: relative; overflow: hidden; }
@@ -1693,6 +1708,10 @@ body {
               <label class="keep-filter"><input type="checkbox" id="keep-offline-only" onchange="setKeepOfflineOnly(this.checked)"> Offline only</label>
             </div>
             <div class="toolbar-right">
+              <button class="btn-sm keep-listen" id="keep-listen" onclick="toggleKeepListen()" aria-pressed="false" title="Long reads only, played as you open them">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-3a8 8 0 0 1 16 0v3"/><path d="M4 14a2 2 0 0 1 2-2h1v6H6a2 2 0 0 1-2-2zM20 14a2 2 0 0 0-2-2h-1v6h1a2 2 0 0 0 2-2z"/></svg>
+                Listen
+              </button>
               <select class="sort-select" id="keep-sort-select" onchange="setKeepSort(this.value)" aria-label="Sort kept emails">
                 <option value="top-reads">Top reads</option>
                 <option value="date-desc">Newest first</option>
@@ -1978,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v84'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v85'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2061,6 +2080,15 @@ let swipeSortBySender = false;
 let keepSortMode = 'date-desc';
 let keepSearch = '';
 let keepOfflineOnly = false;
+// Listen mode: the Keep tab as a playlist. Only the long reads are listed, and
+// opening one starts speaking rather than waiting for the reader's headphones
+// button.
+let keepListenMode = false;
+// What makes an email a newsletter, for this purpose: enough words that you'd
+// rather hear it than skim it. Around 300 words is a couple of minutes of
+// speech — comfortably past a receipt, a notification or a two-line reply, and
+// short of nothing anyone actually writes at length.
+const KEEP_NEWSLETTER_WORDS = 300;
 // When true, swiping Keep also marks the email read (label only, not unread).
 let keepMarksRead = false;
 // Optional auto-scroll while reading. Speed is a reading pace in words/minute;
@@ -2828,7 +2856,9 @@ function idbGetAllMeta() {
       const r = c.value;
       out.push({
         id: r.id, sender: r.sender, subject: r.subject, date: r.date,
-        hasBody: !!(r.bodyHtml || (r.bodyText && r.bodyText !== '(could not load body)'))
+        hasBody: !!(r.bodyHtml || (r.bodyText && r.bodyText !== '(could not load body)')),
+        // Records saved before lengths were kept are measured here instead.
+        words: typeof r.words === 'number' ? r.words : bodyWordCount(r.bodyText, r.bodyHtml)
       });
       c.continue();
     };
@@ -2843,6 +2873,18 @@ function idbDelete(id) {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   }));
+}
+
+// How long an email is, in words. Text is measured where there is any; HTML is
+// stripped with a regex rather than parsed, because a cursor over the whole
+// cache measures every record and a length threshold doesn't need a DOM's
+// precision — entities and stray markup are noise beside the gap between a
+// newsletter and a receipt.
+function bodyWordCount(text, html) {
+  const src = (text && text !== '(could not load body)') ? text
+    : String(html || '').replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ');
+  const t = src.replace(/\s+/g, ' ').trim();
+  return t ? t.split(' ').length : 0;
 }
 
 // True when a cached record actually has readable content.
@@ -2873,6 +2915,7 @@ async function cacheKeptEmail(email) {
       date: work.date || '',
       bodyText: text,
       bodyHtml: html,
+      words: bodyWordCount(text, html),
       savedAt: Date.now()
     });
   } catch(e) { /* best-effort */ }
@@ -4502,7 +4545,11 @@ async function renderKeepList() {
       sender: (mem && mem.sender) || (rec && rec.sender) || '',
       subject: (mem && mem.subject) || (rec && rec.subject) || '(no subject)',
       date: (mem && mem.date) || (rec && rec.date) || '',
-      saved: !!(rec && rec.hasBody) // available to read offline
+      saved: !!(rec && rec.hasBody), // available to read offline
+      // 0 for an email whose body nothing has seen yet: it is not short, it is
+      // unmeasured, and listen mode leaves it out rather than guess at it.
+      words: rec ? rec.words
+        : (mem && mem.bodyLoaded ? bodyWordCount(mem.bodyText, mem.bodyHtml) : 0)
     });
   }
 
@@ -4519,6 +4566,9 @@ async function renderKeepList() {
   }
 
   if (keepOfflineOnly) items = items.filter(i => i.saved);
+  // Listening is for the long stuff. Receipts and one-liners are quicker read
+  // than heard, and a playlist of them is all announcement and no article.
+  if (keepListenMode) items = items.filter(i => i.words >= KEEP_NEWSLETTER_WORDS);
   const q = keepSearch.trim().toLowerCase();
   if (q) {
     items = items.filter(e =>
@@ -4527,7 +4577,7 @@ async function renderKeepList() {
   items.sort(keepComparator(keepSortMode, items));
   keepListItems = items;
 
-  const filtering = q || keepOfflineOnly;
+  const filtering = q || keepOfflineOnly || keepListenMode;
   const countLabel = document.getElementById('keep-count-label');
   if (countLabel) countLabel.textContent = !total ? ''
     : (filtering ? `${items.length} of ${total}` : `${total} kept`);
@@ -4537,7 +4587,10 @@ async function renderKeepList() {
     return;
   }
   if (!items.length) {
-    el.innerHTML = `<div class="list-empty">${keepOfflineOnly ? 'No kept emails are saved for offline yet.' : 'No kept emails match your search.'}</div>`;
+    el.innerHTML = `<div class="list-empty">${
+      keepListenMode ? 'Nothing long enough to listen to yet — listen mode shows only emails of about ' + KEEP_NEWSLETTER_WORDS + ' words or more, and an email is measured once its body has been saved.'
+      : keepOfflineOnly ? 'No kept emails are saved for offline yet.'
+      : 'No kept emails match your search.'}</div>`;
     return;
   }
 
@@ -4695,6 +4748,44 @@ function setKeepOfflineOnly(on) {
   keepOfflineOnly = !!on;
   try { localStorage.setItem('ic_keep_offline_only', on ? '1' : '0'); } catch(e) {}
   renderKeepList();
+}
+
+// ── Listen mode ────────────────────────────────────────────
+// One button turns the Keep tab into something you can listen to: the list
+// narrows to the newsletters, and opening one starts reading it aloud instead
+// of waiting for the headphones button in the reader. Read-aloud is switched on
+// with the mode, since a listening mode with the voice off is only a filter.
+function loadKeepListen() {
+  try { keepListenMode = localStorage.getItem('ic_keep_listen') === '1'; }
+  catch(e) { keepListenMode = false; }
+  // Read-aloud switched off in Settings is the last word on it.
+  if (keepListenMode && !ttsEnabled) keepListenMode = false;
+  syncKeepListenUI();
+}
+
+function setKeepListen(on) {
+  keepListenMode = !!on;
+  try { localStorage.setItem('ic_keep_listen', keepListenMode ? '1' : '0'); } catch(e) {}
+  if (keepListenMode && !ttsEnabled) setTtsEnabled(true);
+  syncKeepListenUI();
+  renderKeepList();
+}
+
+function toggleKeepListen() {
+  // The tap is the gesture audio needs: unlocking here is what lets an email
+  // opened a moment later start speaking without one of its own.
+  if (!keepListenMode) ttsUnlockAudio();
+  setKeepListen(!keepListenMode);
+  toast(keepListenMode
+    ? 'Listen mode on — long reads only, played as you open them'
+    : 'Listen mode off');
+}
+
+function syncKeepListenUI() {
+  const btn = document.getElementById('keep-listen');
+  if (!btn) return;
+  btn.classList.toggle('on', keepListenMode);
+  btn.setAttribute('aria-pressed', keepListenMode ? 'true' : 'false');
 }
 
 // Restores the "mark kept as read" setting and reflects it in the toggle.
@@ -5722,7 +5813,8 @@ async function openKept(id) {
   if (email) {
     // Picking this email out of the list is the reading-priority signal.
     recordKeepOpen(id);
-    openReader(email, { markRead: true });
+    // In listen mode the tap that opens an email is also the one that plays it.
+    openReader(email, { markRead: true, speak: keepListenMode && ttsEnabled });
   }
   else toast('Email not available offline');
 }
@@ -7487,7 +7579,9 @@ function loadTts() {
 function setTtsEnabled(on) {
   ttsEnabled = !!on;
   try { localStorage.setItem('ic_tts', on ? '1' : '0'); } catch(e) {}
-  if (!on) stopReadAloud();
+  // Switching the voice off in Settings ends listen mode too — the Keep tab
+  // must not keep hiding the short mail for a feature that no longer speaks.
+  if (!on) { stopReadAloud(); if (keepListenMode) setKeepListen(false); }
   syncTtsUI();
   if (on) { ttsUnlockAudio(); populateTtsVoices(); }
 }
@@ -7949,6 +8043,7 @@ loadKeepMarksRead();
 loadSwipeSortBySender();
 loadAutoScroll();
 loadTts();
+loadKeepListen();   // after loadTts: the mode needs to know if the voice is on
 loadClientId();
 setSwipeMode('triage'); // reflect the keep setting in the action labels/hint
 updateAccountChip();
