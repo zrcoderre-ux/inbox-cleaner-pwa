@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v107'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v108'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6102,7 +6102,41 @@ function cleanForSpeech(raw) {
        .filter(l => l && /[A-Za-z0-9]/.test(l))        // rules, spacers, emoji-only
        .filter(l => !TTS_BUTTON_RE.test(l))            // buttons standing on their own
        .join('\n');
-  return t.replace(/[ \t]{2,}/g, ' ').replace(/\n{2,}/g, '\n').trim();
+  return ttsDropRepeats(t.replace(/[ \t]{2,}/g, ' ').replace(/\n{2,}/g, '\n').trim());
+}
+
+// How far into an email a repeated line is still the page's furniture rather
+// than the writing.
+const TTS_REPEAT_HEAD_CHARS = 1500;
+
+// A page prints its own title more than once — above the heading it links to,
+// or in the line an inbox was meant to show as a preview — and read out, the
+// copies are the same sentence twice over. Inside the header, a line already
+// said is dropped. Past it, a line repeated is the writer repeating themselves,
+// which is theirs to do.
+function ttsDropRepeats(t) {
+  const lines = t.split('\n');
+  const seen = new Set();
+  const out = [];
+  let chars = 0;
+  let inHeader = true;
+  for (const line of lines) {
+    chars += line.length + 1;
+    // The header is the run of short lines a page opens with. The first line
+    // long enough to be prose ends it, and nothing after that is touched — a
+    // writer who repeats a sentence is making a point with it.
+    if (line.length > 200 || chars > TTS_REPEAT_HEAD_CHARS) inHeader = false;
+    if (!inHeader) { out.push(line); continue; }
+    const key = line.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    // Short lines are left alone: a date or a byline standing twice is not
+    // worth the risk of taking a real one out.
+    if (key.length >= 12) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    out.push(line);
+  }
+  return out.join('\n');
 }
 
 // Newsletter chrome: "View this post on the web at …", "Read this online",
@@ -6362,7 +6396,9 @@ function ttsTextFromHtml(html) {
   try {
     const div = document.createElement('div');
     div.innerHTML = html;
-    div.querySelectorAll('style, script, head, [hidden]').forEach(el => el.remove());
+    div.querySelectorAll('style, script, head, [hidden], [aria-hidden="true"], ' +
+      '[class*="preheader" i], [class*="preview-text" i], [class*="previewtext" i], ' +
+      '[id*="preheader" i], [id*="preview-text" i]').forEach(el => el.remove());
     // The preheader: the line an email hides in its HTML so the inbox preview
     // reads well. It isn't on the page, so it isn't read out — and a hidden
     // copy of a phrase isn't an italic phrase either.
