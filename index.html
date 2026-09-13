@@ -1874,7 +1874,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v71'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v72'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5770,8 +5770,16 @@ function cleanForSpeech(raw) {
   return t.replace(/[ \t]{2,}/g, ' ').replace(/\n{2,}/g, '\n').trim();
 }
 
+// Newsletter chrome: "View this post on the web at …", "Read this online",
+// "Open in app". It sits above the writing rather than below it, so the footer
+// rule never sees it — that one only cuts the tail. Dropped wherever it turns
+// up instead. Kept deliberately narrow: it has to open with view, read or open
+// AND land on one of these endings within a short span, so prose that merely
+// mentions a browser survives.
+const TTS_CHROME_RE = /^\s*(?:view|read|open)\b[^.!?]{0,80}?\b(?:on the web|in (?:your |the )?browser|in (?:the )?app|online)\b/i;
+
 // Abbreviations whose full stop doesn't end a sentence.
-const TTS_ABBREV = /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Inc|Ltd|Co|Corp|Dept|Approx|No|vs|etc|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec|e\.g|i\.e|a\.m|p\.m|U\.S|U\.K)\.(?=\s)/gi;
+const TTS_ABBREV = /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Inc|Ltd|Co|Corp|Dept|Approx|No|vs|etc|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec|v|Cal|App|Cir|Ct|Civ|Proc|Supp|Stat|Rptr|Ed|Rev|Ann|Reg|Art|Sec|Para|Ch|Fig|Vol|pp|ibid|cf|e\.g|i\.e|a\.m|p\.m|U\.S|U\.K)\.(?=\s)/gi;
 
 function splitSentences(text) {
   const masked = String(text || '').replace(TTS_ABBREV, m => m.replace(/\./g, TTS_DOT));
@@ -5784,6 +5792,7 @@ function splitSentences(text) {
     while ((m = re.exec(line)) !== null) {
       const sentence = m[0].split(TTS_DOT).join('.').trim();
       if (!sentence) continue;
+      if (TTS_CHROME_RE.test(sentence)) continue;
       // A break before a digit or a lowercase word wasn't the end of a
       // sentence — "Sept. 14", "No. 3", an initial. Put it back together.
       if (out.length && /^[0-9a-z]/.test(sentence)) out[out.length - 1] += ' ' + sentence;
