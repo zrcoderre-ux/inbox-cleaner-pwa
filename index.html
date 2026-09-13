@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v89'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v90'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6086,24 +6086,33 @@ function splitLongSentence(s) {
 // one when dragged.
 function chunkSentences(sentences, outLines) {
   const chunks = [];
-  let cur = '';
-  const flush = () => { if (cur) { chunks.push(cur); cur = ''; } };
+  let cur = '', held = 0;    // held: how many sentences the passage being built has
+  const flush = () => { if (cur) { chunks.push(cur); cur = ''; held = 0; } };
   // Whatever is still being built is the first passage until something has
   // been pushed, and the first passage has a smaller budget than the rest.
   const budget = () => (chunks.length ? TTS_CHUNK_CHARS : TTS_FIRST_CHUNK_CHARS);
+  // The opening line — who it's from and what it's about — is two seconds of
+  // audio. Left alone in the first passage it is followed by the wait for the
+  // second, and that wait is heard as a gap between the subject and the first
+  // line of the email. It always takes the sentence after it along, however
+  // long that sentence is and whatever it costs the first passage's budget.
+  const opening = () => !chunks.length && held === 1;
   sentences.forEach(s => {
     if (s.length > TTS_CHUNK_CHARS) {
-      flush();
-      splitLongSentence(s).forEach(p => {
-        if (outLines) outLines.push({ chunk: chunks.length, at: 0, text: p });
-        chunks.push(p);
+      const opener = opening() ? cur : '';
+      if (!opener) flush(); else { cur = ''; held = 0; }
+      splitLongSentence(s).forEach((p, n) => {
+        const lead = (n === 0 && opener) ? opener + ' ' : '';
+        if (outLines) outLines.push({ chunk: chunks.length, at: lead.length, text: p });
+        chunks.push(lead + p);
       });
       return;
     }
-    if (cur && cur.length + s.length + 1 > budget()) flush();
+    if (cur && !opening() && cur.length + s.length + 1 > budget()) flush();
     // While cur is being built, chunks.length is the index it will be given.
     if (outLines) outLines.push({ chunk: chunks.length, at: cur ? cur.length + 1 : 0, text: s });
     cur = cur ? cur + ' ' + s : s;
+    held++;
   });
   flush();
   return chunks;
@@ -6284,7 +6293,11 @@ function ttsSsmlFor(s, i) {
 function buildSpeech(email) {
   const from = parseSender(email.sender || '');
   const who = from.name || from.addr || 'an unknown sender';
-  const preamble = 'From ' + who + '. Subject: ' + (email.subject || 'no subject') + '.';
+  // The subject is read as itself: hearing the word "Subject" first is like
+  // being read the envelope. A subject that already ends in punctuation keeps
+  // its own — "Is philanthropy broken?." is not a question.
+  const subject = (email.subject || 'no subject').trim();
+  const preamble = 'From ' + who + '. ' + subject + (/[.!?;:…]$/.test(subject) ? '' : '.');
   // The page's own text where there is any, so the italics arrive with the
   // words they belong to; the plain-text part only where a mail has no HTML.
   const source = (email.bodyHtml && ttsTextFromHtml(email.bodyHtml)) || email.bodyText || '';
