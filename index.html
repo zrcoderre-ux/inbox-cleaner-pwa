@@ -957,6 +957,28 @@ body {
   -webkit-box-orient: vertical;
 }
 .rtts-line:empty { display: none; }
+.rtts-line em { font-style: italic; font-weight: 700; opacity: 1; }
+/* Shown only while the reader has scrolled away from the voice. Tapping it
+   brings the page back to where the voice is; the voice itself never stops,
+   so this is the only thing that has to be waiting when they come back. */
+.rtts-resync {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  border-radius: 14px;
+  padding: 7px 10px;
+  background: rgba(255,255,255,0.18);
+  color: #fff;
+  cursor: pointer;
+  width: 100%;
+}
+.rtts-resync.open { display: flex; }
+.rtts-resync svg { width: 14px; height: 14px; flex-shrink: 0; }
 /* A generous hit area around a slim bar: easy to grab, quiet to look at. */
 .rtts-track {
   position: relative;
@@ -1892,6 +1914,11 @@ body {
     <span class="ras-wpm" id="ras-wpm-label">250 wpm</span>
   </div>
   <div class="reader-tts" id="reader-tts">
+    <button class="rtts-resync" id="rtts-resync" onclick="ttsResync()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 4v12"/><path d="M7 13l5 5 5-5"/>
+      </svg>Back to the voice
+    </button>
     <div class="rtts-line" id="rtts-line"></div>
     <div class="rtts-track" id="rtts-track" role="slider" tabindex="0"
          aria-label="Position in the email" aria-valuemin="0" aria-valuemax="100">
@@ -1951,7 +1978,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v82'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v83'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5951,6 +5978,103 @@ function chunkSentences(sentences, outLines) {
   return chunks;
 }
 
+// ── Emphasis ───────────────────────────────────────────────
+// Words the writer italicised, spoken as though they meant them. Kept to runs
+// of one or two words: past that, italics are almost never emphasis — they are
+// a title, a case name, a quoted passage, a whole indented aside — and reading
+// those with stress on every word is worse than reading them flat.
+const TTS_ITALIC_MAX_WORDS = 2;
+// Per passage. Each one costs about 45 billed characters, and a passage that
+// needs more emphasis than this is a stylistic tic rather than a point.
+const TTS_MAX_EMPHASIS = 6;
+// The request has to stay inside what the Worker will take, tags and all.
+const TTS_SSML_BUDGET = 950;
+
+// Voices that refused SSML, remembered so it is asked of them once and no more.
+let ttsNoSsml = {};
+
+function loadTtsNoSsml() {
+  try { ttsNoSsml = JSON.parse(localStorage.getItem('ic_tts_no_ssml') || '{}') || {}; }
+  catch(e) { ttsNoSsml = {}; }
+}
+
+function ttsMarkNoSsml(voice) {
+  if (!voice || ttsNoSsml[voice]) return;
+  ttsNoSsml[voice] = 1;
+  try { localStorage.setItem('ic_tts_no_ssml', JSON.stringify(ttsNoSsml)); } catch(e) {}
+}
+
+// The italicised phrases in an email, shortest-lived reading of the HTML there
+// is: the text pipeline never sees this, so nothing downstream has to carry a
+// marker through sentence splitting or the character positions the scrubber
+// counts in.
+function italicRuns(html) {
+  if (!html) return [];
+  const out = [], seen = new Set();
+  try {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    div.querySelectorAll('style, script, head').forEach(el => el.remove());
+    div.querySelectorAll('i, em, cite, [style*="italic"]').forEach(el => {
+      const run = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (run.length < 2 || seen.has(run)) return;
+      if (run.split(' ').length > TTS_ITALIC_MAX_WORDS) return;
+      if (!/[A-Za-z]/.test(run)) return;
+      seen.add(run);
+      out.push(run);
+    });
+  } catch(e) {}
+  return out;
+}
+
+function ttsEscapeSsml(t) {
+  return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+// Where a phrase sits in a passage, but only when there is no doubt about it:
+// a phrase that turns up twice can't be told apart, and the writer italicised
+// one of them, not both. Whole words only, so "not" doesn't light up
+// "nothing".
+function ttsSoleOccurrence(text, run) {
+  let at = text.indexOf(run), found = -1;
+  while (at !== -1) {
+    const before = at ? text[at - 1] : ' ';
+    const after = text[at + run.length] || ' ';
+    if (!/[A-Za-z0-9]/.test(before) && !/[A-Za-z0-9]/.test(after)) {
+      if (found !== -1) return -1;   // more than one: no way to choose
+      found = at;
+    }
+    at = text.indexOf(run, at + 1);
+  }
+  return found;
+}
+
+// The passage as SSML, or '' for "send it as plain text" — which is most
+// passages, and costs nothing extra.
+function ttsSsmlFor(s, i) {
+  if (!s || !s.italics || !s.italics.length) return '';
+  if (ttsNoSsml[s.voice]) return '';
+  const text = s.chunks[i] || '';
+  const hits = [];
+  for (const run of s.italics) {
+    const at = ttsSoleOccurrence(text, run);
+    if (at !== -1) hits.push({ at, end: at + run.length });
+    if (hits.length >= TTS_MAX_EMPHASIS) break;
+  }
+  if (!hits.length) return '';
+  hits.sort((a, b) => a.at - b.at);
+  let out = '', pos = 0;
+  for (const h of hits) {
+    if (h.at < pos) continue;            // overlapping phrases: keep the first
+    out += ttsEscapeSsml(text.slice(pos, h.at)) +
+           '<emphasis level="moderate">' + ttsEscapeSsml(text.slice(h.at, h.end)) + '</emphasis>';
+    pos = h.end;
+  }
+  out = '<speak>' + out + ttsEscapeSsml(text.slice(pos)) + '</speak>';
+  return out.length > TTS_SSML_BUDGET ? '' : out;
+}
+
 function buildSpeech(email) {
   const from = parseSender(email.sender || '');
   const who = from.name || from.addr || 'an unknown sender';
@@ -5968,7 +6092,7 @@ function buildSpeech(email) {
   // scrolled against this, so a mail that's half quoted history doesn't race
   // to the bottom while the voice is still near the top.
   const coverage = source.length ? Math.min(body.length / source.length, 1) : 1;
-  return { chunks, coverage, lines, starts, total };
+  return { chunks, coverage, lines, starts, total, italics: italicRuns(email.bodyHtml) };
 }
 
 // ── Playback ───────────────────────────────────────────────
@@ -6109,7 +6233,7 @@ async function startReadAloud(email, opts = {}) {
   if (asPill) asPill.style.display = 'none';
   ttsSession = {
     email, chunks: built.chunks, coverage: built.coverage,
-    lines: built.lines, starts: built.starts, total: built.total,
+    lines: built.lines, starts: built.starts, total: built.total, italics: built.italics,
     i: 0, playing: !opts.paused, mode: ttsBackend === 'device' ? 'device' : 'cloud',
     durations: [], trueDur: [],
     voice: voiceForEmail(email),
@@ -6117,6 +6241,7 @@ async function startReadAloud(email, opts = {}) {
   };
   ttsWatchManualScroll();
   ttsShowBar(true);
+  ttsShowResync(false);
   initTtsTrack();
   ttsUpdateUI();
   if (ttsScrollRaf) cancelAnimationFrame(ttsScrollRaf);
@@ -6144,7 +6269,7 @@ async function ttsPlayIndex(i, opts = {}) {
     return;
   }
   try {
-    const got = await ttsFetchChunk(s.chunks[i], false, s.voice);
+    const got = await ttsFetchChunk(s.chunks[i], false, s.voice, ttsSsmlFor(s, i));
     if (ttsSession !== s || s.i !== i) return;  // stopped, or skipped past it
     const a = ttsAudioEl();
     ttsDropPendingSeek(a);   // anything waiting on the last load is void now
@@ -6274,18 +6399,27 @@ function ttsRealDuration(s, i) {
 // One chunk of MP3 from the Worker, remembered for the session so stepping back
 // a sentence — or re-reading the email — doesn't spend the quota twice. What
 // comes back is { url, secs }: the sound, and how much of it there really is.
-async function ttsFetchChunk(text, retried, voice) {
+async function ttsFetchChunk(text, retried, voice, ssml) {
   const useVoice = voice || ttsVoice;
-  const key = useVoice + '|' + text;
+  const key = useVoice + '|' + (ssml || text);
   if (ttsMemo.has(key)) return ttsMemo.get(key);
   const res = await fetch('/api/tts/speak', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text, voice: useVoice })
+    body: JSON.stringify(ssml ? { text, ssml, voice: useVoice } : { text, voice: useVoice })
   });
   if (!res.ok) {
     let payload = {};
     try { payload = await res.json(); } catch(e) {}
+    // Not every voice takes SSML, and which ones do is not worth guessing at:
+    // ask once, and if the answer is no, remember it and say the words plainly
+    // rather than losing the passage over a flourish. A refusal costs a round
+    // trip and not a character — Google bills what it synthesises.
+    if (ssml && res.status >= 400 && res.status < 500 && res.status !== 429) {
+      ttsMarkNoSsml(useVoice);
+      ttsUpdateUI();
+      return ttsFetchChunk(text, retried, useVoice, '');
+    }
     // Google answers 429 both for a per-minute rate limit and for a spent
     // monthly allowance. The first clears in seconds — worth one wait before
     // deciding the good voice is gone.
@@ -6304,7 +6438,7 @@ async function ttsFetchChunk(text, retried, voice) {
       renderTtsUsage();
     } else if (res.status === 429 && !retried) {
       await new Promise(r => setTimeout(r, 1500));
-      return ttsFetchChunk(text, true, useVoice);
+      return ttsFetchChunk(text, true, useVoice, ssml);
     }
     const err = new Error(payload.error || ('http_' + res.status));
     err.status = res.status;
@@ -6350,7 +6484,7 @@ function ttsPrefetch(from, depth) {
   const s = ttsSession;
   if (!s || s.mode !== 'cloud') return;
   const upto = Math.min(from + (depth || TTS_PREFETCH), s.chunks.length);
-  for (let i = from; i < upto; i++) ttsFetchChunk(s.chunks[i], false, s.voice).catch(() => {});
+  for (let i = from; i < upto; i++) ttsFetchChunk(s.chunks[i], false, s.voice, ttsSsmlFor(s, i)).catch(() => {});
 }
 
 // The screen going off is the last moment this page can be sure of getting a
@@ -6586,6 +6720,11 @@ function ttsSeekToChar(s, pos) {
   const frac = Math.max(0, Math.min((at - s.starts[chunk]) / len, 0.98));
   s.scrollPos = null;      // the page will be somewhere else entirely now
   s.playing = true;
+  // Landing somewhere by hand is a request to be taken there, so the page
+  // comes too even if it had been left behind.
+  s.userScrolled = false;
+  s.resyncing = true;
+  ttsShowResync(false);
   if (chunk === s.i && s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration) {
     const d = ttsRealDuration(s, s.i) || ttsAudio.duration;
     ttsAudio.currentTime = Math.min(frac * d, Math.max(ttsAudio.duration - 0.05, 0));
@@ -6621,7 +6760,10 @@ function ttsSkip(delta) {
   const next = Math.min(Math.max(s.i + delta, 0), s.chunks.length - 1);
   s.playing = true;
   s.lastTop = null;
-  s.userScrolled = false;  // a deliberate jump re-arms the scroll sync
+  // A deliberate jump re-arms the scroll sync and brings the page along.
+  s.userScrolled = false;
+  s.resyncing = true;
+  ttsShowResync(false);
   ttsPlayIndex(next);
 }
 
@@ -6938,6 +7080,7 @@ function ttsChunkTop(s, t, i) {
 // to a whole-pixel scrollTop. Now it glides the way auto-scroll does.
 const TTS_SCROLL_FOLLOW = 0.08;   // how hard it chases; lower is gentler
 const TTS_READ_LINE = 0.3;        // where the line being read sits in the view
+const TTS_RESYNC_FOLLOW = 0.22;   // catching back up is brisker than following
 
 function ttsSyncScroll() {
   const s = ttsSession;
@@ -6981,10 +7124,17 @@ function ttsSyncScroll() {
   }
   target = Math.max(0, Math.min(target, span));
   if (s.scrollPos == null) s.scrollPos = t.scroller.scrollTop;
-  // Never behind where the reader already is, and never backwards: a voice
-  // that has just moved on shouldn't drag the page up to meet it.
-  if (s.scrollPos < t.scroller.scrollTop) s.scrollPos = t.scroller.scrollTop;
-  if (target > s.scrollPos) s.scrollPos += (target - s.scrollPos) * TTS_SCROLL_FOLLOW;
+  if (s.resyncing) {
+    // Coming back to the voice, which may be above as well as below wherever
+    // the reader wandered to — the one time the page is allowed to move up.
+    s.scrollPos += (target - s.scrollPos) * TTS_RESYNC_FOLLOW;
+    if (Math.abs(target - s.scrollPos) < 1.5) { s.scrollPos = target; s.resyncing = false; }
+  } else {
+    // Never behind where the reader already is, and never backwards: a voice
+    // that has just moved on shouldn't drag the page up to meet it.
+    if (s.scrollPos < t.scroller.scrollTop) s.scrollPos = t.scroller.scrollTop;
+    if (target > s.scrollPos) s.scrollPos += (target - s.scrollPos) * TTS_SCROLL_FOLLOW;
+  }
 
   const whole = Math.floor(s.scrollPos);
   const frac = s.scrollPos - whole;
@@ -6998,35 +7148,61 @@ function ttsResetScrollFrac(s) {
   if (s && s.fracEl) { try { s.fracEl.style.transform = ''; s.fracEl.style.willChange = ''; } catch(e) {} }
 }
 
-// A touch or wheel hands the scroll back to the reader; the voice keeps going.
-// The sync picks up again once the scrolling settles.
+// Scrolling by hand hands the page back to the reader, and it stays handed
+// back. It used to be returned after two and a half quiet seconds, which meant
+// that looking back at something took holding the page against the voice —
+// and the moment you stopped, it pulled away again. Now the sync simply waits,
+// with a button offering it back. The voice never pauses for any of this.
 function ttsManualScroll() {
   const s = ttsSession;
   if (!s) return;
+  if (s.resumeTimer) { clearTimeout(s.resumeTimer); s.resumeTimer = null; }
   s.userScrolled = true;
-  if (s.resumeTimer) clearTimeout(s.resumeTimer);
-  s.resumeTimer = setTimeout(() => {
-    if (ttsSession !== s) return;
-    s.resumeTimer = null;
-    s.userScrolled = false;
-    s.lastTop = null;
-  }, 2500);
+  s.resyncing = false;
+  ttsShowResync(true);
 }
 
+// Back to the voice: glide the page to wherever it has got to and start
+// following again. Nothing about the audio is touched.
+function ttsResync() {
+  const s = ttsSession;
+  if (!s) return;
+  if (s.resumeTimer) { clearTimeout(s.resumeTimer); s.resumeTimer = null; }
+  const t = readerScrollTarget();
+  // Start the glide from where the page actually is, not from wherever the
+  // follower had last put it.
+  if (t) s.scrollPos = t.scroller.scrollTop;
+  s.userScrolled = false;
+  s.resyncing = true;
+  s.lastTop = null;
+  ttsShowResync(false);
+}
+
+function ttsShowResync(on) {
+  const el = document.getElementById('rtts-resync');
+  if (el) el.classList.toggle('open', !!on);
+}
+
+// Wheel and touch are the reader's own hands on the page. The frame loop also
+// notices the scroll moving away from where it put it, which covers momentum,
+// a scrollbar, and the keyboard — but a wheel or a drag says so at once, before
+// the page has moved far enough for that check to see it.
 function ttsWatchManualScroll() {
   const s = ttsSession;
   const t = readerScrollTarget();
   if (!s || !t) return;
   s.scrollTarget = t.doc || t.scroller;
   s.scrollHandler = () => ttsManualScroll();
-  ['touchstart', 'wheel'].forEach(evt => {
+  // touchmove, not touchstart: a tap on the email is not a scroll, and now
+  // that this latches, a stray tap would leave the page behind for good.
+  ['touchmove', 'wheel'].forEach(evt => {
     try { s.scrollTarget.addEventListener(evt, s.scrollHandler, { passive: true }); } catch(e) {}
   });
 }
 
 function ttsUnwatchManualScroll(s) {
   if (!s || !s.scrollTarget || !s.scrollHandler) return;
-  ['touchstart', 'wheel'].forEach(evt => {
+  ['touchmove', 'wheel'].forEach(evt => {
     try { s.scrollTarget.removeEventListener(evt, s.scrollHandler); } catch(e) {}
   });
   s.scrollTarget = null;
@@ -7171,13 +7347,41 @@ function ttsPaintTrack() {
   if (label) {
     const line = s && s.lines && s.lines.length ? s.lines[ttsLineAtChar(s, frac * s.total)] : null;
     const text = line ? line.text : '';
-    if (label.textContent !== text) label.textContent = text;
+    if (label._text !== text) {
+      label._text = text;
+      // The emphasised words are shown italic here, so which ones the voice is
+      // leaning on is something you can see rather than have to take on trust
+      // — and an email whose italics didn't survive the mail's HTML shows a
+      // line with nothing marked in it.
+      label.innerHTML = ttsMarkEmphasis(s, text);
+    }
   }
+}
+
+// The line as HTML, with any phrase this passage is emphasising set in italics.
+function ttsMarkEmphasis(s, text) {
+  if (!s || !s.italics || !s.italics.length || !text || ttsNoSsml[s.voice]) return esc(text);
+  const hits = [];
+  for (const run of s.italics) {
+    const at = ttsSoleOccurrence(text, run);
+    if (at !== -1) hits.push({ at, end: at + run.length });
+  }
+  if (!hits.length) return esc(text);
+  hits.sort((a, b) => a.at - b.at);
+  let out = '', pos = 0;
+  for (const h of hits) {
+    if (h.at < pos) continue;
+    out += esc(text.slice(pos, h.at)) + '<em>' + esc(text.slice(h.at, h.end)) + '</em>';
+    pos = h.end;
+  }
+  return out + esc(text.slice(pos));
 }
 
 function ttsShowBar(on) {
   const bar = document.getElementById('reader-tts');
   if (bar) bar.classList.toggle('open', !!on);
+  // A new email starts in sync, and a closed player has nothing to offer.
+  if (!on) ttsShowResync(false);
 }
 
 function ttsUpdateUI() {
@@ -7205,8 +7409,16 @@ function ttsUpdateUI() {
   }
   const note = document.getElementById('rtts-note');
   // Only name the voice when it isn't the good one — otherwise a fallback just
-  // looks like the feature sounds bad.
-  if (note) note.textContent = (s && s.mode === 'device') ? 'device voice' : '';
+  // looks like the feature sounds bad. Otherwise, whether this email had any
+  // italics in it and whether this voice will do anything with them: the only
+  // way to know that from the outside is to be told.
+  // The italics themselves are shown in the line above, where they cost no
+  // room; all that is left to say here is when a voice won't do them at all.
+  if (note) {
+    const runs = s && s.italics ? s.italics.length : 0;
+    note.textContent = (s && s.mode === 'device') ? 'device voice'
+      : (runs && ttsNoSsml[s.voice]) ? 'no emphasis' : '';
+  }
   updateListenButton();
 }
 
@@ -7240,6 +7452,7 @@ function loadTts() {
   const through = document.getElementById('tts-playthrough');
   if (through) through.checked = ttsPlayThrough;
   syncTtsUI();
+  loadTtsNoSsml();
   loadSenderVoices();
   renderSenderVoiceCount();
   loadDeviceVoices();

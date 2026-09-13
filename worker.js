@@ -213,14 +213,20 @@ async function handleTts(request, env, url) {
     try { body = await request.json(); } catch (e) {}
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text) return json({ error: 'missing_text' }, 400);
-    if (text.length > TTS_MAX_CHARS) return json({ error: 'text_too_long', max: TTS_MAX_CHARS }, 413);
+    // SSML, when the app has something to emphasise. Google bills every
+    // character of the request including the tags (only <mark> is exempt), so
+    // this — not the words inside it — is what the allowance is charged for
+    // and what the per-request ceiling applies to.
+    const ssml = typeof body.ssml === 'string' && body.ssml ? body.ssml : '';
+    const billed = ssml || text;
+    if (billed.length > TTS_MAX_CHARS) return json({ error: 'text_too_long', max: TTS_MAX_CHARS }, 413);
 
     // Check the budget before spending any of it. Refusing here costs nothing;
     // finding out from Google's bill costs money.
     let usage;
     try { usage = await ttsReadUsage(env); }
     catch (e) { return json({ error: 'budget_unavailable', detail: String(e && e.message || e) }, 429); }
-    if (usage && usage.used + text.length > usage.cap) {
+    if (usage && usage.used + billed.length > usage.cap) {
       return json({ error: 'monthly_cap', used: usage.used, cap: usage.cap }, 429);
     }
 
@@ -237,7 +243,7 @@ async function handleTts(request, env, url) {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...auth.headers },
       body: JSON.stringify({
-        input: { text },
+        input: ssml ? { ssml } : { text },
         voice: name ? { languageCode, name } : { languageCode },
         audioConfig: { audioEncoding: 'MP3' }
       })
@@ -246,18 +252,18 @@ async function handleTts(request, env, url) {
     if (!res.ok || !data.audioContent) return ttsUpstreamError(res, data);
 
     // Only spend the budget on audio actually delivered.
-    await ttsAddUsage(env, usage, text.length);
+    await ttsAddUsage(env, usage, billed.length);
 
     const headers = {
       'content-type': 'audio/mpeg',
       'cache-control': 'no-store',
       // What this request cost against the monthly allowance.
-      'x-tts-chars': String(text.length)
+      'x-tts-chars': String(billed.length)
     };
     // And where that leaves the month, so the app shows a figure covering
     // every device rather than only this browser's share.
     if (usage) {
-      headers['x-tts-month-chars'] = String(usage.used + text.length);
+      headers['x-tts-month-chars'] = String(usage.used + billed.length);
       headers['x-tts-month-cap'] = String(usage.cap);
     }
     return new Response(b64ToBytes(data.audioContent), { headers });
