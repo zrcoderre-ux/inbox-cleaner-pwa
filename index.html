@@ -1951,7 +1951,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v81'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v82'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5786,6 +5786,12 @@ window.addEventListener('keydown', e => {
 // quickly and a skip lands somewhere useful, big enough that the voice keeps
 // its sentence-to-sentence rhythm.
 const TTS_CHUNK_CHARS = 700;
+// The opening passage is kept short. Nothing can be heard until it has been
+// synthesised, and how long that takes grows with its length — so the wait
+// before the voice starts is, almost entirely, the size of this one passage.
+// Every later passage is fetched while the one before it plays, where its size
+// costs nothing.
+const TTS_FIRST_CHUNK_CHARS = 240;
 const TTS_RATES = [0.8, 1, 1.15, 1.35, 1.6];
 const TTS_AUTO_BATCH = 5;
 const TTS_PREFETCH = 2;           // chunks kept ahead of the voice
@@ -5924,6 +5930,9 @@ function chunkSentences(sentences, outLines) {
   const chunks = [];
   let cur = '';
   const flush = () => { if (cur) { chunks.push(cur); cur = ''; } };
+  // Whatever is still being built is the first passage until something has
+  // been pushed, and the first passage has a smaller budget than the rest.
+  const budget = () => (chunks.length ? TTS_CHUNK_CHARS : TTS_FIRST_CHUNK_CHARS);
   sentences.forEach(s => {
     if (s.length > TTS_CHUNK_CHARS) {
       flush();
@@ -5933,7 +5942,7 @@ function chunkSentences(sentences, outLines) {
       });
       return;
     }
-    if (cur && cur.length + s.length + 1 > TTS_CHUNK_CHARS) flush();
+    if (cur && cur.length + s.length + 1 > budget()) flush();
     // While cur is being built, chunks.length is the index it will be given.
     if (outLines) outLines.push({ chunk: chunks.length, at: cur ? cur.length + 1 : 0, text: s });
     cur = cur ? cur + ' ' + s : s;
@@ -5993,18 +6002,72 @@ function ttsAudioStopped(why) {
   // An event left over from the passage before, arriving after we moved on.
   if (a._chunk != null && a._chunk !== s.i) return;
 
-  const d = a.duration;
+  // Measured from the file, not asked of the element: where the element's own
+  // figure is short, playback stops there and "ended" arrives with the clock
+  // reading exactly that — so the element agrees with itself that a passage
+  // it cut off was finished, and nothing else can tell the difference.
+  const d = ttsRealDuration(s, s.i);
   const short = (why === 'error') ||
                 (isFinite(d) && d > 0 && a.currentTime < d - TTS_END_SLACK);
-  if (short && (s.cut || 0) < 2) {
-    s.cut = (s.cut || 0) + 1;
-    // A shade before where it stopped, so nothing falls in the join.
-    const at = (isFinite(d) && d > 0) ? Math.max(a.currentTime / d - 0.01, 0) : 0;
-    ttsPlayIndex(s.i, { resumeFrac: at });
-    return;
-  }
+  if (!short) { s.cut = 0; ttsPlayIndex(s.i + 1); return; }
+
+  // A shade before where it stopped, so nothing falls in the join.
+  const at = (isFinite(d) && d > 0) ? Math.max(a.currentTime / d - 0.01, 0) : 0;
+  s.cut = (s.cut || 0) + 1;
+  // First, the file in hand again from where the sound stopped. A download cut
+  // short or a decode that gave up usually plays through on a second attempt,
+  // and this costs neither a request nor a character of the allowance.
+  if (s.cut === 1) { ttsPlayIndex(s.i, { resumeFrac: at }); return; }
+  // It got no further, so the sound isn't there to be played: the file is short
+  // of the words it was made from. The only way to hear them is to ask for the
+  // rest as a passage of its own.
+  if (s.cut === 2 && ttsSplitRemainder(s, s.i, at)) { ttsPlayIndex(s.i + 1); return; }
   s.cut = 0;
   ttsPlayIndex(s.i + 1);
+}
+
+// A little of what was already spoken is repeated at the join. Cutting the text
+// by where the sound stopped assumes an even pace, which is near enough but not
+// exact — and hearing two or three words twice is a far smaller fault than not
+// hearing them at all.
+const TTS_REJOIN_CHARS = 24;
+const TTS_MAX_SPLITS = 4;   // per email, so a broken voice can't recurse
+
+// Turn the unspoken tail of a passage into a passage of its own, in place.
+function ttsSplitRemainder(s, i, frac) {
+  const text = s.chunks[i] || '';
+  if (text.length < 60 || (s.splits || 0) >= TTS_MAX_SPLITS) return false;
+  let cut = Math.round(frac * text.length) - TTS_REJOIN_CHARS;
+  cut = Math.max(20, Math.min(cut, text.length - 20));
+  const space = text.lastIndexOf(' ', cut);   // land between words, not inside one
+  if (space > 20) cut = space + 1;
+  const head = text.slice(0, cut).trim();
+  const tail = text.slice(cut).trim();
+  if (!head || !tail) return false;
+  s.splits = (s.splits || 0) + 1;
+  s.chunks.splice(i, 1, head, tail);
+  // What the head is worth is what was actually heard of it; the tail has no
+  // audio yet and no figure to give.
+  const heard = (ttsAudio && isFinite(ttsAudio.currentTime)) ? ttsAudio.currentTime : 0;
+  if (s.durations) s.durations.splice(i, 1, heard, 0);
+  if (s.trueDur) s.trueDur.splice(i, 1, 0, 0);
+  // Lines are addressed by passage and offset, so everything from the cut on
+  // has moved.
+  (s.lines || []).forEach(l => {
+    if (l.chunk > i) l.chunk += 1;
+    else if (l.chunk === i && l.at >= cut) { l.chunk = i + 1; l.at = Math.max(l.at - cut, 0); }
+  });
+  ttsReindex(s);
+  return true;
+}
+
+// Running character totals again after the passages have changed, so the
+// scrubber and the clock still describe the email they are sitting on.
+function ttsReindex(s) {
+  s.starts = [];
+  let total = 0;
+  s.chunks.forEach(c => { s.starts.push(total); total += c.length; });
+  s.total = total;
 }
 
 // Must run inside the click that starts reading: once an element has played
@@ -6048,6 +6111,7 @@ async function startReadAloud(email, opts = {}) {
     email, chunks: built.chunks, coverage: built.coverage,
     lines: built.lines, starts: built.starts, total: built.total,
     i: 0, playing: !opts.paused, mode: ttsBackend === 'device' ? 'device' : 'cloud',
+    durations: [], trueDur: [],
     voice: voiceForEmail(email),
     chunkStarted: Date.now(), userScrolled: false, resumeTimer: null, lastTop: null
   };
@@ -6080,12 +6144,14 @@ async function ttsPlayIndex(i, opts = {}) {
     return;
   }
   try {
-    const url = await ttsFetchChunk(s.chunks[i], false, s.voice);
+    const got = await ttsFetchChunk(s.chunks[i], false, s.voice);
     if (ttsSession !== s || s.i !== i) return;  // stopped, or skipped past it
     const a = ttsAudioEl();
     ttsDropPendingSeek(a);   // anything waiting on the last load is void now
     a._chunk = i;            // so a stale event can be told from a live one
-    a.src = url;
+    if (!s.trueDur) s.trueDur = [];
+    s.trueDur[i] = got.secs;
+    a.src = got.url;
     a.playbackRate = ttsRate;
     if (opts.resumeFrac) ttsSeekFraction(a, opts.resumeFrac);
     // Pausing while this chunk was in flight has to hold: the audio is ready
@@ -6093,9 +6159,11 @@ async function ttsPlayIndex(i, opts = {}) {
     s.tries = 0;
     s.played = true;   // the service works; later failures are the connection
     if (!s.playing) { ttsSetMediaSession(); ttsUpdateUI(); return; }
+    // Start the next passage downloading before waiting on this one to begin,
+    // so the gap between passages is the network's and not ours as well.
+    ttsPrefetch(i + 1);
     await a.play();
     ttsSetMediaSession();
-    ttsPrefetch(i + 1);
     // Warm the next email's body while this one plays.
     if (i === 0) ttsPrefetchNextEmail(s.email);
   } catch(e) {
@@ -6135,8 +6203,77 @@ async function ttsPlayIndex(i, opts = {}) {
   }
 }
 
+// ── How long the file really is ────────────────────────────
+// An audio element's duration is a guess where MP3 is concerned. With no VBR
+// header to read, the browser extrapolates from the first frame's bitrate, and
+// a file whose frames vary comes out short. Playback then stops at the guess
+// rather than at the end of the sound, fires "ended" exactly as a passage that
+// finished does, and the words after that point are never spoken — silently,
+// with nothing anywhere reporting a fault.
+//
+// Counting the frames gives the real length. It is one pass over bytes already
+// in hand, and it is the yardstick the rest of this measures against.
+const TTS_MPEG_KBPS = {
+  1: [0,32,40,48,56,64,80,96,112,128,160,192,224,256,320,0],   // MPEG-1 Layer III
+  2: [0,8,16,24,32,40,48,56,64,80,96,112,128,144,160,0]        // MPEG-2 and 2.5
+};
+const TTS_MPEG_HZ = {
+  3: [44100, 48000, 32000, 0],   // MPEG-1
+  2: [22050, 24000, 16000, 0],   // MPEG-2
+  0: [11025, 12000, 8000, 0]     // MPEG-2.5
+};
+
+function ttsMp3Duration(buf) {
+  const b = new Uint8Array(buf);
+  let i = 0;
+  // An ID3v2 tag sits in front of the audio; its length is four seven-bit bytes.
+  if (b.length > 10 && b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) {
+    i = 10 + (((b[6] & 0x7f) << 21) | ((b[7] & 0x7f) << 14) | ((b[8] & 0x7f) << 7) | (b[9] & 0x7f));
+  }
+  const from = i;
+  let samples = 0, hz = 0, frames = 0, used = 0;
+  while (i + 4 <= b.length) {
+    // Eleven set bits open a frame. Anything else is a byte to step over.
+    if (b[i] !== 0xff || (b[i + 1] & 0xe0) !== 0xe0) { i++; continue; }
+    const ver = (b[i + 1] >> 3) & 3;        // 3 MPEG-1, 2 MPEG-2, 0 MPEG-2.5, 1 reserved
+    const layer = (b[i + 1] >> 1) & 3;      // 1 is Layer III
+    const kbpsIdx = (b[i + 2] >> 4) & 15;
+    const hzIdx = (b[i + 2] >> 2) & 3;
+    const pad = (b[i + 2] >> 1) & 1;
+    const hzTable = TTS_MPEG_HZ[ver];
+    if (layer !== 1 || !hzTable || kbpsIdx === 0 || kbpsIdx === 15 || hzIdx === 3) { i++; continue; }
+    const kbps = TTS_MPEG_KBPS[ver === 3 ? 1 : 2][kbpsIdx];
+    const rate = hzTable[hzIdx];
+    if (!kbps || !rate) { i++; continue; }
+    const perFrame = ver === 3 ? 1152 : 576;
+    const len = Math.floor((perFrame / 8) * kbps * 1000 / rate) + pad;
+    if (len < 4 || i + len > b.length) break;   // a frame the file doesn't carry in full
+    samples += perFrame; hz = rate; frames++; used += len;
+    i += len;
+  }
+  // Eleven set bits turn up by chance in any file, so a handful of "frames"
+  // proves nothing. Real MP3 is frames nearly end to end: unless they account
+  // for most of the file, this wasn't one, and the element's figure stands.
+  const body = b.length - from;
+  if (frames < 3 || !hz || used < body * 0.5) return 0;
+  return samples / hz;
+}
+
+// The file's own length where the frames could be counted and the figure is in
+// the same country as the element's; the element's otherwise. A parse that came
+// out wildly different is more likely to be wrong than the browser.
+function ttsRealDuration(s, i) {
+  const el = ttsAudio ? ttsAudio.duration : 0;
+  const own = (s && s.trueDur) ? s.trueDur[i] : 0;
+  if (!own) return el;
+  if (!isFinite(el) || el <= 0) return own;
+  const ratio = own / el;
+  return (ratio > 0.5 && ratio < 3) ? Math.max(own, el) : el;
+}
+
 // One chunk of MP3 from the Worker, remembered for the session so stepping back
-// a sentence — or re-reading the email — doesn't spend the quota twice.
+// a sentence — or re-reading the email — doesn't spend the quota twice. What
+// comes back is { url, secs }: the sound, and how much of it there really is.
 async function ttsFetchChunk(text, retried, voice) {
   const useVoice = voice || ttsVoice;
   const key = useVoice + '|' + text;
@@ -6178,19 +6315,25 @@ async function ttsFetchChunk(text, retried, voice) {
   const monthCap = parseInt(res.headers.get('x-tts-month-cap') || '', 10);
   if (isFinite(monthChars) && isFinite(monthCap)) ttsBudget = { used: monthChars, cap: monthCap };
   recordTtsChars(parseInt(res.headers.get('x-tts-chars') || '0', 10) || text.length);
-  const url = URL.createObjectURL(await res.blob());
-  ttsMemo.set(key, url);
+  const bytes = await res.arrayBuffer();
+  const entry = {
+    url: URL.createObjectURL(new Blob([bytes], { type: res.headers.get('content-type') || 'audio/mpeg' })),
+    // Nought for anything that isn't MP3 frames, which reads as "no opinion"
+    // and leaves the element's own figure standing.
+    secs: ttsMp3Duration(bytes)
+  };
+  ttsMemo.set(key, entry);
   // Bound the memo: an object URL holds its blob in memory until it's revoked.
   while (ttsMemo.size > 40) {
     const oldest = ttsMemo.keys().next().value;
-    const url = ttsMemo.get(oldest);
+    const stale = ttsMemo.get(oldest);
     ttsMemo.delete(oldest);
     // Revoking the blob the element is playing from kills the sound mid-word.
     // Put it back at the end of the queue and stop pruning for now.
-    if (ttsAudio && ttsAudio.src === url) { ttsMemo.set(oldest, url); break; }
-    try { URL.revokeObjectURL(url); } catch(e) {}
+    if (ttsAudio && ttsAudio.src === stale.url) { ttsMemo.set(oldest, stale); break; }
+    try { URL.revokeObjectURL(stale.url); } catch(e) {}
   }
-  return url;
+  return entry;
 }
 
 // Fetch the next chunk while this one plays, so sentences run together instead
@@ -6407,7 +6550,8 @@ function ttsCharPos(s) {
 // seconds" into a distance.
 function ttsCharsPerSecond(s) {
   if (s && s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration > 0) {
-    return (s.chunks[s.i].length / ttsAudio.duration) * (ttsAudio.playbackRate || 1);
+    const d = ttsRealDuration(s, s.i);
+    if (d > 0) return (s.chunks[s.i].length / d) * (ttsAudio.playbackRate || 1);
   }
   return 15 * ttsRate;   // a reasonable speaking pace, for the device voice
 }
@@ -6443,7 +6587,8 @@ function ttsSeekToChar(s, pos) {
   s.scrollPos = null;      // the page will be somewhere else entirely now
   s.playing = true;
   if (chunk === s.i && s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration) {
-    ttsAudio.currentTime = frac * ttsAudio.duration;
+    const d = ttsRealDuration(s, s.i) || ttsAudio.duration;
+    ttsAudio.currentTime = Math.min(frac * d, Math.max(ttsAudio.duration - 0.05, 0));
     const p = ttsAudio.play(); if (p && p.catch) p.catch(() => {});
     ttsUpdateUI();
     return;
@@ -6490,7 +6635,7 @@ function setReaderVoice(name) {
   // it before anything is swapped, or the old position is already gone — then
   // wind back to the start of the line it was on.
   const heard = (s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration > 0)
-    ? Math.min(ttsAudio.currentTime / ttsAudio.duration, 0.98) : 0;
+    ? Math.min(ttsAudio.currentTime / (ttsRealDuration(s, s.i) || ttsAudio.duration), 0.98) : 0;
   const frac = ttsLineStartFraction(s.chunks[s.i], heard);
   s.voice = name;
   rememberVoiceForSender(s.email, name);
@@ -6685,7 +6830,8 @@ function readerScrollTarget() {
 // audio element's own clock); the device path estimates from elapsed time.
 function ttsChunkProgress(s) {
   if (s.mode === 'cloud' && ttsAudio && ttsAudio.duration) {
-    return Math.min(ttsAudio.currentTime / ttsAudio.duration, 1);
+    const d = ttsRealDuration(s, s.i);
+    return d > 0 ? Math.min(ttsAudio.currentTime / d, 1) : 0;
   }
   const words = s.chunks[s.i].split(/\s+/).length;
   const expected = (words / (175 * ttsRate)) * 60000;
@@ -6801,7 +6947,7 @@ function ttsSyncScroll() {
   // of the email stops being a guess as it goes.
   if (s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration > 0) {
     if (!s.durations) s.durations = [];
-    if (!s.durations[s.i]) { s.durations[s.i] = ttsAudio.duration; ttsSetPositionState(); }
+    if (!s.durations[s.i]) { s.durations[s.i] = ttsRealDuration(s, s.i); ttsSetPositionState(); }
   }
   // The bar shows where the voice is, which has nothing to do with whether the
   // page can be scrolled — so it is painted before any of the reasons for not
