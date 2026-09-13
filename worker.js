@@ -217,7 +217,9 @@ async function handleTts(request, env, url) {
 
     // Check the budget before spending any of it. Refusing here costs nothing;
     // finding out from Google's bill costs money.
-    const usage = await ttsReadUsage(env);
+    let usage;
+    try { usage = await ttsReadUsage(env); }
+    catch (e) { return json({ error: 'budget_unavailable', detail: String(e && e.message || e) }, 429); }
     if (usage && usage.used + text.length > usage.cap) {
       return json({ error: 'monthly_cap', used: usage.used, cap: usage.cap }, 429);
     }
@@ -262,7 +264,9 @@ async function handleTts(request, env, url) {
   }
 
   if (path === '/api/tts/usage' && request.method === 'GET') {
-    const usage = await ttsReadUsage(env);
+    let usage;
+    try { usage = await ttsReadUsage(env); }
+    catch (e) { return json({ enforced: true, unavailable: true, detail: String(e && e.message || e) }); }
     return json(usage ? { enforced: true, used: usage.used, cap: usage.cap }
                       : { enforced: false });
   }
@@ -282,6 +286,9 @@ const TTS_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
 // Access tokens last an hour. The isolate outlives a single request, so
 // caching one here saves a round trip on nearly every call.
 let ttsTokenCache = null;   // { token, expires }
+// Set when a budget write fails, so the next request refuses rather than
+// spending against a counter that has stopped moving.
+let ttsBudgetBroken = false;
 
 function ttsHasCredential(env) {
   return !!(env && (env.GOOGLE_TTS_API_KEY || env.GOOGLE_TTS_SA_KEY));
@@ -396,11 +403,28 @@ function ttsCap(env) {
   return (isFinite(n) && n > 0) ? n : TTS_DEFAULT_CAP;
 }
 
+// A budget that can't be read is a budget that isn't enforced, so this fails
+// closed: the point of the cap is that nothing is ever spent past it, and
+// "the counter was unreachable" is not a reason to spend. Silence is the one
+// answer a spending limit must never give.
 async function ttsReadUsage(env) {
   if (!env || !env.TTS_BUDGET) return null;  // no namespace bound — not enforced
   const key = ttsMonthKey();
-  let used = 0;
-  try { used = parseInt(await env.TTS_BUDGET.get(key), 10) || 0; } catch (e) {}
+  let raw;
+  try { raw = await env.TTS_BUDGET.get(key); }
+  catch (e) { throw new Error('the monthly budget could not be read'); }
+  const used = parseInt(raw, 10) || 0;
+  if (ttsBudgetBroken) {
+    // An earlier increment never landed. Prove the counter is writable again
+    // before spending against it — otherwise one broken write would strand the
+    // feature until the isolate was recycled.
+    try {
+      await env.TTS_BUDGET.put(key, String(used), { expirationTtl: TTS_USAGE_TTL });
+      ttsBudgetBroken = false;
+    } catch (e) {
+      throw new Error('the monthly budget could not be recorded');
+    }
+  }
   return { key, used, cap: ttsCap(env) };
 }
 
@@ -410,11 +434,17 @@ async function ttsReadUsage(env) {
 // so the drift is small and always an undercount — which is what the margin
 // under the free allowance is for. Exact accounting would want a Durable
 // Object; this is a budget, not a ledger.
+// Spend that never reaches the counter is spend the cap can't see, so a failed
+// write stops the next request rather than being shrugged off. The audio just
+// paid for is still delivered — refusing after the fact wouldn't unspend it.
 async function ttsAddUsage(env, state, n) {
   if (!state || !n) return;
   try {
     await env.TTS_BUDGET.put(state.key, String(state.used + n), { expirationTtl: TTS_USAGE_TTL });
-  } catch (e) {}
+    ttsBudgetBroken = false;
+  } catch (e) {
+    ttsBudgetBroken = true;
+  }
 }
 
 function ttsVoiceTier(name) {

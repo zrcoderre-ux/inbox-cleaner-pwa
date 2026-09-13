@@ -988,6 +988,50 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.rtts-voicebtn { font-weight: 500; max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The voice list opens above the player rather than over the email, so the
+   sentence you're judging the voice against stays visible. */
+.rtts-voices {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  max-height: 46vh;
+  overflow-y: auto;
+  width: min(300px, calc(100% - 24px));
+  background: rgba(20,20,20,0.92);
+  border-radius: 14px;
+  z-index: 7;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.38);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+.rtts-voices.open { display: flex; }
+.rtts-voice {
+  font-family: var(--sans);
+  font-size: 13px;
+  text-align: left;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+}
+.rtts-voice.current { background: rgba(255,255,255,0.2); font-weight: 600; }
+.tts-linkbtn {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--red);
+  text-decoration: underline;
+  cursor: pointer;
+}
 .tts-usage { margin-top: 8px; font-size: 11px; color: var(--text-3); line-height: 1.5; }
 .tts-voice-select {
   font-family: var(--sans);
@@ -1628,7 +1672,7 @@ body {
             </label>
             <div class="setting-row setting-slider" id="tts-voice-row" style="display:none;">
               <span class="setting-text">
-                <span class="setting-title">Voice</span>
+                <span class="setting-title">Default voice</span>
                 <span class="setting-desc" id="tts-voice-desc">Loading voices…</span>
               </span>
               <select class="tts-voice-select" id="tts-voice" onchange="setTtsVoice(this.value)" aria-label="Reading voice"></select>
@@ -1647,6 +1691,7 @@ body {
               </span>
               <input type="checkbox" id="tts-autostart" onchange="setTtsAutoStart(this.checked)">
             </label>
+            <div class="tts-usage" id="tts-sender-voices" style="display:none;"></div>
             <div class="tts-usage" id="tts-usage" style="display:none;"></div>
             <div class="app-version" id="app-version"></div>
           </div>
@@ -1784,11 +1829,13 @@ body {
     </button>
     <span class="rtts-progress" id="rtts-progress"></span>
     <button class="rtts-rate" id="rtts-rate" onclick="cycleTtsRate()" aria-label="Speaking speed">1&times;</button>
+    <button class="rtts-rate rtts-voicebtn" id="rtts-voice" onclick="toggleVoicePicker()" aria-label="Change voice"></button>
     <span class="rtts-note" id="rtts-note"></span>
     <button class="rtts-btn" onclick="stopReadAloud()" aria-label="Stop reading">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
     </button>
   </div>
+  <div class="rtts-voices" id="rtts-voices"></div>
 </div>
 
 <script src="https://apis.google.com/js/api.js" async></script>
@@ -1820,7 +1867,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v68'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v69'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1928,6 +1975,10 @@ let ttsUsage = null;        // { month, chars } — this browser's own estimate
 // What the Worker reports when it's enforcing a monthly budget: authoritative,
 // and counts every device rather than just this one.
 let ttsBudget = null;       // { used, cap } or null when nothing is enforced
+// Voices chosen per sender, so a correspondent keeps the voice you gave them.
+// Sender-keyed like the block rules, so it's namespaced per account.
+let ttsSenderVoices = {};
+let ttsVoiceList = [];      // what the Worker offered, for the in-reader picker
 // Background queue that caches kept emails for offline reading, most-recent
 // first, with limited concurrency so rapid keeps don't overwhelm the API.
 let cacheQueue = [];
@@ -5768,7 +5819,9 @@ function ttsAudioEl() {
   ['preservesPitch', 'mozPreservesPitch', 'webkitPreservesPitch'].forEach(p => {
     try { ttsAudio[p] = true; } catch(e) {}
   });
-  ttsAudio.addEventListener('ended', () => { if (ttsSession) ttsPlayIndex(ttsSession.i + 1); });
+  ttsAudio.addEventListener('ended', () => {
+    if (ttsSession && ttsSession.playing) ttsPlayIndex(ttsSession.i + 1);
+  });
   return ttsAudio;
 }
 
@@ -5811,6 +5864,7 @@ async function startReadAloud(email) {
   ttsSession = {
     email, chunks: built.chunks, coverage: built.coverage,
     i: 0, playing: true, mode: ttsBackend === 'device' ? 'device' : 'cloud',
+    voice: voiceForEmail(email),
     chunkStarted: Date.now(), userScrolled: false, resumeTimer: null, lastTop: null
   };
   ttsWatchManualScroll();
@@ -5831,11 +5885,14 @@ async function ttsPlayIndex(i) {
 
   if (s.mode === 'device') { ttsSpeakOnDevice(s.chunks[i]); return; }
   try {
-    const url = await ttsFetchChunk(s.chunks[i]);
+    const url = await ttsFetchChunk(s.chunks[i], false, s.voice);
     if (ttsSession !== s || s.i !== i) return;  // stopped, or skipped past it
     const a = ttsAudioEl();
     a.src = url;
     a.playbackRate = ttsRate;
+    // Pausing while this chunk was in flight has to hold: the audio is ready
+    // and cued, but nothing starts until play is asked for again.
+    if (!s.playing) { ttsUpdateUI(); ttsPrefetch(i + 1); return; }
     await a.play();
     ttsSetMediaSession();
     ttsPrefetch(i + 1);
@@ -5849,13 +5906,14 @@ async function ttsPlayIndex(i) {
 
 // One chunk of MP3 from the Worker, remembered for the session so stepping back
 // a sentence — or re-reading the email — doesn't spend the quota twice.
-async function ttsFetchChunk(text, retried) {
-  const key = ttsVoice + '|' + text;
+async function ttsFetchChunk(text, retried, voice) {
+  const useVoice = voice || ttsVoice;
+  const key = useVoice + '|' + text;
   if (ttsMemo.has(key)) return ttsMemo.get(key);
   const res = await fetch('/api/tts/speak', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text, voice: ttsVoice })
+    body: JSON.stringify({ text, voice: useVoice })
   });
   if (!res.ok) {
     let payload = {};
@@ -5865,12 +5923,20 @@ async function ttsFetchChunk(text, retried) {
     // deciding the good voice is gone.
     // A spent monthly budget is refused with the same status as a rate limit,
     // but waiting won't help and nor will the next email.
+    // Both mean "don't spend": one because the budget is gone, one because it
+    // can't be checked. Retrying either just spends a request to be told again.
+    if (res.status === 429 && payload.error === 'budget_unavailable') {
+      const err = new Error('budget_unavailable');
+      err.status = 429;
+      err.detail = payload.detail || '';
+      throw err;
+    }
     if (res.status === 429 && payload.error === 'monthly_cap') {
       ttsBudget = { used: payload.used || 0, cap: payload.cap || TTS_FREE_CHARS };
       renderTtsUsage();
     } else if (res.status === 429 && !retried) {
       await new Promise(r => setTimeout(r, 1500));
-      return ttsFetchChunk(text, true);
+      return ttsFetchChunk(text, true, useVoice);
     }
     const err = new Error(payload.error || ('http_' + res.status));
     err.status = res.status;
@@ -5897,7 +5963,7 @@ async function ttsFetchChunk(text, retried) {
 function ttsPrefetch(i) {
   const s = ttsSession;
   if (!s || s.mode !== 'cloud' || i >= s.chunks.length) return;
-  ttsFetchChunk(s.chunks[i]).catch(() => {});
+  ttsFetchChunk(s.chunks[i], false, s.voice).catch(() => {});
 }
 
 // Whether to finish the email with the device's own voice.
@@ -5910,7 +5976,7 @@ function ttsPrefetch(i) {
 // starts on the cloud again.
 function ttsSwitchToDevice(e) {
   if (!('speechSynthesis' in window)) return false;
-  const capped = e && e.message === 'monthly_cap';
+  const capped = e && (e.message === 'monthly_cap' || e.message === 'budget_unavailable');
   const misconfigured = capped || (e && (e.status === 501 || e.status === 401 || e.status === 403));
   // The free-tier counter is about the Google voices, so it goes away with them.
   if (misconfigured) { ttsBackend = 'device'; renderTtsUsage(); }
@@ -5925,6 +5991,7 @@ function ttsErrorMessage(e) {
   if (e.message === 'credential_failed') return 'Voice credential unusable — see Settings for why';
   if (e.status === 403) return 'Google refused the voice request — see Settings for why';
   if (e.message === 'monthly_cap') return 'Monthly voice budget spent — using the device voice';
+  if (e.message === 'budget_unavailable') return 'Voice budget unreadable — using the device voice to be safe';
   if (e.status === 429) return 'Google voice limit hit — device voice for this email';
   if (e.status === 413) return 'That passage was too long to speak';
   if (!e.status) return 'Voice service unreachable — using the device voice';
@@ -6025,6 +6092,39 @@ function ttsSkip(delta) {
   ttsPlayIndex(next);
 }
 
+// Picking a voice while listening applies from this sentence — you want to
+// hear the change, not wait for the next paragraph — and sticks to the sender.
+function setReaderVoice(name) {
+  const s = ttsSession;
+  hideVoicePicker();
+  if (!s || !name || name === s.voice) return;
+  s.voice = name;
+  rememberVoiceForSender(s.email, name);
+  ttsUpdateUI();
+  if (s.mode === 'cloud') {
+    s.playing = true;
+    ttsPlayIndex(s.i);   // re-speak this chunk in the new voice
+  }
+}
+
+function toggleVoicePicker() {
+  const el = document.getElementById('rtts-voices');
+  if (!el) return;
+  if (el.classList.contains('open')) { hideVoicePicker(); return; }
+  const s = ttsSession;
+  if (!s) return;
+  if (!ttsVoiceList.length) { toast('No other voices available'); return; }
+  el.innerHTML = ttsVoiceList.map(v =>
+    '<button class="rtts-voice' + (v.name === s.voice ? ' current' : '') + '"' +
+    ' onclick="setReaderVoice(\'' + esc(v.name) + '\')">' + esc(ttsVoiceLabel(v)) + '</button>').join('');
+  el.classList.add('open');
+}
+
+function hideVoicePicker() {
+  const el = document.getElementById('rtts-voices');
+  if (el) el.classList.remove('open');
+}
+
 function cycleTtsRate() {
   const i = TTS_RATES.indexOf(ttsRate);
   setTtsRate(TTS_RATES[(i + 1) % TTS_RATES.length] || 1);
@@ -6051,6 +6151,7 @@ function stopReadAloud(opts = {}) {
   ttsClearMediaSession();
   if (opts.silent) return;
   ttsShowBar(false);
+  hideVoicePicker();
   updateListenButton();
   // Hand the reader back to auto-scroll if that's what the user had running.
   if (s && autoScrollEnabled && readerEmail) {
@@ -6189,6 +6290,12 @@ function ttsUpdateUI() {
   if (prog) prog.textContent = s ? (s.i + 1) + ' / ' + s.chunks.length : '';
   const rate = document.getElementById('rtts-rate');
   if (rate) rate.innerHTML = ttsRateLabel(ttsRate) + '&times;';
+  const voiceBtn = document.getElementById('rtts-voice');
+  if (voiceBtn) {
+    const cur = s && ttsVoiceList.find(v => v.name === s.voice);
+    voiceBtn.textContent = cur ? ttsVoiceShortName(cur) : 'Voice';
+    voiceBtn.style.display = (s && s.mode === 'cloud' && ttsVoiceList.length) ? '' : 'none';
+  }
   const note = document.getElementById('rtts-note');
   // Only name the voice when it isn't the good one — otherwise a fallback just
   // looks like the feature sounds bad.
@@ -6223,6 +6330,8 @@ function loadTts() {
   const auto = document.getElementById('tts-autostart');
   if (auto) auto.checked = ttsAutoStart;
   syncTtsUI();
+  loadSenderVoices();
+  renderSenderVoiceCount();
   loadDeviceVoices();
   if ('speechSynthesis' in window) {
     try { speechSynthesis.addEventListener('voiceschanged', loadDeviceVoices); } catch(e) {}
@@ -6241,6 +6350,57 @@ function setTtsEnabled(on) {
   if (!on) stopReadAloud();
   syncTtsUI();
   if (on) { ttsUnlockAudio(); populateTtsVoices(); }
+}
+
+// ── A voice per sender ─────────────────────────────────────
+// One voice for everything gets tiring, and mail from different people wants
+// different readers. A voice chosen while listening sticks to that sender.
+function loadSenderVoices() {
+  try { ttsSenderVoices = JSON.parse(localStorage.getItem(nsKey('ic_tts_sender_voices')) || '{}') || {}; }
+  catch(e) { ttsSenderVoices = {}; }
+}
+
+function saveSenderVoices() {
+  try { localStorage.setItem(nsKey('ic_tts_sender_voices'), JSON.stringify(ttsSenderVoices)); } catch(e) {}
+}
+
+// The address is the key, not the display name — people rename themselves.
+function senderKey(email) {
+  const from = parseSender((email && email.sender) || '');
+  return (from.addr || from.name || '').toLowerCase();
+}
+
+function voiceForEmail(email) {
+  const key = senderKey(email);
+  return (key && ttsSenderVoices[key]) || ttsVoice;
+}
+
+function rememberVoiceForSender(email, voice) {
+  const key = senderKey(email);
+  if (!key || !voice) return;
+  // Matching the default isn't worth a row of its own — and storing it would
+  // freeze this sender if the default later changed.
+  if (voice === ttsVoice) delete ttsSenderVoices[key];
+  else ttsSenderVoices[key] = voice;
+  saveSenderVoices();
+  renderSenderVoiceCount();
+}
+
+function clearSenderVoices() {
+  ttsSenderVoices = {};
+  saveSenderVoices();
+  renderSenderVoiceCount();
+  toast('Per-sender voices cleared');
+}
+
+function renderSenderVoiceCount() {
+  const el = document.getElementById('tts-sender-voices');
+  if (!el) return;
+  const n = Object.keys(ttsSenderVoices).length;
+  if (!ttsEnabled || !n) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  el.innerHTML = n + (n === 1 ? ' sender has' : ' senders have') + ' their own voice. ' +
+    '<button class="tts-linkbtn" onclick="clearSenderVoices()">Reset all</button>';
 }
 
 function setTtsVoice(name) {
@@ -6311,6 +6471,7 @@ async function populateTtsVoices() {
     }
     const voices = (await res.json()).voices || [];
     if (!voices.length) throw new Error('no_voices');
+    ttsVoiceList = voices;
     sel.innerHTML = voices.map(v =>
       '<option value="' + esc(v.name) + '">' + esc(ttsVoiceLabel(v)) + '</option>').join('');
     if (!ttsVoice || !voices.some(v => v.name === ttsVoice)) setTtsVoice(voices[0].name);
@@ -6321,17 +6482,25 @@ async function populateTtsVoices() {
     loadTtsBudget();
   } catch(e) {
     ttsBackend = 'device';
+    ttsVoiceList = [];
     sel.innerHTML = '<option>Device voice</option>';
     sel.disabled = true;
     if (desc) desc.textContent = ttsVoiceUnavailableReason(e);
   }
   renderTtsUsage();
+  // The voice list may land after playback has already started; the reader's
+  // picker button is hidden until it does, so refresh it here.
+  ttsUpdateUI();
+}
+
+function ttsVoiceShortName(v) {
+  const at = v.name.toLowerCase().indexOf('-' + v.tier.toLowerCase());
+  return (at === -1 ? '' : v.name.slice(at + v.tier.length + 2)) || v.name;
 }
 
 // "en-US-Chirp3-HD-Achernar" reads as "Achernar · Chirp3-HD · Female".
 function ttsVoiceLabel(v) {
-  const at = v.name.toLowerCase().indexOf('-' + v.tier.toLowerCase());
-  const short = (at === -1 ? '' : v.name.slice(at + v.tier.length + 2)) || v.name;
+  const short = ttsVoiceShortName(v);
   const gender = v.gender ? v.gender.charAt(0) + v.gender.slice(1).toLowerCase() : '';
   return short + ' · ' + v.tier + (gender ? ' · ' + gender : '');
 }
