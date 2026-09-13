@@ -1874,7 +1874,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v70'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v71'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1945,6 +1945,8 @@ const FUZZY_SUBJECT_THRESHOLD = 4;
 const BLOCK_SUGGEST_STREAK = 10;
 let selectedIds = new Set();
 let activeTab = 'swipe';
+// The landing tab is decided once, on the first load of a session.
+let initialTabPicked = false;
 let swipeMode = 'triage';
 let currentEmail = null;
 let sortMode = 'priority';
@@ -3583,6 +3585,19 @@ function focusSwipeDeck() {
   try { area.focus({ preventScroll: true }); } catch(e) {}
 }
 
+// With nothing left to triage, the deck's empty state isn't what you opened
+// the app to see — the kept pile is. Only on the first load of a session, and
+// only if the deck is still where you're standing: moving someone between tabs
+// after they've navigated, or on a background refresh, would be meddling.
+// Both empty is the one case worth staying put for, since "all clear" is news.
+function pickInitialTab() {
+  if (initialTabPicked) return;
+  initialTabPicked = true;
+  if (activeTab !== 'swipe') return;
+  if (swipeQueue.length || !keptIds.size) return;
+  switchTab('keep');
+}
+
 function switchTab(tab) {
   activeTab = tab;
   document.getElementById('swipe-screen').style.display = tab === 'swipe' ? 'flex' : 'none';
@@ -3709,6 +3724,7 @@ async function fetchEmails() {
     renderSwipeStack();
     renderEmailList();
     renderKeepList();
+    pickInitialTab();
     setStatus(false, `${emails.length} emails loaded.`);
     startAutoRefresh();
     saveDeckSnapshot();
