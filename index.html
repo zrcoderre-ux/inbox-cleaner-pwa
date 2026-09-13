@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v113'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v114'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6171,6 +6171,23 @@ const TTS_CHROME_RE = /^\s*(?:view|read|open)\b[^.!?]{0,80}?\b(?:on the web|in (
 // It sits at the top rather than the bottom, so neither the footer rule nor the
 // tail-cutting reaches it, and the question mark splits it into two sentences
 // that each have to be named.
+// The paragraph a newsletter opens with every week: what it is, thanks for
+// subscribing, and an invitation to subscribe or upgrade. It is the same words
+// every time and none of them are the piece.
+const TTS_PITCH_RE = new RegExp([
+  'welcome (?:back )?to [^.!?]{0,80}?\\bnewsletter\\b',
+  'a newsletter that (?:aims|tries|seeks|is)\\b',
+  'if you(?:\'|\u2019)?re not (?:already )?a (?:paid |paying )?subscriber',
+  'consider becoming (?:one|a (?:paid|paying) subscriber)',
+  'upgrad(?:e|ing) to a (?:paid|paying) subscription',
+  'becom(?:e|ing) a (?:paid|paying) subscriber',
+  'your continued support',
+  'consider sharing',
+  'shar(?:e|ing) [^.!?]{0,40}with your (?:friends|networks|colleagues)',
+  'support (?:my|our) work',
+  'subscribe (?:now|today)\\b'
+].join('|'), 'i');
+
 const TTS_NEVER_RE = new RegExp([
   'unsubscribe',
   'manage (?:your )?(?:email )?preferences',
@@ -6239,6 +6256,7 @@ function splitSentences(text) {
       const sentence = m[0].split(TTS_DOT).join('.').trim();
       if (!sentence) continue;
       if (TTS_CHROME_RE.test(sentence) || TTS_NEVER_RE.test(sentence) ||
+          TTS_PITCH_RE.test(sentence) ||
           TTS_CAPTION_RE.test(sentence) ||
           // Wherever they sit: the tail-cutting above only reaches a footer
           // that arrives as its own line in the back half of the mail.
@@ -6307,12 +6325,12 @@ function chunkSentences(sentences, outLines) {
 }
 
 // ── Emphasis ───────────────────────────────────────────────
-// Words the writer italicised, spoken as though they meant them. Kept to runs
-// of one or two words, all in lower case: past that, italics are almost never
-// emphasis — they are a title, a case name, a quoted passage, a whole indented
-// aside, a proper noun — and reading those with stress on every word is worse
-// than reading them flat.
-const TTS_ITALIC_MAX_WORDS = 2;
+// Words the writer italicised, spoken as though they meant them. Kept to short
+// runs, all in lower case: past a phrase, italics are almost never emphasis —
+// they are a title, a case name, a quoted passage, a whole indented aside, a
+// proper noun — and reading those with stress on every word is worse than
+// reading them flat.
+const TTS_ITALIC_MAX_WORDS = 5;
 // Per passage. Each one costs about 40 billed characters, and a passage that
 // needs more emphasis than this is a stylistic tic rather than a point.
 const TTS_MAX_EMPHASIS = 6;
