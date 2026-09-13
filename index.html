@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v109'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v110'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6307,6 +6307,28 @@ const TTS_MAX_EMPHASIS = 6;
 // of how a person reads an italic, leaning on the word without stopping around
 // it. Slowing the phrase down does that, and inserts nothing.
 const TTS_EMPHASIS_RATE = '90%';
+// A word slowed from its very first letter sounds dragged rather than stressed:
+// the attack is what makes it land. The sound the word opens with is left at
+// speed and everything after it is slowed — the consonants it starts with, or
+// the vowel where it starts with one. Below this many letters a word is slowed
+// whole, since there is not enough of it left to slow.
+const TTS_ONSET_MIN_LETTERS = 4;
+
+function ttsEmphasisStart(text, at, end) {
+  const span = text.slice(at, end);
+  const word = (span.split(/\s/)[0] || '');
+  if (word.replace(/[^A-Za-z]/g, '').length < TTS_ONSET_MIN_LETTERS) {
+    // Too short to split, but a phrase of two words can give the whole of the
+    // first one at speed instead — "of course" leans on the course.
+    const gap = span.search(/\s\S/);
+    return gap === -1 ? at : at + gap + 1;
+  }
+  let n = (/^[^aeiou\s]*/i.exec(word) || [''])[0].length;
+  // "qu" is one sound, not a consonant and a vowel.
+  if (n && /q$/i.test(word.slice(0, n)) && /^u/i.test(word.slice(n))) n++;
+  if (!n) n = (/^[aeiou]+/i.exec(word) || [''])[0].length;
+  return (n > 0 && n < word.length) ? at + n : at;
+}
 // The request has to stay inside what the Worker will take, tags and all.
 const TTS_SSML_BUDGET = 950;
 
@@ -6586,7 +6608,7 @@ function ttsSsmlFor(s, i) {
     const straddles = quotes.some(q =>
       (h.at < q.at + 1 && h.end > q.at + 1) || (h.at < q.end - 1 && h.end > q.end - 1));
     if (straddles) return;
-    tags.push({ at: h.at, end: h.end,
+    tags.push({ at: ttsEmphasisStart(text, h.at, h.end), end: h.end,
       open: '<prosody rate="' + TTS_EMPHASIS_RATE + '">', close: '</prosody>' });
     used++;
   });
