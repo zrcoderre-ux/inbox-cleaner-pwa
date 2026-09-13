@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v98'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v99'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6235,7 +6235,7 @@ const TTS_MAX_EMPHASIS = 6;
 // phrase and read the words themselves no differently — which is the reverse
 // of how a person reads an italic, leaning on the word without stopping around
 // it. Slowing the phrase down does that, and inserts nothing.
-const TTS_EMPHASIS_RATE = '80%';
+const TTS_EMPHASIS_RATE = '90%';
 // The request has to stay inside what the Worker will take, tags and all.
 const TTS_SSML_BUDGET = 950;
 
