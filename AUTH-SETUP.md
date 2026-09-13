@@ -190,9 +190,12 @@ next load; pick any voice and it's remembered per browser.
 Same result, a few more steps, and it works where API keys are blocked.
 
 1. **APIs & Services → Credentials → Create credentials → Service account.**
-   Name it anything; it needs **no project role at all** — the Text-to-Speech
-   API is enabled per project, not granted per principal, so an unroled
-   account can still synthesise. Skip the optional grant steps.
+   Name it anything, and at the grant step give it **Service Usage Consumer**
+   (`roles/serviceusage.serviceUsageConsumer`). Synthesis itself needs no
+   role, but spending the project's quota needs `serviceusage.services.use`,
+   and without it every call comes back `PERMISSION_DENIED`. If you skipped
+   the grant, add it later under **IAM & Admin → IAM → Grant access**, with
+   the service account's `client_email` as the principal.
 2. Open it → **Keys → Add key → Create new key → JSON**. A file downloads.
 3. Hand the whole file to the Worker, contents and all:
 
@@ -288,6 +291,22 @@ whole mechanism and the app falls back to its own per-browser estimate.
   back a sentence — doesn't spend the quota twice.
 - `/api/tts/usage` reports where the month stands, so Settings shows a real
   figure before anything has been spoken in a session.
+
+## When it doesn't work
+
+Open `/api/tts/voices` on the app's own URL while signed in. It answers with
+Google's own words rather than the app's summary of them, which is usually
+enough on its own:
+
+- `PERMISSION_DENIED` naming `serviceusage.services.use` — the service account
+  is missing the Service Usage Consumer role above.
+- `SERVICE_DISABLED` — the Text-to-Speech API isn't enabled on that project.
+  Check you enabled it on the project the credential belongs to.
+- `credential_failed` — the Worker couldn't use the credential at all, usually
+  a truncated paste. The secret should be a couple of thousand characters.
+- `not_signed_in` — the sign-in cookie is missing; sign out and back in.
+
+Settings shows the same detail, so it's worth a look there first.
 
 ## Without the key
 

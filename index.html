@@ -1820,7 +1820,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v67'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v68'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5922,7 +5922,8 @@ function ttsErrorMessage(e) {
   if (!e) return 'Couldn’t read this aloud';
   if (e.status === 501) return 'Natural voice isn’t set up — using the device voice';
   if (e.status === 401) return 'Sign in again for the natural voice — using the device voice';
-  if (e.status === 403) return 'Voice service refused the key — using the device voice';
+  if (e.message === 'credential_failed') return 'Voice credential unusable — see Settings for why';
+  if (e.status === 403) return 'Google refused the voice request — see Settings for why';
   if (e.message === 'monthly_cap') return 'Monthly voice budget spent — using the device voice';
   if (e.status === 429) return 'Google voice limit hit — device voice for this email';
   if (e.status === 413) return 'That passage was too long to speak';
@@ -6305,6 +6306,7 @@ async function populateTtsVoices() {
       try { payload = await res.json(); } catch(e) {}
       const err = new Error(payload.error || ('http_' + res.status));
       err.status = res.status;
+      err.detail = payload.detail || '';
       throw err;
     }
     const voices = (await res.json()).voices || [];
@@ -6334,11 +6336,29 @@ function ttsVoiceLabel(v) {
   return short + ' · ' + v.tier + (gender ? ' · ' + gender : '');
 }
 
+// Google says something specific when it refuses — the API isn't enabled, the
+// service account can't use the project, the key is restricted. Guessing at
+// which costs an afternoon, so pass its own words through.
+function ttsDetail(e) {
+  // Google's messages end in a full stop of their own; ours follows.
+  const d = (e && e.detail) ? String(e.detail).trim().replace(/[.\s]+$/, '') : '';
+  if (!d) return '';
+  return ' — ' + (d.length > 200 ? d.slice(0, 197) + '…' : d);
+}
+
 function ttsVoiceUnavailableReason(e) {
   if (e && e.status === 501) return 'No Google voice key on the server — the device’s own voice will be used. See AUTH-SETUP.md.';
   if (e && e.status === 401) return 'Sign in again to use the Google voices; the device voice will be used until then.';
-  if (e && e.status === 403) return 'The server’s voice key was refused — check its API restrictions.';
-  return 'Couldn’t reach the voice service — the device’s own voice will be used.';
+  if (e && e.message === 'credential_failed') {
+    return 'The server couldn’t use its voice credential' + ttsDetail(e) +
+           '. The device’s own voice will be used.';
+  }
+  if (e && e.status === 403) {
+    return 'Google refused the request' + (ttsDetail(e) ||
+           ' — check that the Text-to-Speech API is enabled and the credential may use the project') +
+           '. The device’s own voice will be used.';
+  }
+  return 'Couldn’t reach the voice service' + ttsDetail(e) + ' — the device’s own voice will be used.';
 }
 
 // ── Free-tier counter ──────────────────────────────────────
