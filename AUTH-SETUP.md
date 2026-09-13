@@ -197,6 +197,10 @@ Same result, a few more steps, and it works where API keys are blocked.
    the grant, add it later under **IAM & Admin → IAM → Grant access**, with
    the service account's `client_email` as the principal.
 2. Open it → **Keys → Add key → Create new key → JSON**. A file downloads.
+   It must come from the service account's own Keys tab — the JSON offered
+   elsewhere on the Credentials page is the OAuth client, which looks similar
+   and won't work. The right file begins `{"type": "service_account"`; the
+   wrong one begins `{"web":` or `{"installed":`.
 3. Hand the whole file to the Worker, contents and all:
 
    ```sh
@@ -302,8 +306,11 @@ enough on its own:
   is missing the Service Usage Consumer role above.
 - `SERVICE_DISABLED` — the Text-to-Speech API isn't enabled on that project.
   Check you enabled it on the project the credential belongs to.
-- `credential_failed` — the Worker couldn't use the credential at all, usually
-  a truncated paste. The secret should be a couple of thousand characters.
+- `credential_failed` — the Worker couldn't use the credential. The message
+  says which way: not valid JSON at all (a truncated paste — the secret should
+  be a couple of thousand characters), an OAuth client file instead of a
+  service-account key, or a document pasted with quotes around it so it reads
+  as a string rather than an object.
 - `not_signed_in` — the sign-in cookie is missing; sign out and back in.
 
 Settings shows the same detail, so it's worth a look there first.

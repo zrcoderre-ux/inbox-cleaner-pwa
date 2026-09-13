@@ -305,8 +305,28 @@ async function ttsAccessToken(raw) {
   // was minted for: swapping the credential should take effect at once rather
   // than whenever the old token happens to expire.
   let sa;
-  try { sa = JSON.parse(raw); } catch (e) { throw new Error('service account JSON is not valid JSON'); }
-  if (!sa.client_email || !sa.private_key) throw new Error('service account JSON is missing client_email or private_key');
+  try { sa = JSON.parse(raw); } catch (e) { throw new Error('the secret is not valid JSON'); }
+  // Say what arrived, not just what's missing. The usual mistakes are pasting
+  // the OAuth client JSON (top-level "web" or "installed") instead of the
+  // service-account key, or pasting the document with quotes around it so it
+  // parses as a string. Field names only — never their values.
+  if (!sa || typeof sa !== 'object' || Array.isArray(sa)) {
+    throw new Error('the secret parsed as a ' + (Array.isArray(sa) ? 'list' : typeof sa) +
+                    ', not an object — check it was pasted as bare JSON, starting with {');
+  }
+  const missing = ['client_email', 'private_key'].filter(k => !sa[k]);
+  if (missing.length) {
+    const keys = Object.keys(sa);
+    const looksLikeOAuth = keys.includes('web') || keys.includes('installed');
+    // Length and opening character together separate a stored value that was
+    // truncated from one that arrived whole but wrong.
+    throw new Error('the secret has no ' + missing.join(' or ') +
+      '; it is ' + raw.length + ' characters starting "' + raw.slice(0, 1) + '", with fields ' +
+      (keys.slice(0, 10).join(', ') || 'none') + (keys.length > 10 ? ', …' : '') +
+      (looksLikeOAuth
+        ? ' — that is an OAuth client file, not a service-account key. Download the key from the service account itself, under its Keys tab.'
+        : ' — expected a service-account key, which starts {"type": "service_account"}.'));
+  }
 
   const now = Math.floor(Date.now() / 1000);
   if (ttsTokenCache && ttsTokenCache.issuer === sa.client_email && ttsTokenCache.expires > now + 60) {
