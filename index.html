@@ -1951,7 +1951,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v79'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v80'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5971,10 +5971,40 @@ function ttsAudioEl() {
   ['preservesPitch', 'mozPreservesPitch', 'webkitPreservesPitch'].forEach(p => {
     try { ttsAudio[p] = true; } catch(e) {}
   });
-  ttsAudio.addEventListener('ended', () => {
-    if (ttsSession && ttsSession.playing) ttsPlayIndex(ttsSession.i + 1);
-  });
+  ttsAudio.addEventListener('ended', () => ttsAudioStopped('ended'));
+  ttsAudio.addEventListener('error', () => ttsAudioStopped('error'));
   return ttsAudio;
+}
+
+// How far short of the end still counts as having finished. MP3 durations are
+// a frame or two imprecise; anything beyond that stopped for a reason.
+const TTS_END_SLACK = 0.5;
+
+// Audio stopping is not the same as a passage finishing, and the difference
+// is words the listener never hears. A stream cut short — a truncated
+// download, a decode that gave up, a phone reclaiming the audio after being
+// backgrounded — used to be read as "done" and the next passage started,
+// swallowing whatever was left of this one mid-word. Now it picks up where
+// the sound stopped.
+function ttsAudioStopped(why) {
+  const s = ttsSession;
+  const a = ttsAudio;
+  if (!s || !a || !s.playing) return;
+  // An event left over from the passage before, arriving after we moved on.
+  if (a._chunk != null && a._chunk !== s.i) return;
+
+  const d = a.duration;
+  const short = (why === 'error') ||
+                (isFinite(d) && d > 0 && a.currentTime < d - TTS_END_SLACK);
+  if (short && (s.cut || 0) < 2) {
+    s.cut = (s.cut || 0) + 1;
+    // A shade before where it stopped, so nothing falls in the join.
+    const at = (isFinite(d) && d > 0) ? Math.max(a.currentTime / d - 0.01, 0) : 0;
+    ttsPlayIndex(s.i, { resumeFrac: at });
+    return;
+  }
+  s.cut = 0;
+  ttsPlayIndex(s.i + 1);
 }
 
 // Must run inside the click that starts reading: once an element has played
@@ -6035,6 +6065,11 @@ async function ttsPlayIndex(i, opts = {}) {
   if (!s) return;
   if (i < 0) i = 0;
   if (i >= s.chunks.length) { finishReadAloud(); return; }
+  // Recovery attempts count only while the same passage keeps being cut off;
+  // moving to another one starts from a clean slate. Clearing this on a
+  // successful replay instead would let a passage that cuts at the very start
+  // be retried for ever.
+  if (s.i !== i) s.cut = 0;
   s.i = i;
   s.chunkStarted = Date.now();
   ttsUpdateUI();
@@ -6048,6 +6083,8 @@ async function ttsPlayIndex(i, opts = {}) {
     const url = await ttsFetchChunk(s.chunks[i], false, s.voice);
     if (ttsSession !== s || s.i !== i) return;  // stopped, or skipped past it
     const a = ttsAudioEl();
+    ttsDropPendingSeek(a);   // anything waiting on the last load is void now
+    a._chunk = i;            // so a stale event can be told from a live one
     a.src = url;
     a.playbackRate = ttsRate;
     if (opts.resumeFrac) ttsSeekFraction(a, opts.resumeFrac);
@@ -6146,8 +6183,12 @@ async function ttsFetchChunk(text, retried, voice) {
   // Bound the memo: an object URL holds its blob in memory until it's revoked.
   while (ttsMemo.size > 40) {
     const oldest = ttsMemo.keys().next().value;
-    try { URL.revokeObjectURL(ttsMemo.get(oldest)); } catch(e) {}
+    const url = ttsMemo.get(oldest);
     ttsMemo.delete(oldest);
+    // Revoking the blob the element is playing from kills the sound mid-word.
+    // Put it back at the end of the queue and stop pruning for now.
+    if (ttsAudio && ttsAudio.src === url) { ttsMemo.set(oldest, url); break; }
+    try { URL.revokeObjectURL(url); } catch(e) {}
   }
   return url;
 }
@@ -6484,15 +6525,30 @@ function ttsLineStartFraction(text, frac) {
   return start / len;
 }
 
+// A seek that has to wait for the file's length must not survive the file: if
+// the passage changes first, the waiting seek would fire against the new one
+// and jump it forward, losing the words in between.
+function ttsDropPendingSeek(a) {
+  if (a && a._pendingSeek) {
+    try { a.removeEventListener('loadedmetadata', a._pendingSeek); } catch(e) {}
+    a._pendingSeek = null;
+  }
+}
+
 function ttsSeekFraction(a, frac) {
+  ttsDropPendingSeek(a);
   const apply = () => {
+    a._pendingSeek = null;
     try {
       const d = a.duration;
       if (isFinite(d) && d > 0) a.currentTime = Math.min(frac * d, Math.max(d - 0.05, 0));
     } catch(e) {}
   };
   if (isFinite(a.duration) && a.duration > 0) apply();
-  else a.addEventListener('loadedmetadata', apply, { once: true });
+  else {
+    a._pendingSeek = apply;
+    a.addEventListener('loadedmetadata', apply, { once: true });
+  }
 }
 
 function toggleVoicePicker() {
