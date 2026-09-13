@@ -1708,7 +1708,7 @@ body {
               <label class="keep-filter"><input type="checkbox" id="keep-offline-only" onchange="setKeepOfflineOnly(this.checked)"> Offline only</label>
             </div>
             <div class="toolbar-right">
-              <button class="btn-sm keep-listen" id="keep-listen" onclick="toggleKeepListen()" aria-pressed="false" title="Long reads only, played as you open them">
+              <button class="btn-sm keep-listen" id="keep-listen" onclick="toggleKeepListen()" aria-pressed="false" title="Long reads only, cut-off previews skipped, played as you open them">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-3a8 8 0 0 1 16 0v3"/><path d="M4 14a2 2 0 0 1 2-2h1v6H6a2 2 0 0 1-2-2zM20 14a2 2 0 0 0-2-2h-1v6h1a2 2 0 0 0 2-2z"/></svg>
                 Listen
               </button>
@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v90'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v91'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2858,7 +2858,8 @@ function idbGetAllMeta() {
         id: r.id, sender: r.sender, subject: r.subject, date: r.date,
         hasBody: !!(r.bodyHtml || (r.bodyText && r.bodyText !== '(could not load body)')),
         // Records saved before lengths were kept are measured here instead.
-        words: typeof r.words === 'number' ? r.words : bodyWordCount(r.bodyText, r.bodyHtml)
+        words: typeof r.words === 'number' ? r.words : bodyWordCount(r.bodyText, r.bodyHtml),
+        paywalled: typeof r.paywalled === 'boolean' ? r.paywalled : bodyPaywalled(r.bodyText, r.bodyHtml)
       });
       c.continue();
     };
@@ -2875,16 +2876,45 @@ function idbDelete(id) {
   }));
 }
 
-// How long an email is, in words. Text is measured where there is any; HTML is
-// stripped with a regex rather than parsed, because a cursor over the whole
-// cache measures every record and a length threshold doesn't need a DOM's
-// precision — entities and stray markup are noise beside the gap between a
-// newsletter and a receipt.
-function bodyWordCount(text, html) {
+// A body as plain words, for the two things the Keep list wants to know about
+// one. Text is used where there is any; HTML is stripped with a regex rather
+// than parsed, because a cursor over the whole cache reads every record and
+// neither question needs a DOM's precision — entities and stray markup are
+// noise beside the gap between a newsletter and a receipt.
+function bodyPlainText(text, html) {
   const src = (text && text !== '(could not load body)') ? text
     : String(html || '').replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ');
-  const t = src.replace(/\s+/g, ' ').trim();
+  return src.replace(/\s+/g, ' ').trim();
+}
+
+// How long an email is, in words.
+function bodyWordCount(text, html) {
+  const t = bodyPlainText(text, html);
   return t ? t.split(' ').length : 0;
+}
+
+// The offer a cut-off post ends on. A paywalled newsletter sends the first few
+// paragraphs and then this, which is long enough to pass for a whole one: it
+// reads fine on the page, where you can see where it stops, but as audio it
+// breaks off mid-argument and then tries to sell you something.
+const KEEP_PAYWALL_RE = new RegExp([
+  '(?:keep|continue) reading with a[n]? (?:\\d+[-\\s]day )?free trial',
+  '(?:subscribe|upgrade|sign up) to (?:keep|continue) reading',
+  '(?:become|upgrade to) a? ?pa(?:id|ying) subscriber to (?:keep|continue) reading',
+  '(?:the rest of )?this (?:post|email|article|story|episode) is for pa(?:id|ying) subscribers',
+  'this (?:post|email|article|story) is for (?:free|paid) subscribers only',
+  'to (?:keep|continue) reading this (?:post|article|story)',
+  'subscribe to read (?:the|this) (?:full|rest|whole)',
+  'read the (?:full|rest of (?:this|the)) (?:post|story|article) (?:with|by subscribing)'
+].join('|'), 'i');
+
+// Only the tail counts. A sample ends on the offer; the same words higher up
+// are a link to something else, and cutting a whole newsletter for them would
+// be worse than reading one that stops early.
+function bodyPaywalled(text, html) {
+  const t = bodyPlainText(text, html);
+  if (!t) return false;
+  return KEEP_PAYWALL_RE.test(t.slice(Math.floor(t.length * 0.6)));
 }
 
 // True when a cached record actually has readable content.
@@ -2916,6 +2946,7 @@ async function cacheKeptEmail(email) {
       bodyText: text,
       bodyHtml: html,
       words: bodyWordCount(text, html),
+      paywalled: bodyPaywalled(text, html),
       savedAt: Date.now()
     });
   } catch(e) { /* best-effort */ }
@@ -4549,7 +4580,9 @@ async function renderKeepList() {
       // 0 for an email whose body nothing has seen yet: it is not short, it is
       // unmeasured, and listen mode leaves it out rather than guess at it.
       words: rec ? rec.words
-        : (mem && mem.bodyLoaded ? bodyWordCount(mem.bodyText, mem.bodyHtml) : 0)
+        : (mem && mem.bodyLoaded ? bodyWordCount(mem.bodyText, mem.bodyHtml) : 0),
+      paywalled: rec ? !!rec.paywalled
+        : !!(mem && mem.bodyLoaded && bodyPaywalled(mem.bodyText, mem.bodyHtml))
     });
   }
 
@@ -4568,7 +4601,9 @@ async function renderKeepList() {
   if (keepOfflineOnly) items = items.filter(i => i.saved);
   // Listening is for the long stuff. Receipts and one-liners are quicker read
   // than heard, and a playlist of them is all announcement and no article.
-  if (keepListenMode) items = items.filter(i => i.words >= KEEP_NEWSLETTER_WORDS);
+  // A cut-off sample is long enough to pass for a whole post, so length alone
+  // doesn't catch it.
+  if (keepListenMode) items = items.filter(i => i.words >= KEEP_NEWSLETTER_WORDS && !i.paywalled);
   const q = keepSearch.trim().toLowerCase();
   if (q) {
     items = items.filter(e =>
@@ -4588,7 +4623,7 @@ async function renderKeepList() {
   }
   if (!items.length) {
     el.innerHTML = `<div class="list-empty">${
-      keepListenMode ? 'Nothing long enough to listen to yet — listen mode shows only emails of about ' + KEEP_NEWSLETTER_WORDS + ' words or more, and an email is measured once its body has been saved.'
+      keepListenMode ? 'Nothing to listen to yet — listen mode shows emails of about ' + KEEP_NEWSLETTER_WORDS + ' words or more, skipping posts cut off behind a paywall, and an email is measured once its body has been saved.'
       : keepOfflineOnly ? 'No kept emails are saved for offline yet.'
       : 'No kept emails match your search.'}</div>`;
     return;
