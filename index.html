@@ -1874,7 +1874,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v75'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v76'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6163,15 +6163,17 @@ function setReaderVoice(name) {
   hideVoicePicker();
   if (!s || !name || name === s.voice) return;
   // Where the outgoing voice had got to, as a proportion of the passage. Read
-  // it before anything is swapped, or the old position is already gone.
-  const frac = (s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration > 0)
+  // it before anything is swapped, or the old position is already gone — then
+  // wind back to the start of the line it was on.
+  const heard = (s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration > 0)
     ? Math.min(ttsAudio.currentTime / ttsAudio.duration, 0.98) : 0;
+  const frac = ttsLineStartFraction(s.chunks[s.i], heard);
   s.voice = name;
   rememberVoiceForSender(s.email, name);
   ttsUpdateUI();
   if (s.mode === 'cloud') {
     s.playing = true;
-    ttsPlayIndex(s.i, { resumeFrac: frac });   // same passage, carrying on
+    ttsPlayIndex(s.i, { resumeFrac: frac });   // same passage, from this line
   }
 }
 
@@ -6179,6 +6181,26 @@ function setReaderVoice(name) {
 // up is the same proportion through the passage rather than the same number of
 // seconds into it. Approximate by nature — voices don't breathe in the same
 // places — but far closer than starting the passage again.
+// Back to the top of the line being read, rather than the exact instant the
+// outgoing voice had reached. Changing voice is for hearing a passage again,
+// and landing mid-sentence loses the words on either side of the swap.
+// Character position stands in for time here: close enough within a passage,
+// and it only has to pick the right sentence.
+function ttsLineStartFraction(text, frac) {
+  const len = (text || '').length;
+  if (!len || frac <= 0) return 0;
+  const at = Math.min(Math.floor(frac * len), len - 1);
+  let start = 0;
+  const breaks = /[.!?]["')\]]*\s+/g;
+  let m;
+  while ((m = breaks.exec(text))) {
+    const next = m.index + m[0].length;
+    if (next > at) break;
+    start = next;
+  }
+  return start / len;
+}
+
 function ttsSeekFraction(a, frac) {
   const apply = () => {
     try {
