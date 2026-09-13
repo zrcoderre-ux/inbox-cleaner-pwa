@@ -69,6 +69,23 @@ consent once; after that the app renews silently from the refresh token.
 
 ---
 
+## Playing through the list
+
+Settings → **Play through the list** carries on to the next email when one
+finishes, which is what makes listening with the screen locked worth doing.
+The queue is the Keep tab exactly as it appears, so whatever sort is set there
+is the order this follows, and a search or the offline-only filter narrows it
+too. An email opened from the swipe deck follows the deck's queue instead.
+
+After five it stops: the sixth is opened and cued, but waits to be started.
+That is the guard against a phone in a pocket reading through the month's
+allowance — five emails is a few minutes of listening, not a few hundred
+thousand characters. Press play, on screen or from the lock screen, and the
+next five run.
+
+Moving on marks nothing as read. Listening through the list leaves the
+mailbox exactly as it was.
+
 ## A voice per sender
 
 The reader's player has a voice button. Picking from it applies to the
@@ -297,6 +314,23 @@ accounting would want a Durable Object; this is a budget, not a ledger.
 
 Leave the namespace uncreated and nothing is enforced: the Worker skips the
 whole mechanism and the app falls back to its own per-browser estimate.
+
+## Playing through the list
+
+Settings → **Play through the list** carries on to the next email when one
+finishes, which is what makes listening with the screen locked worth doing.
+The queue is the Keep tab exactly as it appears, so whatever sort is set there
+is the order this follows, and a search or the offline-only filter narrows it
+too. An email opened from the swipe deck follows the deck's queue instead.
+
+After five it stops: the sixth is opened and cued, but waits to be started.
+That is the guard against a phone in a pocket reading through the month's
+allowance — five emails is a few minutes of listening, not a few hundred
+thousand characters. Press play, on screen or from the lock screen, and the
+next five run.
+
+Moving on marks nothing as read. Listening through the list leaves the
+mailbox exactly as it was.
 
 ## A voice per sender
 

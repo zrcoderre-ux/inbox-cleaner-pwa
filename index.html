@@ -1684,6 +1684,13 @@ body {
               </span>
               <input type="range" id="tts-rate" min="0.7" max="1.8" step="0.05" value="1" oninput="setTtsRate(this.value)">
             </div>
+            <label class="setting-row" id="tts-through-row" style="display:none;">
+              <span class="setting-text">
+                <span class="setting-title">Play through the list</span>
+                <span class="setting-desc">At the end of an email, start the next one — in the order the Keep tab is showing, so its sort and search apply. After five it cues the next and waits, so a phone in a pocket can't read through the month's allowance.</span>
+              </span>
+              <input type="checkbox" id="tts-playthrough" onchange="setTtsPlayThrough(this.checked)">
+            </label>
             <label class="setting-row" id="tts-auto-row" style="display:none;">
               <span class="setting-text">
                 <span class="setting-title">Start reading when an email opens</span>
@@ -1867,7 +1874,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v69'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v70'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -1979,6 +1986,11 @@ let ttsBudget = null;       // { used, cap } or null when nothing is enforced
 // Sender-keyed like the block rules, so it's namespaced per account.
 let ttsSenderVoices = {};
 let ttsVoiceList = [];      // what the Worker offered, for the in-reader picker
+// Playing straight on through the list. Emails are counted in batches so a
+// phone left in a pocket can't quietly read the whole month's allowance: after
+// TTS_AUTO_BATCH of them the next one is cued up but waits to be started.
+let ttsPlayThrough = false;
+let ttsBatchCount = 0;
 // Background queue that caches kept emails for offline reading, most-recent
 // first, with limited concurrency so rapid keeps don't overwhelm the API.
 let cacheQueue = [];
@@ -5464,11 +5476,11 @@ async function openReader(email, opts = {}) {
         try { doc.addEventListener('keydown', autoScrollSpeedKey); } catch(_) {}
         if (showFooter) watchScrollForFooter(scroller, win, win, doc, email);
         // Auto-scroll needs same-origin access to the iframe doc (present here).
-        if (autoScrollEnabled && doc && !ttsWillAutoStart()) {
+        if (autoScrollEnabled && doc && !ttsWillAutoStart() && !opts.speak) {
           setTimeout(() => { if (readerEmail === email) startAutoScroll(scroller, doc); }, 500);
         }
-        if (ttsWillAutoStart()) {
-          setTimeout(() => { if (readerEmail === email) startReadAloud(email); }, 400);
+        if (ttsWillAutoStart() || opts.speak) {
+          setTimeout(() => { if (readerEmail === email) startReadAloud(email, { paused: opts.paused }); }, 400);
         }
       } catch(e) {
         if (showFooter) revealReaderFooter(email); // can't watch scroll — just show it
@@ -5483,11 +5495,11 @@ async function openReader(email, opts = {}) {
     el.textContent = email.bodyText || '(no content)';
     try { linkFootnotes(el, null); } catch(_) {}
     if (showFooter) watchScrollForFooter(el, el, window, document, email);
-    if (autoScrollEnabled && !ttsWillAutoStart()) {
+    if (autoScrollEnabled && !ttsWillAutoStart() && !opts.speak) {
       setTimeout(() => { if (readerEmail === email) startAutoScroll(el, null); }, 400);
     }
-    if (ttsWillAutoStart()) {
-      setTimeout(() => { if (readerEmail === email) startReadAloud(email); }, 300);
+    if (ttsWillAutoStart() || opts.speak) {
+      setTimeout(() => { if (readerEmail === email) startReadAloud(email, { paused: opts.paused }); }, 300);
     }
   }
 }
@@ -5680,6 +5692,7 @@ window.addEventListener('keydown', e => {
 // its sentence-to-sentence rhythm.
 const TTS_CHUNK_CHARS = 700;
 const TTS_RATES = [0.8, 1, 1.15, 1.35, 1.6];
+const TTS_AUTO_BATCH = 5;
 // Google publishes a monthly free allowance for the Chirp 3 HD voices; the
 // counter below is a local estimate of how much of it has gone.
 const TTS_FREE_CHARS = 1000000;
@@ -5848,10 +5861,11 @@ function ttsWillAutoStart() {
 function toggleReadAloud() {
   if (ttsSession) { stopReadAloud(); return; }
   ttsUnlockAudio();
+  ttsBatchCount = 1;   // starting by hand begins a fresh batch
   startReadAloud(readerEmail);
 }
 
-async function startReadAloud(email) {
+async function startReadAloud(email, opts = {}) {
   if (!email) return;
   const built = buildSpeech(email);
   if (!built.chunks.length) { toast('Nothing here to read aloud'); return; }
@@ -5863,7 +5877,7 @@ async function startReadAloud(email) {
   if (asPill) asPill.style.display = 'none';
   ttsSession = {
     email, chunks: built.chunks, coverage: built.coverage,
-    i: 0, playing: true, mode: ttsBackend === 'device' ? 'device' : 'cloud',
+    i: 0, playing: !opts.paused, mode: ttsBackend === 'device' ? 'device' : 'cloud',
     voice: voiceForEmail(email),
     chunkStarted: Date.now(), userScrolled: false, resumeTimer: null, lastTop: null
   };
@@ -5883,7 +5897,11 @@ async function ttsPlayIndex(i) {
   s.chunkStarted = Date.now();
   ttsUpdateUI();
 
-  if (s.mode === 'device') { ttsSpeakOnDevice(s.chunks[i]); return; }
+  if (s.mode === 'device') {
+    if (s.playing) ttsSpeakOnDevice(s.chunks[i]);
+    else ttsUpdateUI();
+    return;
+  }
   try {
     const url = await ttsFetchChunk(s.chunks[i], false, s.voice);
     if (ttsSession !== s || s.i !== i) return;  // stopped, or skipped past it
@@ -5892,10 +5910,12 @@ async function ttsPlayIndex(i) {
     a.playbackRate = ttsRate;
     // Pausing while this chunk was in flight has to hold: the audio is ready
     // and cued, but nothing starts until play is asked for again.
-    if (!s.playing) { ttsUpdateUI(); ttsPrefetch(i + 1); return; }
+    if (!s.playing) { ttsSetMediaSession(); ttsUpdateUI(); return; }
     await a.play();
     ttsSetMediaSession();
     ttsPrefetch(i + 1);
+    // Warm the next email's body while this one plays.
+    if (i === 0) ttsPrefetchNextEmail(s.email);
   } catch(e) {
     if (ttsSession !== s) return;
     if (ttsSwitchToDevice(e)) { s.mode = 'device'; ttsSpeakOnDevice(s.chunks[s.i]); return; }
@@ -6073,10 +6093,19 @@ function ttsTogglePlay(force) {
   if (!s) return;
   s.playing = (force === undefined) ? !s.playing : !!force;
   if (s.mode === 'device') {
-    try { s.playing ? speechSynthesis.resume() : speechSynthesis.pause(); } catch(e) {}
+    // A session cued but never started has nothing to resume — it has to be
+    // spoken. One already under way is resumed, so it doesn't restart the
+    // sentence the reader was halfway through.
+    if (!s.playing) { try { speechSynthesis.pause(); } catch(e) {} }
+    else if (!s.deviceSpoke) ttsSpeakOnDevice(s.chunks[s.i]);
+    else { try { speechSynthesis.resume(); } catch(e) {} }
   } else if (ttsAudio) {
-    if (s.playing) { const p = ttsAudio.play(); if (p && p.catch) p.catch(() => {}); }
-    else ttsAudio.pause();
+    if (s.playing) {
+      // Nothing is cued when the device voice was waiting, or when the fetch
+      // for this chunk never ran — ask for it rather than playing silence.
+      if (!ttsAudio.src) { ttsPlayIndex(s.i); return; }
+      const p = ttsAudio.play(); if (p && p.catch) p.catch(() => {});
+    } else ttsAudio.pause();
   }
   try { navigator.mediaSession.playbackState = s.playing ? 'playing' : 'paused'; } catch(e) {}
   ttsUpdateUI();
@@ -6130,11 +6159,68 @@ function cycleTtsRate() {
   setTtsRate(TTS_RATES[(i + 1) % TTS_RATES.length] || 1);
 }
 
-function finishReadAloud() {
+// ── Playing through the list ───────────────────────────────
+// The queue is the Keep tab exactly as it appears — keepListItems is the
+// sorted, filtered array the list was last rendered from, so whatever order is
+// set there (date, sender, top reads) is the order this follows, and a search
+// or the offline-only filter narrows this too. An email opened from the swipe
+// deck isn't in that list, so the deck's own queue serves instead.
+async function ttsNextEmail(current) {
+  if (!current) return null;
+  const at = keepListItems.findIndex(i => i.id === current.id);
+  if (at !== -1) {
+    for (let i = at + 1; i < keepListItems.length; i++) {
+      const next = await emailById(keepListItems[i].id);
+      if (next) return next;   // skip any that have gone from memory and cache
+    }
+    return null;
+  }
+  const q = swipeQueue.findIndex(e => e.id === current.id);
+  if (q !== -1 && q + 1 < swipeQueue.length) return swipeQueue[q + 1];
+  return null;
+}
+
+// A Keep row carries only metadata; the readable email comes from memory, or
+// from the offline cache when it isn't loaded.
+async function emailById(id) {
+  const mem = emails.find(e => e.id === id);
+  if (mem) return mem;
+  try {
+    const rec = await idbGet(id);
+    if (hasBody(rec)) {
+      return { id: rec.id, sender: rec.sender, subject: rec.subject, date: rec.date,
+               bodyText: rec.bodyText, bodyHtml: rec.bodyHtml, bodyLoaded: true };
+    }
+  } catch(e) {}
+  return null;
+}
+
+// Fetched while the current email is still playing, so moving on doesn't stall
+// on a network round trip — which matters most with the screen locked, where a
+// long silence is the thing most likely to end playback.
+async function ttsPrefetchNextEmail(current) {
+  if (!ttsPlayThrough) return;
+  try {
+    const next = await ttsNextEmail(current);
+    if (next && !next.bodyLoaded) await ensureReaderBody(next);
+  } catch(e) {}
+}
+
+async function finishReadAloud() {
   const email = ttsSession && ttsSession.email;
   stopReadAloud();
   // Reaching the end by ear is still reaching the end — offer Mark as read.
   if (email && readerEmail === email) revealReaderFooter(email);
+  if (!ttsPlayThrough || !email || readerEmail !== email) return;
+
+  const next = await ttsNextEmail(email);
+  if (!next) { toast('End of the list'); return; }
+  // Reading is never a reason to touch the mailbox: moving on marks nothing.
+  const restAfterThis = ttsBatchCount >= TTS_AUTO_BATCH;
+  await openReader(next, { markRead: true, speak: true, paused: restAfterThis });
+  if (readerEmail !== next) return;   // the reader moved on while we waited
+  ttsBatchCount = restAfterThis ? 1 : ttsBatchCount + 1;
+  if (restAfterThis) toast(TTS_AUTO_BATCH + ' read — press play to carry on');
 }
 
 function stopReadAloud(opts = {}) {
@@ -6319,6 +6405,7 @@ function updateListenButton() {
 function loadTts() {
   try { ttsEnabled = localStorage.getItem('ic_tts') === '1'; } catch(e) {}
   try { ttsAutoStart = localStorage.getItem('ic_tts_autostart') === '1'; } catch(e) {}
+  try { ttsPlayThrough = localStorage.getItem('ic_tts_playthrough') === '1'; } catch(e) {}
   try { ttsVoice = localStorage.getItem('ic_tts_voice') || ''; } catch(e) {}
   try {
     const r = parseFloat(localStorage.getItem('ic_tts_rate') || '1');
@@ -6329,6 +6416,8 @@ function loadTts() {
   if (cb) cb.checked = ttsEnabled;
   const auto = document.getElementById('tts-autostart');
   if (auto) auto.checked = ttsAutoStart;
+  const through = document.getElementById('tts-playthrough');
+  if (through) through.checked = ttsPlayThrough;
   syncTtsUI();
   loadSenderVoices();
   renderSenderVoiceCount();
@@ -6423,6 +6512,11 @@ function setTtsRate(r) {
   ttsUpdateUI();
 }
 
+function setTtsPlayThrough(on) {
+  ttsPlayThrough = !!on;
+  try { localStorage.setItem('ic_tts_playthrough', on ? '1' : '0'); } catch(e) {}
+}
+
 function setTtsAutoStart(on) {
   ttsAutoStart = !!on;
   try { localStorage.setItem('ic_tts_autostart', on ? '1' : '0'); } catch(e) {}
@@ -6431,7 +6525,7 @@ function setTtsAutoStart(on) {
 function syncTtsUI() {
   const cb = document.getElementById('tts-enabled');
   if (cb) cb.checked = ttsEnabled;
-  ['tts-voice-row', 'tts-rate-row', 'tts-auto-row'].forEach(id => {
+  ['tts-voice-row', 'tts-rate-row', 'tts-through-row', 'tts-auto-row'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = ttsEnabled ? '' : 'none';
   });
