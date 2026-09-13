@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v102'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v103'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6042,6 +6042,21 @@ function ttsCutAt(text, patterns) {
 
 // Marketing mail ends in a slab of unsubscribe, preferences and legal text.
 // Only the tail counts: the same words halfway up are part of the message.
+// The line a bulk mailer is obliged to print: whose copyright it is, and the
+// address it was sent from. Nobody wrote it to be read and nobody wants to
+// hear it, wherever it ends up sitting.
+const TTS_COPYRIGHT_RE = /(?:\u00A9|\(c\)|\bcopyright\b)\s*(?:19|20)\d{2}\b|\b(?:19|20)\d{2}\s*(?:\u00A9|\bcopyright\b)/i;
+// A street number, something that names a street, and a state and a ZIP at the
+// end of it. All three together, so an article that mentions a street stays.
+const TTS_ADDRESS_RE = new RegExp('(?:' + [
+  // a number, then the words that name a street
+  '\\b\\d{1,6}\\s+[\\w.\'-]+(?:\\s+[\\w.\'-]+){0,4}\\s*' +
+  '\\b(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|way|place|pl|' +
+  'court|ct|parkway|pkwy|suite|ste|floor|fl|pmb)\\b',
+  // or a box, which carries its number the other way round
+  '\\b(?:p\\.? ?o\\.? ?box|post office box|pmb)\\s*#?\\s*\\d+'
+].join('|') + ')[\\s\\S]{0,80}\\b[a-z]{2}\\s+\\d{5}(?:-\\d{4})?\\b', 'i');
+
 const TTS_FOOTER_RE = /\b(unsubscribe|manage (?:your )?(?:email )?preferences|update your preferences|view (?:this|it) (?:as a web page|in (?:your )?browser)|privacy policy|you(?:'re| are)? receiv(?:ed|ing) this (?:email|message)|all rights reserved)\b/i;
 function ttsCutFooter(text) {
   const lines = text.split('\n');
@@ -6049,7 +6064,10 @@ function ttsCutFooter(text) {
   // otherwise be cut to nothing the moment it mentioned unsubscribing, and
   // the whole email would go unread.
   for (let i = Math.max(1, Math.floor(lines.length * 0.5)); i < lines.length; i++) {
-    if (lines[i].length < 200 && TTS_FOOTER_RE.test(lines[i])) return lines.slice(0, i).join('\n');
+    if (lines[i].length < 200 &&
+        (TTS_FOOTER_RE.test(lines[i]) || TTS_COPYRIGHT_RE.test(lines[i]) || TTS_ADDRESS_RE.test(lines[i]))) {
+      return lines.slice(0, i).join('\n');
+    }
   }
   return text;
 }
@@ -6156,7 +6174,10 @@ function splitSentences(text) {
       const sentence = m[0].split(TTS_DOT).join('.').trim();
       if (!sentence) continue;
       if (TTS_CHROME_RE.test(sentence) || TTS_NEVER_RE.test(sentence) ||
-          TTS_CAPTION_RE.test(sentence)) continue;
+          TTS_CAPTION_RE.test(sentence) ||
+          // Wherever they sit: the tail-cutting above only reaches a footer
+          // that arrives as its own line in the back half of the mail.
+          TTS_COPYRIGHT_RE.test(sentence) || TTS_ADDRESS_RE.test(sentence)) continue;
       // A break before a digit or a lowercase word wasn't the end of a
       // sentence — "Sept. 14", "No. 3", an initial. Put it back together.
       if (out.length && /^[0-9a-z]/.test(sentence)) out[out.length - 1] += ' ' + sentence;
