@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v115'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v116'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6339,58 +6339,14 @@ const TTS_MAX_EMPHASIS = 6;
 // phrase and read the words themselves no differently — which is the reverse
 // of how a person reads an italic, leaning on the word without stopping around
 // it. Slowing the phrase down does that, and inserts nothing.
+//
+// The whole phrase, from its first letter to its last. Beginning the change
+// inside the word instead — the sound it opens with at speed, the rest slowed —
+// describes better what a person does with an italic, and the voice cannot do
+// it: a tag boundary inside a word is a word boundary as far as it is
+// concerned, so "mandatory" came back as "m", "andato" and "ry", said as
+// letters. Tags go where the spaces are.
 const TTS_EMPHASIS_RATE = '95%';
-// A word slowed from its very first letter sounds dragged rather than stressed:
-// the attack is what makes it land. The sound the word opens with is left at
-// speed and everything after it is slowed — the consonants it starts with, or
-// the vowel where it starts with one. Below this many letters a word is slowed
-// whole, since there is not enough of it left to slow.
-const TTS_ONSET_MIN_LETTERS = 4;
-
-// And the sound the word ends on comes back to speed before the word does. A
-// slowdown that runs to the last letter is still being heard when the next word
-// starts, so the lean is over while there is still a little of the word left to
-// carry it out on. Only where enough of the word is left slowed to be worth
-// slowing.
-const TTS_ONSET_MIN_SLOWED = 3;
-
-// A word the rate change can be started inside. A contraction can't: split
-// "didn't" and the pieces are "d", "idn'" and "t", none of which is a word, and
-// the voice says them as letters. It is slowed whole instead.
-function ttsSplittableWord(word) {
-  return word.replace(/[^A-Za-z]/g, '').length >= TTS_ONSET_MIN_LETTERS &&
-         !/['\u2019\u02BC]/.test(word);
-}
-
-function ttsEmphasisEnd(text, at, end) {
-  const span = text.slice(at, end);
-  const word = (/\S+$/.exec(span) || [''])[0];
-  if (!ttsSplittableWord(word)) return end;
-  let tail = (/[^aeiou\s]*$/i.exec(word) || [''])[0].length;
-  if (!tail) tail = (/[aeiou]+$/i.exec(word) || [''])[0].length;
-  // A word whose closing cluster is most of what is left — "really" ends on
-  // three letters of its six — gives back its last letter instead of all of
-  // them, rather than giving back nothing.
-  if (tail > 0 && end - tail - at < TTS_ONSET_MIN_SLOWED) tail = 1;
-  const cut = end - tail;
-  return (tail > 0 && cut - at >= TTS_ONSET_MIN_SLOWED) ? cut : end;
-}
-
-function ttsEmphasisStart(text, at, end) {
-  const span = text.slice(at, end);
-  const word = (span.split(/\s/)[0] || '');
-  if (!ttsSplittableWord(word)) {
-    // Too short to split, but a phrase of two words can give the whole of the
-    // first one at speed instead — "of course" leans on the course.
-    const gap = span.search(/\s\S/);
-    return gap === -1 ? at : at + gap + 1;
-  }
-  let n = (/^[^aeiou\s]*/i.exec(word) || [''])[0].length;
-  // "qu" is one sound, not a consonant and a vowel.
-  if (n && /q$/i.test(word.slice(0, n)) && /^u/i.test(word.slice(n))) n++;
-  if (!n) n = (/^[aeiou]+/i.exec(word) || [''])[0].length;
-  return (n > 0 && n < word.length) ? at + n : at;
-}
 // The request has to stay inside what the Worker will take, tags and all.
 const TTS_SSML_BUDGET = 950;
 
@@ -6670,8 +6626,7 @@ function ttsSsmlFor(s, i) {
     const straddles = quotes.some(q =>
       (h.at < q.at + 1 && h.end > q.at + 1) || (h.at < q.end - 1 && h.end > q.end - 1));
     if (straddles) return;
-    const from = ttsEmphasisStart(text, h.at, h.end);
-    tags.push({ at: from, end: ttsEmphasisEnd(text, from, h.end),
+    tags.push({ at: h.at, end: h.end,
       open: '<prosody rate="' + TTS_EMPHASIS_RATE + '">', close: '</prosody>' });
     used++;
   });
