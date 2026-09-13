@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v96'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v97'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6121,6 +6121,10 @@ const TTS_BUTTON_RE = new RegExp('^\\W*(?:' + [
   'likes?', 'comments?', 'leave a comment', 'view (?:all )?comments?',
   'repl(?:y|ies)', 'forward(?: this(?: email)?)?',
   'subscribe(?: now)?', 'upgrade(?: to paid| your subscription)?',
+  // A button that has already been pressed still says something, and the tick
+  // drawn beside it is punctuation as far as this is concerned.
+  'subscribed', 'following', 'followed', 'liked', 'restacked', 'shared', 'saved',
+  'sign (?:up|in)', 'log ?in', 'get started', 'manage subscription',
   'read (?:more|in app|online|it in the app)',
   'listen(?: now| in app)?', 'watch(?: now| in app)?', 'open in app',
   'give a gift subscription', 'gift a subscription', 'refer a friend',
