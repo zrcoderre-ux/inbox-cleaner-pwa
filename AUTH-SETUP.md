@@ -140,28 +140,40 @@ account. Two things to try before giving up on the key:
   the Credentials page — the option depends on it.
 - Check you hold **Owner**, **Editor**, or **API Keys Admin** on the project.
 
-If the console says an **organization policy** blocks it, note what that
-implies: a personal Google account can't have an organization at all, so that
-project belongs to a work or Workspace account rather than a personal one.
-Changing the policy needs Organization Policy Administrator at the
-organization level — not project Owner — and relaxing an employer's security
-posture for this isn't the right move anyway. The same applies if the
-service-account path below is blocked instead: new organizations enforce
-`constraints/iam.disableServiceAccountKeyCreation` by default, which stops the
-JSON key download.
+If the console says an **organization policy** blocks it, the project belongs
+to an organization — a personal Google account can't have one, so check the
+resource picker for whose. The same goes if the service-account path below is
+blocked instead: every organization created since 3 May 2024 enforces
+`constraints/iam.managed.disableServiceAccountKeyCreation` as part of Google's
+security baseline, which stops the JSON key download. Neither block is
+something anyone chose.
 
-The way past it is a **separate project with no organization**, not a policy
-change. The voice credential doesn't have to share a project with the OAuth
-client — nothing links them:
+**If the organization is yours**, grant an exception for this project rather
+than switching the policy off everywhere. You need Organization Policy
+Administrator (`roles/orgpolicy.policyAdmin`) at the organization level —
+project Owner isn't enough:
 
-1. Sign in to the console with the personal account (a separate browser
-   profile helps; signing in as the wrong account is the quiet failure here).
-2. Create a project and confirm it reads *No organization*.
-3. Enable the Text-to-Speech API on it and link billing.
-4. Create the key there. With no organization, no policy can refuse it.
+1. **IAM & Admin → Organization policies**, and select **the project** in the
+   resource picker. Selecting the project is what makes this an override
+   rather than an org-wide change.
+2. Filter for `key`, open the constraint that's blocking you, then
+   **Manage policy → Override parent's policy →** Enforcement **Off**.
+3. Create the credential, then set the policy back to **Inherit parent's
+   policy**. A key that already exists keeps working; re-enforcing only stops
+   new ones being made.
 
-Otherwise a service account works too — see the alternative below. The Worker
-supports both.
+Prefer unblocking the **API key** over the service account where you have the
+choice: it can be restricted to Text-to-Speech alone, whereas a
+service-account JSON can't be restricted after the fact — which is why Google
+blocks it by default.
+
+**If the organization is someone else's**, an employer's say, don't relax its
+security posture for this. Use a separate project with no organization
+instead: sign in with a personal account (a separate browser profile helps —
+signing in as the wrong account is the quiet failure here), create a project
+that reads *No organization*, enable the API on it and link billing. The
+voice credential shares nothing with the OAuth client, so it needn't share a
+project either.
 
 ## Step 2 — Give it to the Worker
 
