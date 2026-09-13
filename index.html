@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v106'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v107'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6164,11 +6164,22 @@ const TTS_ABBREV = /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Inc|Ltd|Co|Corp|Dept|Approx|
 // and is read "one, six" instead of "one point six". Version numbers and
 // section numbers ride the same rule and stay in one piece.
 const TTS_DECIMAL = /(\d)\.(?=\d)/g;
+// The stops inside an initialism aren't ends of sentences either. "A.I." was
+// cut at each of them and the halves joined back with a space — "A. I." — so
+// the voice read two sentences, each one letter long. Every stop but the last
+// is masked; the last is left to be judged like any other, since "in the U.S."
+// really can end one.
+const TTS_INITIALISM = /\b(?:[A-Za-z]\.){2,}/g;
+// And a single initial in front of a name — "J. Robert Oppenheimer" — which is
+// one letter of a person, not one sentence of an email.
+const TTS_INITIAL = /\b[A-Z]\.(?=\s+[A-Z])/g;
 
 function splitSentences(text) {
   const masked = String(text || '')
     .replace(TTS_ABBREV, m => m.replace(/\./g, TTS_DOT))
-    .replace(TTS_DECIMAL, '$1' + TTS_DOT);
+    .replace(TTS_DECIMAL, '$1' + TTS_DOT)
+    .replace(TTS_INITIALISM, m => m.slice(0, -1).replace(/\./g, TTS_DOT) + m.slice(-1))
+    .replace(TTS_INITIAL, m => m[0] + TTS_DOT);
   const out = [];
   masked.split('\n').forEach(line => {
     // Runs of text up to a terminator (or the end of the line). The leading
@@ -6478,6 +6489,16 @@ function ttsIsQuote(c) {
 function ttsSpeakable(text) {
   let out = '';
   for (let i = 0; i < text.length; i++) if (!ttsIsQuote(text[i])) out += text[i];
+  // An initialism is a word made of letters, not a run of sentences. The voice
+  // is handed it without its stops — "A.I." as "AI" — so it says the letters
+  // straight through. Lower case is left alone: "e.g." without its stops is a
+  // word, and the wrong one. The last stop is kept only where a sentence could
+  // really be ending there, so the pause between two sentences survives.
+  out = out.replace(/\b(?:[A-Z]\.){2,}/g, (m, at) => {
+    const letters = m.replace(/\./g, '');
+    const after = out.slice(at + m.length);
+    return (/^\s*$/.test(after) || /^\s+[A-Z"\u201C(]/.test(after)) ? letters + '.' : letters;
+  });
   return out.replace(/\s{2,}/g, ' ');
 }
 
