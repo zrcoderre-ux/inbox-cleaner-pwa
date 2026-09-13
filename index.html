@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v112'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v113'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6321,7 +6321,7 @@ const TTS_MAX_EMPHASIS = 6;
 // phrase and read the words themselves no differently — which is the reverse
 // of how a person reads an italic, leaning on the word without stopping around
 // it. Slowing the phrase down does that, and inserts nothing.
-const TTS_EMPHASIS_RATE = '90%';
+const TTS_EMPHASIS_RATE = '95%';
 // A word slowed from its very first letter sounds dragged rather than stressed:
 // the attack is what makes it land. The sound the word opens with is left at
 // speed and everything after it is slowed — the consonants it starts with, or
