@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v122'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v123'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6334,41 +6334,18 @@ const TTS_ITALIC_MAX_WORDS = 5;
 // Per passage. Each one costs about 40 billed characters, and a passage that
 // needs more emphasis than this is a stylistic tic rather than a point.
 const TTS_MAX_EMPHASIS = 6;
-// How an italic phrase is actually said. <emphasis> is the tag for the job on
-// paper, but what the voice does with it is set a pause on either side of the
-// phrase and read the words themselves no differently — which is the reverse
-// of how a person reads an italic, leaning on the word without stopping around
-// it. Slowing the phrase down does that, and inserts nothing.
+// How an italic phrase is actually said: the same <emphasis> tag a quotation
+// gets, so a word the writer leaned on and a phrase they quoted are marked the
+// one way. A <prosody> tag was tried instead — a step in rate, then pitch,
+// then volume — and none of the three came through as a lean the ear could
+// pick out, where <emphasis> is at least a change the voice reliably makes.
 //
-// The whole phrase, from its first letter to its last. Beginning the change
-// inside the word instead — the sound it opens with at speed, the rest slowed —
-// describes better what a person does with an italic, and the voice cannot do
-// it: a tag boundary inside a word is a word boundary as far as it is
-// concerned, so "mandatory" came back as "m", "andato" and "ry", said as
-// letters. Tags go where the spaces are.
-const TTS_EMPHASIS_RATE = '100%';
-// And a change in pitch with it. Two per cent of duration on a word of half a
-// second is a few milliseconds, which is near enough nothing to hear; the ear
-// picks up pitch far more readily than length. Down rather than up: a rise is
-// how a question ends and how surprise sounds, where dropping into a word is
-// how a person weights one they mean. Semitones, because that is how the ear
-// hears pitch — a whole tone, which is a lean rather than a lurch.
-const TTS_EMPHASIS_PITCH = '0st';
-// Loudness, which is the third of the three things a person does to a word they
-// mean, and the one left to try. A couple of decibels is a small step — three
-// is twice the power — and being a change in the signal rather than in the
-// delivery, it is the least likely of the three to be quietly ignored.
-const TTS_EMPHASIS_VOLUME = '+2dB';
-
-// Only what actually changes goes in the tag: at full speed there is no reason
-// to send a rate at all, and a tag with nothing in it is no tag.
-function ttsEmphasisOpen() {
-  const parts = [];
-  if (TTS_EMPHASIS_RATE !== '100%') parts.push('rate="' + TTS_EMPHASIS_RATE + '"');
-  if (TTS_EMPHASIS_PITCH !== '0st') parts.push('pitch="' + TTS_EMPHASIS_PITCH + '"');
-  if (TTS_EMPHASIS_VOLUME !== '+0dB') parts.push('volume="' + TTS_EMPHASIS_VOLUME + '"');
-  return parts.length ? '<prosody ' + parts.join(' ') + '>' : '';
-}
+// The whole phrase, from its first letter to its last. A tag boundary inside a
+// word is a word boundary as far as the voice is concerned, so "mandatory"
+// came back as "m", "andato" and "ry", said as letters. Tags go where the
+// spaces are.
+const TTS_EMPHASIS_OPEN = '<emphasis level="moderate">';
+const TTS_EMPHASIS_CLOSE = '</emphasis>';
 // The request has to stay inside what the Worker will take, tags and all —
 // which is the reason for the margin: 700 characters of words, and room for
 // the tags that mark the italics and the quotations in them.
@@ -6575,8 +6552,8 @@ function ttsEscapeSsml(t) {
 // what the marks were for. They are kept out of everything sent to a voice,
 // and what they held is handed to <emphasis> instead: the pauses that tag puts
 // either side of a phrase are exactly the job the marks were doing, telling
-// the listener where the quotation starts and where it stops. It is the one
-// place those pauses are wanted, which is why italics no longer use that tag.
+// the listener where the quotation starts and where it stops. Italics get the
+// same tag, so the two are said alike.
 const TTS_QUOTES = '"\u201C\u201D\u201E\u201F\u00AB\u00BB';
 
 function ttsIsQuote(c) {
@@ -6641,7 +6618,7 @@ function ttsSsmlFor(s, i) {
 
   const tags = [];
   quotes.forEach(q => tags.push({ at: q.at + 1, end: q.end - 1,
-    open: '<emphasis level="moderate">', close: '</emphasis>' }));
+    open: TTS_EMPHASIS_OPEN, close: TTS_EMPHASIS_CLOSE }));
   let used = 0;
   italics.forEach(h => {
     if (used >= TTS_MAX_EMPHASIS) return;
@@ -6650,9 +6627,7 @@ function ttsSsmlFor(s, i) {
     const straddles = quotes.some(q =>
       (h.at < q.at + 1 && h.end > q.at + 1) || (h.at < q.end - 1 && h.end > q.end - 1));
     if (straddles) return;
-    const open = ttsEmphasisOpen();
-    if (!open) return;                 // nothing set to mark it with
-    tags.push({ at: h.at, end: h.end, open, close: '</prosody>' });
+    tags.push({ at: h.at, end: h.end, open: TTS_EMPHASIS_OPEN, close: TTS_EMPHASIS_CLOSE });
     used++;
   });
   if (!tags.length) return '';
