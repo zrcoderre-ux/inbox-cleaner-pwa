@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v124'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v125'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6106,7 +6106,13 @@ function cleanForSpeech(raw) {
   t = ttsCutAtEnd(t);
   // An address is never worth hearing, and neither is the word that was only
   // there to introduce it — "read more at <address>" wants to end at "more".
-  const URL = '(?:https?:\\/\\/|www\\.)[^\\s)\\]>]*[^\\s)\\]>.,;:!?]';
+  // A bare domain counts — "concernedaistaff.org" — since the sentence
+  // splitter would otherwise break it at the dot and the voice would say
+  // "concerned AI staff. org" as two sentences. Only a name ending in a known
+  // top-level domain, so "Node.js" and "a.m." are still words. The lookbehind
+  // keeps it off the domain half of an email address.
+  const URL = '(?:(?:https?:\\/\\/|www\\.)[^\\s)\\]>]*[^\\s)\\]>.,;:!?]' +
+              '|(?<![\\w@.-])(?:[a-z0-9-]+\\.)+(?:' + TTS_TLDS + ')\\b(?:\\/[^\\s)\\]>]*[^\\s)\\]>.,;:!?])?)';
   t = t.replace(new RegExp('\\s*\\b(?:at|to|via|from|here|see)\\s+' + URL, 'gi'), '');
   t = t.replace(new RegExp('\\s*' + URL, 'gi'), '');
   t = t.replace(/\(\s*\)|\[\s*\]|<\s*>/g, '');       // brackets the address left behind
@@ -6122,6 +6128,11 @@ function cleanForSpeech(raw) {
        .join('\n');
   return ttsDropRepeats(t.replace(/[ \t]{2,}/g, ' ').replace(/\n{2,}/g, '\n').trim());
 }
+
+// The endings a bare domain can have and still be taken for one. Kept to the
+// common ones: a two-letter country code on its own would take "et al." and
+// "i.e." for addresses.
+const TTS_TLDS = 'com|org|net|edu|gov|mil|io|co|ai|app|dev|me|us|uk|ca|au|de|fr|eu|info|biz|news|blog|tv|fm|xyz|substack|social|online|site|link';
 
 // How far into an email a repeated line is still the page's furniture rather
 // than the writing.
@@ -6369,7 +6380,11 @@ const TTS_MAX_EMPHASIS = 6;
 // word is a word boundary as far as the voice is concerned, so "mandatory"
 // came back as "m", "andato" and "ry", said as letters. Tags go where the
 // spaces are.
-const TTS_EMPHASIS_OPEN = '<emphasis level="moderate">';
+// "reduced" rather than "moderate": Google's scale runs strong, moderate,
+// none, reduced, and moderate landed too hard — a stop either side of every
+// marked phrase. Reduced is the only level below it that still changes the
+// delivery at all; "none" is no tag.
+const TTS_EMPHASIS_OPEN = '<emphasis level="reduced">';
 const TTS_EMPHASIS_CLOSE = '</emphasis>';
 // The request has to stay inside what the Worker will take, tags and all —
 // which is the reason for the margin: 700 characters of words, and room for
