@@ -18,8 +18,8 @@ const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const TTS_SYNTH_URL = 'https://texttospeech.googleapis.com/v1/text:synthesize';
 const TTS_VOICES_URL = 'https://texttospeech.googleapis.com/v1/voices';
 // The app never sends more than TTS_CHUNK_CHARS (700) of words in one request,
-// and the SSML tags around them — a rate change on each italic phrase, an
-// emphasis on each quotation — account for the rest. This sits just above that
+// and the SSML around them — an emphasis on each quotation, a comma either
+// side of each italic phrase — accounts for the rest. This sits just above that
 // rather than at Google's own 5000-byte ceiling: it's the per-request half of
 // the spend limit, and the project's per-minute quota is the other half. The
 // two multiply, so keeping this tight matters.
