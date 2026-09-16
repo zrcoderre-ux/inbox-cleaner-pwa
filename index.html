@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v126'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v127'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6367,30 +6367,34 @@ function chunkSentences(sentences, outLines) {
 // proper noun — and reading those with stress on every word is worse than
 // reading them flat.
 const TTS_ITALIC_MAX_WORDS = 5;
-// Per passage. Each one costs about 40 billed characters, and a passage that
-// needs more emphasis than this is a stylistic tic rather than a point.
+// Per passage. Every phrase set off is two more stops in a sentence that has
+// to keep moving, and a passage that needs more emphasis than this is a
+// stylistic tic rather than a point.
 const TTS_MAX_EMPHASIS = 6;
-// How an italic phrase is actually said: the same <emphasis> tag a quotation
-// gets, one level lower. A <prosody> tag was tried instead — a step in rate,
-// then pitch, then volume — and none of the three came through as a lean the
-// ear could pick out, where <emphasis> is at least a change the voice reliably
-// makes. Google's scale runs strong, moderate, none, reduced. A quotation
-// takes moderate: the stop either side of the phrase is the job the marks
-// were doing, saying where it starts and stops. An italic takes reduced, the
-// only level below moderate that still changes the delivery at all ("none" is
-// no tag), since the same stops around a single leaned-on word landed too
-// hard.
+// How an italic phrase is actually said: not with a tag on it at all, but with
+// a comma either side. Every way of leaning on the words themselves has been
+// tried — <prosody> stepping the rate, then the pitch, then the volume, then
+// <emphasis> at each level Google has — and they come out either too small to
+// hear or hard enough to sound like a shout. A comma is the mark a writer
+// reaches for to set a phrase off from the sentence around it, and it is the
+// one piece of punctuation every voice already knows what to do with: a short
+// stop before, a short stop after, the phrase standing on its own. Quotations
+// keep <emphasis level="moderate">, whose pauses are doing that same job for
+// marks that are never spoken.
 //
 // The whole phrase, from its first letter to its last. A tag boundary inside a
 // word is a word boundary as far as the voice is concerned, so "mandatory"
-// came back as "m", "andato" and "ry", said as letters. Tags go where the
-// spaces are.
+// came back as "m", "andato" and "ry", said as letters. The commas go where
+// the spaces are, and nowhere else.
 const TTS_QUOTE_OPEN = '<emphasis level="moderate">';
-const TTS_ITALIC_OPEN = '<emphasis level="reduced">';
 const TTS_EMPHASIS_CLOSE = '</emphasis>';
+// Written as a mark first and spelled out once the passage is built, so a
+// comma this adds can be told from one the writer wrote, and so it can take
+// the space beside it when it goes in.
+const TTS_ITALIC_MARK = '\u0001';
 // The request has to stay inside what the Worker will take, tags and all —
 // which is the reason for the margin: 700 characters of words, and room for
-// the tags that mark the italics and the quotations in them.
+// the tags that mark the quotations and the commas that set off the italics.
 const TTS_SSML_BUDGET = 1250;
 
 // Voices that refused SSML, remembered so it is asked of them once and no more.
@@ -6605,8 +6609,8 @@ function ttsEscapeSsml(t) {
 // what the marks were for. They are kept out of everything sent to a voice,
 // and what they held is handed to <emphasis> instead: the pauses that tag puts
 // either side of a phrase are exactly the job the marks were doing, telling
-// the listener where the quotation starts and where it stops. Italics get the
-// same tag a level lower.
+// the listener where the quotation starts and where it stops. Italics are set
+// off with commas instead.
 const TTS_QUOTES = '"\u201C\u201D\u201E\u201F\u00AB\u00BB';
 
 function ttsIsQuote(c) {
@@ -6660,6 +6664,33 @@ function ttsQuoteSpans(text) {
   return spans;
 }
 
+// What sits on one side of an italic phrase, which decides whether a comma
+// goes there. Three answers: 'comma', where the phrase runs into the sentence
+// at a space with a word on the other side of it; 'stop', where the sentence
+// stops there anyway — punctuation, a quotation mark, the end of the passage
+// — and a second mark in the same place would be a stumble rather than a
+// pause; and 'inside', where the edge falls in the middle of a word, at an
+// apostrophe or a hyphen, and there is nowhere for a comma to go.
+const TTS_ALREADY_STOPS = /[,;:.!?\u2013\u2014()[\]{}]/;
+
+function ttsEdgeStops(c) {
+  return TTS_ALREADY_STOPS.test(c) || ttsIsUnspoken(c);
+}
+
+function ttsEdgeBefore(text, at) {
+  let i = at - 1;
+  if (i >= 0 && !/\s/.test(text[i])) return ttsEdgeStops(text[i]) ? 'stop' : 'inside';
+  while (i >= 0 && /\s/.test(text[i])) i--;
+  return i < 0 ? 'stop' : (ttsEdgeStops(text[i]) ? 'stop' : 'comma');
+}
+
+function ttsEdgeAfter(text, end) {
+  let i = end;
+  if (i < text.length && !/\s/.test(text[i])) return ttsEdgeStops(text[i]) ? 'stop' : 'inside';
+  while (i < text.length && /\s/.test(text[i])) i++;
+  return i >= text.length ? 'stop' : (ttsEdgeStops(text[i]) ? 'stop' : 'comma');
+}
+
 // The passage as SSML, or '' for "send it as plain text" — which is most
 // passages, and costs nothing extra.
 function ttsSsmlFor(s, i) {
@@ -6680,7 +6711,15 @@ function ttsSsmlFor(s, i) {
     const straddles = quotes.some(q =>
       (h.at < q.at + 1 && h.end > q.at + 1) || (h.at < q.end - 1 && h.end > q.end - 1));
     if (straddles) return;
-    tags.push({ at: h.at, end: h.end, open: TTS_ITALIC_OPEN, close: TTS_EMPHASIS_CLOSE });
+    const before = ttsEdgeBefore(text, h.at), after = ttsEdgeAfter(text, h.end);
+    // A phrase that can't be closed off isn't opened either: one comma without
+    // its pair reads as a stumble — "The, company's policy" — and the reader
+    // is left waiting for a second one that never comes.
+    if (before === 'inside' || after === 'inside') return;
+    const open = before === 'comma' ? TTS_ITALIC_MARK : '';
+    const close = after === 'comma' ? TTS_ITALIC_MARK : '';
+    if (!open && !close) return;    // the sentence stops at both ends already
+    tags.push({ at: h.at, end: h.end, open, close });
     used++;
   });
   if (!tags.length) return '';
@@ -6697,6 +6736,9 @@ function ttsSsmlFor(s, i) {
     (opens.get(k) || []).forEach(t => { out += t.open; stack.push(t); });
     if (k < text.length && !ttsIsUnspoken(text[k])) out += ttsEscapeSsml(text[k]);
   }
+  // Each mark takes the space beside it, so the comma sits against the word it
+  // follows rather than floating between the two.
+  out = out.replace(/(?:\s*\u0001)+\s*/g, ', ');
   out = '<speak>' + out.replace(/\s{2,}/g, ' ') + '</speak>';
   return out.length > TTS_SSML_BUDGET ? '' : out;
 }
