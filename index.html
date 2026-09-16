@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v123'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v124'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6116,6 +6116,9 @@ function cleanForSpeech(raw) {
        .map(l => l.replace(/^[\s*·•\-–—=_~#|]+/, '').replace(/[\s*=_~|]+$/, '').trim())
        .filter(l => l && /[A-Za-z0-9]/.test(l))        // rules, spacers, emoji-only
        .filter(l => !TTS_BUTTON_RE.test(l))            // buttons standing on their own
+       .filter(l => !TTS_TWEET_META_RE.test(l) && !TTS_TWEET_COUNT_RE.test(l))   // an embedded post's clock and counts
+       .map(l => l.replace(TTS_HANDLE_RE, ''))         // the @handle beside a name
+       .filter(l => l && /[A-Za-z0-9]/.test(l))
        .join('\n');
   return ttsDropRepeats(t.replace(/[ \t]{2,}/g, ' ').replace(/\n{2,}/g, '\n').trim());
 }
@@ -6196,6 +6199,28 @@ const TTS_NEVER_RE = new RegExp([
   'subscribe (?:here|now) for more',
   'was this (?:email|post) forwarded to you'
 ].map(p => '\\b(?:' + p + ')\\b').join('|'), 'i');
+
+// The furniture of an embedded post — a tweet quoted into a newsletter. Read
+// as text, the card is the author, the handle, the words, and then a clock
+// and a scoreboard: "9:49 PM · Sep 10, 2026 · 16.3K Views" and "7 Replies ·
+// 25 Reposts · 199 Likes". The words are what the writer put the card there
+// for; the rest is the platform's, and a voice reading it out sounds like it
+// is reading the page's chrome. A line is dropped when it is made of nothing
+// but those pieces: a time of day, a date, a count of views or likes. Two or
+// more of them, or one count on its own — a date standing alone is left, since
+// an article opens with one and nothing else is lost by hearing it.
+const TTS_TWEET_META_SEG = [
+  '\\d{1,2}:\\d{2}(?:\\s*[ap]\\.?m\\.?)?',
+  '(?:[a-z]{3,9}\\.?\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}\\s+[a-z]{3,9}\\.?\\s+\\d{4})',
+  '[\\d.,]+[kmb]?\\+?\\s+(?:views?|repl(?:y|ies)|reposts?|retweets?|likes?|quotes?|quote tweets?|bookmarks?|comments?|shares?|reactions?)'
+];
+const TTS_TWEET_COUNT_RE = new RegExp('^\\W*' + TTS_TWEET_META_SEG[2] + '\\W*$', 'i');
+const TTS_TWEET_META_RE = new RegExp('^\\W*(?:' + TTS_TWEET_META_SEG.join('|') + ')' +
+  '(?:\\s*[\\u00B7\\u2022|,]?\\s*(?:' + TTS_TWEET_META_SEG.join('|') + '))+\\W*$', 'i');
+// And the handle beside the author's name — "pamela mishkin @manlikemishap".
+// The name says who is being quoted; the handle is the address the platform
+// files them under, and read aloud it is a run of syllables nobody wrote.
+const TTS_HANDLE_RE = /(?:^|\s)@[A-Za-z0-9_]{2,30}\s*$/;
 
 // A line that is nothing but a button. A platform drops these through the
 // middle of a post — Share, Restack, Leave a comment — and each one lands in
@@ -6407,6 +6432,13 @@ const TTS_CAPTION_SEL = 'figcaption, [class*="caption" i], [id*="caption" i], ' 
 const TTS_CREDIT_RE = new RegExp(
   '[(\\[]\\s*(?:photo|photograph|image|illustration|artwork|art|chart|map|video)s?\\s+(?:by|credit|courtesy|from)\\b' +
   '|\\b(?:photo|photograph|image|illustration|artwork|chart|map)s?\\s*(?:credit|courtesy)\\s*:', 'i');
+// The parts of an embedded post that aren't the post: Substack's tweet card
+// puts the time, the view count and the like/repost counts in a footer of its
+// own, and the handle in the header beside the name.
+const TTS_EMBED_META_SEL = '[class*="tweet-footer" i], [class*="tweet-date" i], [class*="tweet-time" i], ' +
+                           '[class*="tweet-stats" i], [class*="tweet-likes" i], [class*="tweet-retweets" i], ' +
+                           '[class*="tweet-replies" i], [class*="tweet-views" i], [class*="tweet-actions" i], ' +
+                           '[class*="tweet-author-handle" i], [class*="tweet-handle" i]';
 // No caption runs longer than this, and anything that does is the page around
 // one rather than the caption itself.
 const TTS_CAPTION_MAX_CHARS = 400;
@@ -6459,6 +6491,10 @@ function ttsTextFromHtml(html) {
     // written for something the listener can't see, and read aloud it arrives
     // as a paragraph about a photograph in the middle of an argument.
     div.querySelectorAll(TTS_CAPTION_SEL).forEach(el => el.remove());
+    // An embedded post's footer, where the markup names it: the clock, the
+    // view count and the scoreboard under a quoted tweet. The text rule in
+    // cleanForSpeech catches the same lines wherever the markup doesn't say.
+    div.querySelectorAll(TTS_EMBED_META_SEL).forEach(el => el.remove());
     // A caption with no class to say so still names where the picture came
     // from, and the description sits in the same block as the credit — so the
     // whole block goes. Only the innermost one that carries it, and only one
