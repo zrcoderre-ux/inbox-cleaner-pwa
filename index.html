@@ -1997,7 +1997,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v127'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v128'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -4902,6 +4902,10 @@ const FN_DEF_ALONE = /^[ \t]*(?:\[(\d{1,3})\]|\((\d{1,3})\)|(\d{1,3})[.)]?|([⁰
 // the popup scrolls; it only exists to stop a runaway match swallowing the
 // rest of the email.
 const FN_NOTE_MAX = 4000;
+// A plain-text body can put the newsletter's own chrome directly under the
+// last note with no blank line between them. These lines end a note instead
+// of joining it.
+const FN_NOTE_END_RE = /^(?:you['’]?re currently a |unsubscribe\b|©\s*\d{4}|this email was sent|view (?:this|in) |manage your (?:subscription|preferences)|update your profile|to (?:stop|unsubscribe) )/i;
 // The same markers appearing mid-prose.
 const FN_REF_RE = /\[(\d{1,3})\]|\((\d{1,3})\)|([⁰¹²³⁴⁵⁶⁷⁸⁹]+)|([†‡§]|\*{1,3})/g;
 
@@ -4917,7 +4921,10 @@ function fnTextIndex(root) {
     if (!parent || parent.nodeName === 'SCRIPT' || parent.nodeName === 'STYLE') continue;
     let block = parent;
     while (block && block !== root && !FN_BLOCK_TAGS.test(block.nodeName)) block = block.parentNode;
-    if (seen && block !== lastBlock && full && !full.endsWith('\n')) full += '\n';
+    // A block boundary is HTML's blank line: an email has no blank lines of
+    // its own, so without this a note under a lone marker would run on past
+    // its own paragraph and swallow whatever the newsletter puts underneath.
+    if (seen && block !== lastBlock && full) full += '\n\n';
     lastBlock = block; seen = true;
     const start = full.length;
     full += n.nodeValue;
@@ -4951,12 +4958,12 @@ function fnDefinitions(full) {
 
     let text = alone ? '' : (m[6] || '').trim();
     if (alone) {
-      // The note is whatever sits under the marker, up to a blank line or the
-      // next note's marker.
+      // The note is whatever sits under the marker, up to a blank line, the
+      // next note's marker, or the newsletter's own footer.
       for (let j = i + 1; j < lines.length; j++) {
         const ln = lines[j].trim();
         if (!ln) { if (text) break; else continue; }
-        if (isMarkerLine(lines[j])) break;
+        if (isMarkerLine(lines[j]) || FN_NOTE_END_RE.test(ln)) break;
         text = text ? text + ' ' + ln : ln;
         if (text.length >= FN_NOTE_MAX) break;
       }
