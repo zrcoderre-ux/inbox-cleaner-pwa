@@ -2056,7 +2056,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v134'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v135'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6917,7 +6917,12 @@ function splitSentences(text) {
   masked.split('\n').forEach(line => {
     // Runs of text up to a terminator (or the end of the line). The leading
     // [^.!?]+ can't match empty, so this always advances.
-    const re = /[^.!?]+(?:[.!?]+["')\]]*|$)/g;
+    // The terminator takes the marks that close after it — the quotation the
+    // sentence ended inside, straight or curly, and any bracket. Curly marks
+    // were missing here, so a sentence ending a nested quotation broke at the
+    // stop and left "’”" to open the next passage, where a quotation mark with
+    // no words in front of it is read out by name: "single quote".
+    const re = /[^.!?]+(?:[.!?]+["'\u2019\u201D\u00BB\u203A)\]]*|$)/g;
     let m;
     while ((m = re.exec(line)) !== null) {
       const sentence = m[0].split(TTS_DOT).join('.').trim();
@@ -7248,6 +7253,63 @@ function ttsIsQuote(c) {
   return TTS_QUOTES.indexOf(c) !== -1;
 }
 
+// The marks a quotation nested inside another is set in — and, where a writer
+// follows British practice, the marks the outer quotation is set in too. A
+// voice names these exactly as it names the double ones, so "he said ‘go’"
+// arrives as "he said single quote go single quote". They can't be dropped on
+// sight the way the double marks are, though: two of these characters are also
+// the apostrophe, and a passage with its apostrophes taken out is a passage of
+// misspellings.
+const TTS_SINGLE_QUOTES = "'\u2018\u2019\u201A\u201B\u2039\u203A";
+// The ones that are only ever quotation marks, and which end they belong to.
+const TTS_SINGLE_OPEN = '\u2018\u201A\u201B\u2039';
+const TTS_SINGLE_CLOSE = '\u203A';
+
+function ttsIsSingleQuote(c) {
+  return TTS_SINGLE_QUOTES.indexOf(c) !== -1;
+}
+
+// Which of the two a mark is, read off what sits either side of it. The
+// straight apostrophe and the right curly one are the ambiguous pair, and a
+// mark with a letter on both sides is an apostrophe — "don't", "company's" —
+// so it is neither and stays where it is.
+//
+// Only the straight mark is allowed to open a quotation. A right curly mark
+// standing before a word is an elision — ’tis, ’em, the ’90s — far more often
+// than it is a quotation being opened, which a typesetter sets as ‘. And a
+// letter has to follow it, since a quotation opening on a digit is rarer still
+// than "the '90s".
+function ttsSingleQuoteRole(text, i) {
+  const c = text[i];
+  if (TTS_SINGLE_OPEN.indexOf(c) !== -1) return 'open';
+  if (TTS_SINGLE_CLOSE.indexOf(c) !== -1) return 'close';
+  const before = i > 0 ? text[i - 1] : '';
+  const after = i + 1 < text.length ? text[i + 1] : '';
+  const word = /[A-Za-z0-9]/;
+  if (c === "'" && /[A-Za-z]/.test(after) && !word.test(before)) return 'open';
+  if (!word.test(after) && before && !/\s/.test(before)) return 'close';
+  return '';
+}
+
+// Nested quotations as pairs of positions, the same way ttsQuoteSpans reads the
+// double ones. Only a closed pair counts: a mark left on its own is far more
+// likely to be a plural possessive — the girls’ team — or an elision — the ’90s
+// — than half a quotation, and either is a word the listener needs.
+function ttsSingleQuoteSpans(text) {
+  const spans = [];
+  let open = -1;
+  for (let i = 0; i < text.length; i++) {
+    if (!ttsIsSingleQuote(text[i])) continue;
+    const role = ttsSingleQuoteRole(text, i);
+    if (!role) continue;                   // an apostrophe, mid-word
+    if (open === -1) { if (role === 'open') open = i; continue; }
+    if (role === 'open') continue;         // an opening mark can't close anything
+    if (i > open + 1) spans.push({ at: open, end: i + 1 });
+    open = -1;
+  }
+  return spans;
+}
+
 // The square brackets an editor puts round a word they have changed inside a
 // quotation — "[go] from lecturing to listening". A person reads the word and
 // takes the brackets as a note to the eye; a voice takes them for markup and
@@ -7257,12 +7319,34 @@ function ttsIsUnspoken(c) {
   return ttsIsQuote(c) || c === '[' || c === ']';
 }
 
+// Everything in this passage that goes unspoken: the marks above wherever they
+// fall, plus the single marks that turned out to be quotation marks. Positions
+// rather than characters, since what a single mark is depends on what sits
+// beside it.
+function ttsSilentMarks(text) {
+  const silent = new Set();
+  for (let i = 0; i < text.length; i++) if (ttsIsUnspoken(text[i])) silent.add(i);
+  ttsSingleQuoteSpans(text).forEach(q => { silent.add(q.at); silent.add(q.end - 1); });
+  // A nested quotation whose other half fell in the passage before this one
+  // leaves a mark with nothing to pair with, standing against the double mark
+  // it was nested inside. A single mark hard against a quotation mark is never
+  // an apostrophe, so it goes too.
+  for (let i = 0; i < text.length; i++) {
+    if (!ttsIsSingleQuote(text[i])) continue;
+    const prev = i > 0 ? text[i - 1] : '\n';
+    const next = i + 1 < text.length ? text[i + 1] : '\n';
+    if (ttsIsQuote(prev) || ttsIsQuote(next)) silent.add(i);
+  }
+  return silent;
+}
+
 // What a voice is given: the passage with the marks taken out. The passage
 // itself keeps them — the scrubber counts its characters and the page is
 // searched for its words.
 function ttsSpeakable(text) {
+  const silent = ttsSilentMarks(text);
   let out = '';
-  for (let i = 0; i < text.length; i++) if (!ttsIsUnspoken(text[i])) out += text[i];
+  for (let i = 0; i < text.length; i++) if (!silent.has(i)) out += text[i];
   // An initialism is a word made of letters, not a run of sentences. The voice
   // is handed it without its stops — "A.I." as "AI" — so it says the letters
   // straight through. Lower case is left alone: "e.g." without its stops is a
@@ -7304,22 +7388,25 @@ function ttsQuoteSpans(text) {
 // apostrophe or a hyphen, and there is nowhere for a comma to go.
 const TTS_ALREADY_STOPS = /[,;:.!?\u2013\u2014()[\]{}]/;
 
-function ttsEdgeStops(c) {
-  return TTS_ALREADY_STOPS.test(c) || ttsIsUnspoken(c);
+// A mark that isn't said is a mark the comma can stand in for, so the passage's
+// silent positions come along: an apostrophe is still 'inside' a word, while a
+// quotation mark beside the phrase is a stop.
+function ttsEdgeStops(text, i, silent) {
+  return TTS_ALREADY_STOPS.test(text[i]) || silent.has(i);
 }
 
-function ttsEdgeBefore(text, at) {
+function ttsEdgeBefore(text, at, silent) {
   let i = at - 1;
-  if (i >= 0 && !/\s/.test(text[i])) return ttsEdgeStops(text[i]) ? 'stop' : 'inside';
+  if (i >= 0 && !/\s/.test(text[i])) return ttsEdgeStops(text, i, silent) ? 'stop' : 'inside';
   while (i >= 0 && /\s/.test(text[i])) i--;
-  return i < 0 ? 'stop' : (ttsEdgeStops(text[i]) ? 'stop' : 'comma');
+  return i < 0 ? 'stop' : (ttsEdgeStops(text, i, silent) ? 'stop' : 'comma');
 }
 
-function ttsEdgeAfter(text, end) {
+function ttsEdgeAfter(text, end, silent) {
   let i = end;
-  if (i < text.length && !/\s/.test(text[i])) return ttsEdgeStops(text[i]) ? 'stop' : 'inside';
+  if (i < text.length && !/\s/.test(text[i])) return ttsEdgeStops(text, i, silent) ? 'stop' : 'inside';
   while (i < text.length && /\s/.test(text[i])) i++;
-  return i >= text.length ? 'stop' : (ttsEdgeStops(text[i]) ? 'stop' : 'comma');
+  return i >= text.length ? 'stop' : (ttsEdgeStops(text, i, silent) ? 'stop' : 'comma');
 }
 
 // The passage as SSML, or '' for "send it as plain text" — which is most
@@ -7327,9 +7414,16 @@ function ttsEdgeAfter(text, end) {
 function ttsSsmlFor(s, i) {
   if (!s || ttsNoSsml[s.voice]) return '';
   const text = s.chunks[i] || '';
-  const quotes = ttsQuoteSpans(text);
+  const outer = ttsQuoteSpans(text);
+  // A quotation set in single marks is a quotation too, and now that its marks
+  // go unsaid it needs the pauses that stood for them. Only where it stands
+  // clear of the double ones: nested inside one, the emphasis already around it
+  // is doing that job, and a second tag inside the first would only muddle it.
+  const quotes = outer.concat(ttsSingleQuoteSpans(text)
+    .filter(q => outer.every(o => q.end <= o.at || q.at >= o.end)));
   const italics = (s.emph && s.emph[i]) || [];
   if (!quotes.length && !italics.length) return '';
+  const silent = ttsSilentMarks(text);
 
   const tags = [];
   quotes.forEach(q => tags.push({ at: q.at + 1, end: q.end - 1,
@@ -7342,7 +7436,7 @@ function ttsSsmlFor(s, i) {
     const straddles = quotes.some(q =>
       (h.at < q.at + 1 && h.end > q.at + 1) || (h.at < q.end - 1 && h.end > q.end - 1));
     if (straddles) return;
-    const before = ttsEdgeBefore(text, h.at), after = ttsEdgeAfter(text, h.end);
+    const before = ttsEdgeBefore(text, h.at, silent), after = ttsEdgeAfter(text, h.end, silent);
     // A phrase that can't be closed off isn't opened either: one comma without
     // its pair reads as a stumble — "The, company's policy" — and the reader
     // is left waiting for a second one that never comes.
@@ -7365,7 +7459,7 @@ function ttsSsmlFor(s, i) {
   for (let k = 0; k <= text.length; k++) {
     while (stack.length && stack[stack.length - 1].end === k) out += stack.pop().close;
     (opens.get(k) || []).forEach(t => { out += t.open; stack.push(t); });
-    if (k < text.length && !ttsIsUnspoken(text[k])) out += ttsEscapeSsml(text[k]);
+    if (k < text.length && !silent.has(k)) out += ttsEscapeSsml(text[k]);
   }
   // Each mark takes the space beside it, so the comma sits against the word it
   // follows rather than floating between the two.
