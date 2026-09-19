@@ -2056,7 +2056,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v132'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v133'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2086,8 +2086,17 @@ let blockIgnore = {};
 // read, `passes` counts the times their mail was sitting in the Keep list and
 // you read someone else's instead (or dismissed theirs unread). The ratio is
 // how often you choose that sender when given the chance.
-// Shape: { [addr]: { opens, passes, name, last } }
+// Shape: { [addr]: { opens, passes, name, last, longReads: [{ t, id }] } }
 let keepReadStats = {};
+// A catch-up run: several of one sender's long kept emails read inside one
+// window. While that's going on the backlog penalty comes off — a pile being
+// worked through is the point, not a reason to push the sender down the list
+// just as you're getting to them.
+const KEEP_CATCHUP_OPENS = 3;
+const KEEP_CATCHUP_WINDOW_MS = 2 * 60 * 60 * 1000;
+// Short mail doesn't count towards a run. Clearing three one-liners is
+// tidying up, not settling in to read someone.
+const KEEP_CATCHUP_MIN_WORDS = 800;
 // The kept emails as last rendered, in display order. Used to attribute a
 // pass to every other sender that was on screen when you opened one.
 let keepListItems = [];
@@ -2330,6 +2339,16 @@ function recordKeepOpen(id) {
   const s = keepStatFor(key, opened.sender);
   s.opens = (s.opens || 0) + 1;
   s.last = Date.now();
+  // A long one read from this sender: part of a catch-up run, if enough of
+  // them land close together. Kept by message id so re-opening the same email
+  // doesn't read as three. An unmeasured body counts as short — it might be
+  // long, but nothing here knows that.
+  if ((opened.words || 0) >= KEEP_CATCHUP_MIN_WORDS) {
+    const now = Date.now();
+    const recent = (s.longReads || []).filter(r => r && now - r.t < KEEP_CATCHUP_WINDOW_MS && r.id !== id);
+    recent.push({ t: now, id });
+    s.longReads = recent.slice(-(KEEP_CATCHUP_OPENS * 2));
+  }
   const passed = new Set();
   keepListItems.forEach(i => {
     const k = senderKeyOf(i.sender);
@@ -2365,7 +2384,21 @@ function keepPickRate(key) {
 // backlog penalty: the more of a sender's kept mail is still sitting unread,
 // the further down they go. Log-scaled so one unread barely counts and a big
 // pile counts a lot without ever swamping a strong pick rate. Higher is better.
+// True while a sender is being caught up on: KEEP_CATCHUP_OPENS or more of
+// their long kept emails opened inside the window. It lapses on its own as
+// those opens age out, so nothing has to decide when a run has ended.
+function keepCatchingUp(key) {
+  const s = keepReadStats[key];
+  if (!s || !Array.isArray(s.longReads)) return false;
+  const cutoff = Date.now() - KEEP_CATCHUP_WINDOW_MS;
+  const ids = new Set();
+  s.longReads.forEach(r => { if (r && r.t > cutoff) ids.add(r.id); });
+  return ids.size >= KEEP_CATCHUP_OPENS;
+}
+
 function keepSenderScore(key, backlog) {
+  // Mid catch-up, the backlog is what's being read, not a reason to demote.
+  if (keepCatchingUp(key)) return keepPickRate(key);
   return keepPickRate(key) - Math.log2(1 + (backlog || 0)) / 10;
 }
 
