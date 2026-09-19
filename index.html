@@ -2056,7 +2056,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v133'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v134'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2088,15 +2088,22 @@ let blockIgnore = {};
 // how often you choose that sender when given the chance.
 // Shape: { [addr]: { opens, passes, name, last, longReads: [{ t, id }] } }
 let keepReadStats = {};
-// A catch-up run: several of one sender's long kept emails read inside one
-// window. While that's going on the backlog penalty comes off — a pile being
-// worked through is the point, not a reason to push the sender down the list
-// just as you're getting to them.
-const KEEP_CATCHUP_OPENS = 3;
+// A catch-up run: several of one sender's long kept emails finished inside
+// one window. While that's going on the backlog penalty comes off — a pile
+// being worked through is the point, not a reason to push the sender down the
+// list just as you're getting to them. Finished means marked read: opening an
+// email says you looked at it, marking it read is where you say you're done.
+const KEEP_CATCHUP_READS = 3;
 const KEEP_CATCHUP_WINDOW_MS = 2 * 60 * 60 * 1000;
 // Short mail doesn't count towards a run. Clearing three one-liners is
 // tidying up, not settling in to read someone.
 const KEEP_CATCHUP_MIN_WORDS = 800;
+// Kept emails opened in the reader, as { [id]: when }. Marking one read after
+// opening it is finishing it, not clearing it away unread, and the two want
+// opposite things recorded — so the open has to still be known at that point.
+let keepOpened = {};
+const KEEP_OPENED_MAX = 300;
+const KEEP_OPENED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // The kept emails as last rendered, in display order. Used to attribute a
 // pass to every other sender that was on screen when you opened one.
 let keepListItems = [];
@@ -2312,6 +2319,26 @@ function loadKeepReadStats() {
   catch(e) { keepReadStats = {}; }
 }
 
+function loadKeepOpened() {
+  try { keepOpened = JSON.parse(localStorage.getItem(nsKey('ic_keep_opened')) || '{}'); }
+  catch(e) { keepOpened = {}; }
+  if (!keepOpened || typeof keepOpened !== 'object') keepOpened = {};
+}
+
+// Bounded on the way out: old entries go, and the newest KEEP_OPENED_MAX are
+// kept. An email opened a month ago and cleared today was cleaning up.
+function saveKeepOpened() {
+  const cutoff = Date.now() - KEEP_OPENED_TTL_MS;
+  let ids = Object.keys(keepOpened).filter(k => keepOpened[k] > cutoff);
+  if (ids.length > KEEP_OPENED_MAX) {
+    ids = ids.sort((a, b) => keepOpened[b] - keepOpened[a]).slice(0, KEEP_OPENED_MAX);
+  }
+  const next = {};
+  ids.forEach(k => { next[k] = keepOpened[k]; });
+  keepOpened = next;
+  try { localStorage.setItem(nsKey('ic_keep_opened'), JSON.stringify(keepOpened)); } catch(e) {}
+}
+
 function saveKeepReadStats() {
   try { localStorage.setItem(nsKey('ic_keep_read_stats'), JSON.stringify(keepReadStats)); } catch(e) {}
 }
@@ -2339,16 +2366,8 @@ function recordKeepOpen(id) {
   const s = keepStatFor(key, opened.sender);
   s.opens = (s.opens || 0) + 1;
   s.last = Date.now();
-  // A long one read from this sender: part of a catch-up run, if enough of
-  // them land close together. Kept by message id so re-opening the same email
-  // doesn't read as three. An unmeasured body counts as short — it might be
-  // long, but nothing here knows that.
-  if ((opened.words || 0) >= KEEP_CATCHUP_MIN_WORDS) {
-    const now = Date.now();
-    const recent = (s.longReads || []).filter(r => r && now - r.t < KEEP_CATCHUP_WINDOW_MS && r.id !== id);
-    recent.push({ t: now, id });
-    s.longReads = recent.slice(-(KEEP_CATCHUP_OPENS * 2));
-  }
+  keepOpened[id] = Date.now();
+  saveKeepOpened();
   const passed = new Set();
   keepListItems.forEach(i => {
     const k = senderKeyOf(i.sender);
@@ -2357,6 +2376,22 @@ function recordKeepOpen(id) {
     const other = keepStatFor(k, i.sender);
     other.passes = (other.passes || 0) + 1;
   });
+  saveKeepReadStats();
+}
+
+// Marking one of a sender's long kept emails read: the thing a catch-up run is
+// counted in. Kept by message id, so marking the same email read twice — or
+// re-reading one — doesn't read as two. An unmeasured body counts as short: it
+// might be long, but nothing here knows that.
+function recordKeepLongRead(sender, id, words) {
+  if ((words || 0) < KEEP_CATCHUP_MIN_WORDS) return;
+  const key = senderKeyOf(sender);
+  if (!key) return;
+  const s = keepStatFor(key, sender);
+  const now = Date.now();
+  const recent = (s.longReads || []).filter(r => r && now - r.t < KEEP_CATCHUP_WINDOW_MS && r.id !== id);
+  recent.push({ t: now, id });
+  s.longReads = recent.slice(-(KEEP_CATCHUP_READS * 2));
   saveKeepReadStats();
 }
 
@@ -2384,16 +2419,16 @@ function keepPickRate(key) {
 // backlog penalty: the more of a sender's kept mail is still sitting unread,
 // the further down they go. Log-scaled so one unread barely counts and a big
 // pile counts a lot without ever swamping a strong pick rate. Higher is better.
-// True while a sender is being caught up on: KEEP_CATCHUP_OPENS or more of
-// their long kept emails opened inside the window. It lapses on its own as
-// those opens age out, so nothing has to decide when a run has ended.
+// True while a sender is being caught up on: KEEP_CATCHUP_READS or more of
+// their long kept emails marked read inside the window. It lapses on its own
+// as those reads age out, so nothing has to decide when a run has ended.
 function keepCatchingUp(key) {
   const s = keepReadStats[key];
   if (!s || !Array.isArray(s.longReads)) return false;
   const cutoff = Date.now() - KEEP_CATCHUP_WINDOW_MS;
   const ids = new Set();
   s.longReads.forEach(r => { if (r && r.t > cutoff) ids.add(r.id); });
-  return ids.size >= KEEP_CATCHUP_OPENS;
+  return ids.size >= KEEP_CATCHUP_READS;
 }
 
 function keepSenderScore(key, backlog) {
@@ -3911,6 +3946,7 @@ function loadAccountData() {
   loadSenderStats();
   loadSenderRules();
   loadKeepReadStats();
+  loadKeepOpened();
   loadSubjectData();
   loadContentRules();
   loadSenderLengths();
@@ -5250,7 +5286,15 @@ async function renderKeepList() {
 // its revealed button). Removes it from the Keep list and syncs to Gmail.
 async function markKeptRead(id) {
   const row = keepListItems.find(i => i.id === id);
-  if (row) recordKeepDismiss(row.sender); // cleared without reading
+  if (row) {
+    // Marking read is where an email is finished, so this is what a catch-up
+    // run is counted in — not the open, which only says you looked.
+    recordKeepLongRead(row.sender, id, row.words);
+    // And it only counts against the sender when it really was cleared
+    // unread. One you opened first was read, not passed over.
+    if (!keepOpened[id]) recordKeepDismiss(row.sender);
+  }
+  if (keepOpened[id]) { delete keepOpened[id]; saveKeepOpened(); }
   dropKeptLocally(id);
   emails = emails.filter(e => e.id !== id);
   swipeQueue = swipeQueue.filter(e => e.id !== id);
