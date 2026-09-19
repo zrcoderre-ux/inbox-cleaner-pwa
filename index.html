@@ -1552,6 +1552,8 @@ body {
 .email-item-sender { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .email-item-subject { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
 .email-item-time { font-size: 11px; color: var(--text-3); flex-shrink: 0; margin-top: 2px; }
+/* The word count, shown in the Keep list while it's sorted by length */
+.keep-item-words { margin-top: 3px; text-align: right; white-space: nowrap; }
 
 .list-empty { padding: 2.5rem 1rem; text-align: center; color: var(--text-3); font-size: 13px; line-height: 1.8; }
 
@@ -1739,6 +1741,8 @@ body {
                 <option value="top-reads">Top reads</option>
                 <option value="date-desc">Newest first</option>
                 <option value="date-asc">Oldest first</option>
+                <option value="words-asc">Shortest first</option>
+                <option value="words-desc">Longest first</option>
                 <option value="sender-az">Sender A–Z</option>
                 <option value="sender-za">Sender Z–A</option>
               </select>
@@ -2040,7 +2044,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v130'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v131'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -4870,7 +4874,27 @@ function clearKept() {
 // The Keep list's comparator. 'top-reads' groups by sender, ranked by how
 // readily you read that sender's kept mail (see keepSenderScore), newest first
 // within a sender; every other mode is the shared comparator.
+// True for the two sorts that order by length, which the list also labels.
+function isKeepWordSort(mode) {
+  return mode === 'words-asc' || mode === 'words-desc';
+}
+
+// By length. An email nothing has cached the body of has no word count, and
+// the 0 standing in for one means unmeasured rather than short — so those sink
+// to the end of the list either way round, in their usual newest-first order,
+// instead of leading the shortest-first one.
+function keepWordComparator(desc) {
+  const byDate = emailComparator('date-desc');
+  return (a, b) => {
+    const wa = a.words || 0, wb = b.words || 0;
+    if (!wa !== !wb) return wa ? -1 : 1;
+    if (wa !== wb) return desc ? wb - wa : wa - wb;
+    return byDate(a, b);
+  };
+}
+
 function keepComparator(mode, items) {
+  if (isKeepWordSort(mode)) return keepWordComparator(mode === 'words-desc');
   if (mode !== 'top-reads') return emailComparator(mode);
   const backlog = new Map();
   items.forEach(i => {
@@ -4971,6 +4995,9 @@ async function renderKeepList() {
   const offlineBanner = (navigator.onLine === false)
     ? '<div class="keep-offline">Offline — showing saved copies.</div>'
     : '';
+  // Sorted by length, the order is only legible if the list says how long each
+  // email is — and says which ones it couldn't measure.
+  const showWords = isKeepWordSort(keepSortMode);
   el.innerHTML = offlineBanner + items.map(e => `
     <div class="keep-row" data-id="${e.id}">
       <div class="keep-row-action"><button class="keep-row-mark" onclick="markKeptRead('${e.id}')">Mark read</button></div>
@@ -4979,7 +5006,9 @@ async function renderKeepList() {
           <div class="email-item-sender">${esc(e.sender)}</div>
           <div class="email-item-subject">${esc(e.subject)}</div>
         </div>
-        <div class="email-item-time">${formatDate(e.date)}</div>
+        <div class="email-item-time">${formatDate(e.date)}${showWords
+          ? `<div class="keep-item-words">${e.words ? e.words.toLocaleString() + ' words' : 'not measured yet'}</div>`
+          : ''}</div>
       </div>
     </div>
   `).join('');
