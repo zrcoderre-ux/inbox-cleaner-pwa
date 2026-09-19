@@ -1861,10 +1861,22 @@ body {
           </div>
         </div>
 
+        <!-- Suggested rules for a sender's unusually short mail -->
+        <div class="section-card" id="length-card">
+          <div class="section-card-header" onclick="toggleSection('length-card')">
+            <h3>Suggested short-mail rules <span class="pill" id="length-count">0</span></h3>
+            <span class="chevron">▾</span>
+          </div>
+          <div class="section-card-body">
+            <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Senders whose mail is usually long but who sometimes send something far shorter — a “we’re live” note, a post cut off after two paragraphs, a one-line alert. <strong>Auto-read</strong> marks only those short ones read and leaves the rest of the sender’s mail exactly where it is. Lengths are measured from the emails already saved for offline reading, so nothing extra is fetched.</p>
+            <div class="suggest-list" id="length-list-el"></div>
+          </div>
+        </div>
+
         <!-- Standing sender rules, in two categories -->
         <div class="section-card" id="rules-card">
           <div class="section-card-header" onclick="toggleSection('rules-card')">
-            <h3>Auto rules <span class="pill" id="rules-count">0</span></h3>
+            <h3>Rules <span class="pill" id="rules-count">0</span></h3>
             <span class="chevron">▾</span>
           </div>
           <div class="section-card-body">
@@ -2044,7 +2056,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v131'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v132'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2102,8 +2114,19 @@ let subjectRules = {};
 // ceiling on how many words it runs to, or both — both means both have to hold.
 // Unlike the sender and subject rules these can spam as well as mark read,
 // because a phrase like a paywall pitch identifies the mail itself.
-// Shape: [{ id, phrase, maxWords, action, since }]
+// A rule can also be scoped to one sender, which is how the short-mail
+// suggestions below are taken up: a ceiling that would be reckless across the
+// whole inbox is safe against the one sender whose mail it describes.
+// Shape: [{ id, phrase, maxWords, addr, name, action, since }]
 let contentRules = [];
+// Recent body lengths per sender, which is what tells a sender's short mail
+// apart from their usual — the 80-word "we're live" note from the 2,000-word
+// post it interrupts. Filled in wherever a word count is already being
+// computed, and capped at the most recent SENDER_LENGTH_SAMPLES per sender.
+// Shape: { [addr]: { name, ids: [id], words: [n] } }
+let senderLengths = {};
+// Senders whose short mail was offered as a rule and waved off.
+let lengthIgnore = {};
 // How many no-open "mark read" actions before a never-engaged sender is
 // suggested.
 const BLOCK_SUGGEST_THRESHOLD = 3;
@@ -2120,6 +2143,17 @@ const FUZZY_SUBJECT_THRESHOLD = 4;
 // Consecutive no-open "mark read" actions that trigger a suggestion even for a
 // sender you've previously opened or kept (the streak resets on any engagement).
 const BLOCK_SUGGEST_STREAK = 10;
+// How many of a sender's most recent body lengths are kept, as the sample the
+// "much shorter than usual" judgement is made from.
+const SENDER_LENGTH_SAMPLES = 25;
+// Below this many measured emails there's no "usual" to be shorter than.
+const LENGTH_SUGGEST_MIN_SAMPLES = 6;
+// A sender whose mail is all short has no short class worth a rule.
+const LENGTH_SUGGEST_MIN_TYPICAL = 250;
+// What "much shorter" means: at or under this fraction of the sender's usual.
+const LENGTH_SUGGEST_RATIO = 0.35;
+// One odd note is not a pattern.
+const LENGTH_SUGGEST_MIN_SHORT = 2;
 // A body phrase shorter than this matches too much to stand as a rule.
 const CONTENT_PHRASE_MIN_CHARS = 8;
 // The most words a rule's ceiling can be set to. Past this it isn't a filter.
@@ -2528,6 +2562,29 @@ function saveSubjectRules() {
   try { localStorage.setItem(nsKey('ic_subject_rules'), JSON.stringify(subjectRules)); } catch(e) {}
 }
 
+function loadSenderLengths() {
+  try { senderLengths = JSON.parse(localStorage.getItem(nsKey('ic_sender_lengths')) || '{}'); }
+  catch(e) { senderLengths = {}; }
+  try { lengthIgnore = JSON.parse(localStorage.getItem(nsKey('ic_length_ignore')) || '{}'); }
+  catch(e) { lengthIgnore = {}; }
+}
+
+// Written behind a timer: a load caches two hundred bodies, and each one would
+// otherwise rewrite the whole blob.
+let senderLengthTimer = null;
+function saveSenderLengths() {
+  if (senderLengthTimer) return;
+  senderLengthTimer = setTimeout(() => {
+    senderLengthTimer = null;
+    try { localStorage.setItem(nsKey('ic_sender_lengths'), JSON.stringify(senderLengths)); } catch(e) {}
+    renderLengthSuggestions();
+  }, 1200);
+}
+
+function saveLengthIgnore() {
+  try { localStorage.setItem(nsKey('ic_length_ignore'), JSON.stringify(lengthIgnore)); } catch(e) {}
+}
+
 function loadContentRules() {
   try { contentRules = JSON.parse(localStorage.getItem(nsKey('ic_content_rules')) || '[]'); }
   catch(e) { contentRules = []; }
@@ -2723,6 +2780,118 @@ function renderBlockSuggestions() {
   }).join('');
 }
 
+// ── Short-mail suggestions ─────────────────────────────────
+// Records one email's length against its sender. Called where the word count
+// is already being computed — when a body is saved for offline reading — so
+// nothing is fetched for the sake of the statistics.
+function recordSenderLength(sender, id, words) {
+  if (!id || !words) return;
+  const { name, addr } = parseSender(sender || '');
+  if (!addr) return;
+  const key = addr.toLowerCase();
+  const s = senderLengths[key] || (senderLengths[key] = { name: name || addr, ids: [], words: [] });
+  if (name && (!s.name || s.name === addr)) s.name = name;
+  const at = s.ids.indexOf(id);
+  if (at >= 0) { s.words[at] = words; }        // re-measured, not a second email
+  else {
+    s.ids.push(id);
+    s.words.push(words);
+    while (s.ids.length > SENDER_LENGTH_SAMPLES) { s.ids.shift(); s.words.shift(); }
+  }
+  saveSenderLengths();
+}
+
+function medianOf(nums) {
+  const a = nums.slice().sort((x, y) => x - y);
+  const mid = a.length >> 1;
+  return a.length % 2 ? a[mid] : Math.round((a[mid - 1] + a[mid]) / 2);
+}
+
+// What a sender's short mail looks like beside their usual, or null where
+// there's nothing worth saying. Usual is the median, not the mean: a handful
+// of stubs would drag a mean down towards themselves and hide the very gap
+// being looked for.
+function senderLengthProfile(key) {
+  const s = senderLengths[key];
+  if (!s || !s.words || s.words.length < LENGTH_SUGGEST_MIN_SAMPLES) return null;
+  const typical = medianOf(s.words);
+  if (typical < LENGTH_SUGGEST_MIN_TYPICAL) return null;
+  const line = Math.floor(typical * LENGTH_SUGGEST_RATIO);
+  const shorts = s.words.filter(w => w <= line);
+  if (shorts.length < LENGTH_SUGGEST_MIN_SHORT) return null;
+  // Half a sender's mail being short means they send two kinds of mail, not
+  // that some of it is an exception — and a median sitting between the two is
+  // no baseline to measure against.
+  if (shorts.length * 2 >= s.words.length) return null;
+  const maxShort = Math.max(...shorts);
+  // The ceiling clears the longest of the short ones without reaching for the
+  // usual: a little headroom, but never past the line that defined them.
+  const cap = Math.max(maxShort + 1, Math.min(Math.round(maxShort * 1.5), line));
+  return {
+    key, addr: key, name: s.name || key,
+    typical, samples: s.words.length, shorts: shorts.length, maxShort, cap
+  };
+}
+
+// Senders worth offering a rule for: enough measured mail to have a usual
+// length, some of it far below that, and nothing already covering them.
+function lengthSuggestions() {
+  return Object.keys(senderLengths)
+    .filter(k => !lengthIgnore[k])
+    .filter(k => !senderRules[k])                                        // a whole-sender rule covers it already
+    .filter(k => !contentRules.some(r => r.addr === k && r.maxWords))    // and so does one they already took
+    .map(senderLengthProfile)
+    .filter(Boolean)
+    .sort((a, b) => (b.shorts - a.shorts) || (b.typical - a.typical));
+}
+
+// Lets the buttons address a suggestion by index, as the subject list does.
+let lengthSuggestionView = [];
+
+function renderLengthSuggestions() {
+  const el = document.getElementById('length-list-el');
+  if (!el) return;
+  const sugg = lengthSuggestions();
+  lengthSuggestionView = sugg;
+  const countEl = document.getElementById('length-count');
+  if (countEl) countEl.textContent = sugg.length;
+  if (!sugg.length) {
+    el.innerHTML = '<div class="suggest-empty">Nothing yet. Once a few of a sender\u2019s emails have been saved for offline reading, any that run far shorter than the rest of their mail will show up here.</div>';
+    return;
+  }
+  el.innerHTML = sugg.map((s, i) => `
+    <div class="suggest-row">
+      <div class="suggest-meta">
+        <div class="suggest-name">${esc(s.name)}</div>
+        <div class="suggest-addr">${esc(s.addr)}</div>
+        <div class="suggest-count">${s.shorts} of their last ${s.samples} ran ${s.maxShort.toLocaleString()} words or less</div>
+        <div class="suggest-pattern">Usually about ${s.typical.toLocaleString()} words \u00b7 rule would cover their mail under ${s.cap.toLocaleString()}</div>
+      </div>
+      <div class="suggest-actions">
+        <button class="suggest-read-btn" title="Mark their short mail read, leaving the rest of it alone" onclick="addLengthRule(${i})">Auto-read</button>
+        <button class="suggest-dismiss-btn" title="Stop suggesting this sender" onclick="dismissLengthSuggestion(${i})">\u00d7</button>
+      </div>
+    </div>`).join('');
+}
+
+// Takes the suggestion up as a sender-scoped body rule.
+async function addLengthRule(i) {
+  const s = lengthSuggestionView[i];
+  if (!s) return;
+  // No ignore written here: the rule itself is what stops the suggestion, so
+  // taking the rule off brings the offer back.
+  await createContentRule({ addr: s.addr, name: s.name, maxWords: s.cap, action: 'read' });
+}
+
+function dismissLengthSuggestion(i) {
+  const s = lengthSuggestionView[i];
+  if (!s) return;
+  lengthIgnore[s.key] = true;
+  saveLengthIgnore();
+  renderLengthSuggestions();
+  toast('Won\u2019t suggest that sender again');
+}
+
 // ── Standing body rules ────────────────────────────────────
 // Phrases are compared with case folded, whitespace collapsed, and the
 // typographic quotes and dashes mail clients substitute folded back to plain
@@ -2746,6 +2915,13 @@ function normContentText(str) {
 function matchesContentRule(rule, email) {
   if (!rule || !email) return false;
   if (!rule.phrase && !rule.maxWords) return false;
+  if (rule.addr) {
+    // A scoped rule needs to know who sent this. Without a sender it doesn't
+    // match — the safe direction, since the ceiling is only safe for the one
+    // sender it was measured against.
+    const { addr } = parseSender(email.sender || '');
+    if (!addr || addr.toLowerCase() !== rule.addr) return false;
+  }
   const text = bodyPlainText(email.bodyText, email.bodyHtml);
   if (!text) return false;
   if (rule.phrase && !normContentText(text).includes(normContentText(rule.phrase))) return false;
@@ -2766,12 +2942,13 @@ function contentRulesInSweepOrder() {
 function contentRuleTitle(rule) {
   if (!rule) return '';
   if (rule.phrase) return `\u201c${esc(rule.phrase)}\u201d in the body`;
-  return 'Any email';
+  return rule.addr ? `Anything from ${esc(rule.name || rule.addr)}` : 'Any email';
 }
 
 function contentRuleDetail(rule) {
   if (!rule) return '';
   const bits = [];
+  if (rule.addr && rule.phrase) bits.push(`from ${esc(rule.addr)}`);
   if (rule.maxWords) bits.push(`under ${rule.maxWords} word${rule.maxWords === 1 ? '' : 's'}`);
   bits.push(rule.action === 'block' ? 'moved to spam' : 'marked read, stays in inbox');
   return bits.join(' \u00b7 ');
@@ -2782,9 +2959,11 @@ function contentRuleDetail(rule) {
 // then trims to the mail that really carries the phrase. A word ceiling has no
 // search operator at all, so it narrows on message size instead.
 function contentRuleQuery(rule) {
-  if (rule.phrase) return '"' + String(rule.phrase).replace(/"/g, ' ').trim() + '"';
-  if (rule.maxWords) return 'smaller:' + Math.max(CONTENT_SIZE_FLOOR, rule.maxWords * CONTENT_BYTES_PER_WORD);
-  return '';
+  const parts = [];
+  if (rule.addr) parts.push('from:' + rule.addr);
+  if (rule.phrase) parts.push('"' + String(rule.phrase).replace(/"/g, ' ').trim() + '"');
+  else if (rule.maxWords) parts.push('smaller:' + Math.max(CONTENT_SIZE_FLOOR, rule.maxWords * CONTENT_BYTES_PER_WORD));
+  return parts.join(' ');
 }
 
 // Pulls one message's body for a rule check. Deliberately separate from
@@ -2800,7 +2979,8 @@ async function fetchBodyForRuleCheck(id) {
     const bodyHtml = html ? b64decode(html.body.data) : '';
     const bodyText = plain ? b64decode(plain.body.data) : '';
     if (!bodyText && !bodyHtml) return null;
-    return { bodyText, bodyHtml };
+    const from = (res.result.payload.headers || []).find(h => h.name === 'From');
+    return { sender: (from && from.value) || '', bodyText, bodyHtml };
   } catch(e) { return null; }
 }
 
@@ -2884,17 +3064,25 @@ async function addContentRule() {
     return;
   }
 
-  const rule = {
-    id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    phrase, maxWords, action, since: Date.now()
-  };
-  contentRules.push(rule);
-  saveContentRules();
   if (phraseEl) phraseEl.value = '';
   if (wordsEl) wordsEl.value = '';
-  renderSenderRules();
+  await createContentRule({ phrase, maxWords, action });
+}
 
-  const label = action === 'block' ? 'Moving to spam' : 'Auto-reading';
+// Saves a rule and sweeps the unread inbox with it, so it applies to the mail
+// that's already sitting there and not only to the next batch. Shared by the
+// hand-written form and the short-mail suggestions.
+async function createContentRule(fields) {
+  const rule = Object.assign({
+    id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    phrase: '', maxWords: 0, action: 'read', since: Date.now()
+  }, fields);
+  contentRules.push(rule);
+  saveContentRules();
+  renderSenderRules();
+  renderLengthSuggestions();
+
+  const label = rule.action === 'block' ? 'Moving to spam' : 'Auto-reading';
   const res = await applyContentRuleRemote(rule);
   if (!res.ok) {
     enqueueOp({ type: 'content-rule', key: rule.id, rule });
@@ -2917,6 +3105,7 @@ function removeContentRule(id) {
   removeOps(o => o.type === 'content-rule' && o.key === id);
   contentRuleMisses.delete(id);
   renderSenderRules();
+  renderLengthSuggestions();   // the sender it covered can be suggested again
   toast('Rule removed');
 }
 
@@ -2956,6 +3145,7 @@ async function setSenderRule(addr, action) {
   ids.forEach(id => selectedIds.delete(id));
   renderBlockSuggestions();
   renderSubjectSuggestions();
+  renderLengthSuggestions();
   renderSenderRules();
   renderEmailList();
   renderSwipeStack();
@@ -2977,6 +3167,7 @@ function removeSenderRule(addr) {
   delete senderRules[key];
   saveSenderRules();
   renderSenderRules();
+  renderLengthSuggestions();   // nothing covers their short mail now
   toast(`Rule removed for ${addr}`);
 }
 
@@ -3269,6 +3460,7 @@ async function cacheKeptEmail(email) {
     const text = (work.bodyText && work.bodyText !== '(could not load body)') ? work.bodyText : '';
     const html = work.bodyHtml || '';
     if (!text && !html) return; // got nothing usable — leave it for a later retry
+    const words = bodyWordCount(text, html);
     await idbPut({
       id: work.id,
       sender: work.sender || '',
@@ -3276,11 +3468,14 @@ async function cacheKeptEmail(email) {
       date: work.date || '',
       bodyText: text,
       bodyHtml: html,
-      words: bodyWordCount(text, html),
+      words,
       paywalled: bodyPaywalled(text, html),
       videoLead: bodyVideoLead(text, html),
       savedAt: Date.now()
     });
+    // Now that this one's been measured, it counts towards what's usual for
+    // the sender — and towards spotting the mail of theirs that isn't.
+    recordSenderLength(work.sender, work.id, words);
   } catch(e) { /* best-effort */ }
 }
 
@@ -3685,9 +3880,11 @@ function loadAccountData() {
   loadKeepReadStats();
   loadSubjectData();
   loadContentRules();
+  loadSenderLengths();
   contentRuleMisses = new Map();   // message ids belong to the account we just left
   renderBlockSuggestions();
   renderSubjectSuggestions();
+  renderLengthSuggestions();
   renderSenderRules();
 }
 
@@ -4745,6 +4942,7 @@ async function doRead(email) {
   recordSenderEvent(email, 'dismiss');
   renderBlockSuggestions();
   renderSubjectSuggestions();
+  renderLengthSuggestions();
   emails = emails.filter(e => e.id !== email.id);
   selectedIds.delete(email.id);
   dropKeptLocally(email.id);
@@ -4758,6 +4956,7 @@ async function doKeep(email) {
   recordSenderEvent(email, 'engage');
   renderBlockSuggestions();
   renderSubjectSuggestions();
+  renderLengthSuggestions();
   // Remember the choice and cache its content (high priority) for offline use.
   keptIds.add(email.id);
   saveKept();
@@ -6019,6 +6218,7 @@ async function openReader(email, opts = {}) {
   recordSenderEvent(email, 'engage');
   renderBlockSuggestions();
   renderSubjectSuggestions();
+  renderLengthSuggestions();
   readerEmail = email;
   if (readerRO) { readerRO.disconnect(); readerRO = null; }
   stopReadAloud({ silent: true }); // stop speaking a previously-open email
@@ -8959,6 +9159,7 @@ async function bulkMarkRead() {
     emails.forEach(e => { if (selectedIds.has(e.id)) recordSenderEvent(e, 'dismiss'); });
     renderBlockSuggestions();
     renderSubjectSuggestions();
+    renderLengthSuggestions();
     selectedIds.forEach(id => forgetKept(id));
     emails = emails.filter(e => !selectedIds.has(e.id));
     swipeQueue = swipeQueue.filter(e => !selectedIds.has(e.id));
