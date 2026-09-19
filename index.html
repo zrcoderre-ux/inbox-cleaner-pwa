@@ -1453,6 +1453,29 @@ body {
   padding: 8px 12px;
 }
 
+/* The form that makes a body rule by hand, rather than from a suggestion */
+.rule-add { display: flex; flex-direction: column; gap: 8px; }
+.rule-add-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rule-add-label { font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.rule-input {
+  height: 36px;
+  border: 0.5px solid var(--border-mid);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 0 12px;
+  outline: none;
+  min-width: 0;
+}
+.rule-input:focus { border-color: var(--red); }
+.rule-input-phrase { width: 100%; }
+.rule-input-num { width: 78px; flex-shrink: 0; }
+.rule-add-row .sort-select { height: 36px; }
+.rule-add-select { flex: 1; min-width: 0; }
+.rule-add-row .suggest-read-btn { height: 36px; }
+
 /* Email list card */
 .list-toolbar {
   display: flex;
@@ -1842,6 +1865,26 @@ body {
           </div>
           <div class="section-card-body">
             <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Applied to new mail every time you load. Remove a rule with × — mail already actioned stays where it is.</p>
+            <div class="rule-group" style="margin-bottom:16px;">
+              <div class="rule-group-title">Add a body rule</div>
+              <p style="font-size:12px;color:var(--text-2);margin:0 0 4px;line-height:1.6;">Matches on what the email says rather than who sent it. Give it a phrase, a word limit, or both — with both, an email has to satisfy the two. A word limit on its own catches every short email, replies from people included, so it's usually worth pairing with a phrase.</p>
+              <div class="rule-add">
+                <input type="text" id="content-phrase-input" class="rule-input rule-input-phrase" placeholder="Phrase in the body, e.g. Keep reading with a 7-day free trial" autocomplete="off" aria-label="Phrase in the email body">
+                <div class="rule-add-row">
+                  <label class="rule-add-label" for="content-words-input">Only when it runs under</label>
+                  <input type="number" id="content-words-input" class="rule-input rule-input-num" min="1" max="5000" step="1" placeholder="any" aria-label="Word limit">
+                  <span class="rule-add-label">words</span>
+                </div>
+                <div class="rule-add-row">
+                  <label class="rule-add-label" for="content-action-select">Then</label>
+                  <select id="content-action-select" class="sort-select rule-add-select" aria-label="What the rule does">
+                    <option value="read">Mark it read</option>
+                    <option value="block">Move it to spam</option>
+                  </select>
+                  <button class="suggest-read-btn" onclick="addContentRule()">Add rule</button>
+                </div>
+              </div>
+            </div>
             <div class="rules-list" id="rules-list-el"></div>
           </div>
         </div>
@@ -1997,7 +2040,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v129'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v130'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2050,6 +2093,13 @@ let subjectIgnore = {};
 // with a subject rule is by definition one whose other mail you do read.
 // Shape: { [addr|pattern]: { addr, name, pattern, sample, since } }
 let subjectRules = {};
+// Standing body rules, written by hand rather than suggested. These match on
+// what an email says instead of who sent it: a phrase somewhere in the body, a
+// ceiling on how many words it runs to, or both — both means both have to hold.
+// Unlike the sender and subject rules these can spam as well as mark read,
+// because a phrase like a paywall pitch identifies the mail itself.
+// Shape: [{ id, phrase, maxWords, action, since }]
+let contentRules = [];
 // How many no-open "mark read" actions before a never-engaged sender is
 // suggested.
 const BLOCK_SUGGEST_THRESHOLD = 3;
@@ -2066,6 +2116,21 @@ const FUZZY_SUBJECT_THRESHOLD = 4;
 // Consecutive no-open "mark read" actions that trigger a suggestion even for a
 // sender you've previously opened or kept (the streak resets on any engagement).
 const BLOCK_SUGGEST_STREAK = 10;
+// A body phrase shorter than this matches too much to stand as a rule.
+const CONTENT_PHRASE_MIN_CHARS = 8;
+// The most words a rule's ceiling can be set to. Past this it isn't a filter.
+const CONTENT_MAX_WORDS = 5000;
+// How many candidates one sweep of a body rule will pull bodies for. Each is a
+// full message fetch, so the sweep is bounded rather than exhaustive — whatever
+// it misses is caught by the next load.
+const CONTENT_SWEEP_MAX = 60;
+// Bodies are fetched a few at a time, as elsewhere, to stay under rate limits.
+const CONTENT_SWEEP_CONCURRENCY = 5;
+// Gmail can search text but not word counts, so a word-limit rule narrows its
+// candidates by message size instead. Generous per word, with a floor, because
+// the bytes are mostly markup: the real count is checked locally afterwards.
+const CONTENT_BYTES_PER_WORD = 800;
+const CONTENT_SIZE_FLOOR = 150000;
 let selectedIds = new Set();
 let activeTab = 'swipe';
 // The landing tab is decided once, on the first load of a session.
@@ -2459,6 +2524,16 @@ function saveSubjectRules() {
   try { localStorage.setItem(nsKey('ic_subject_rules'), JSON.stringify(subjectRules)); } catch(e) {}
 }
 
+function loadContentRules() {
+  try { contentRules = JSON.parse(localStorage.getItem(nsKey('ic_content_rules')) || '[]'); }
+  catch(e) { contentRules = []; }
+  if (!Array.isArray(contentRules)) contentRules = [];
+}
+
+function saveContentRules() {
+  try { localStorage.setItem(nsKey('ic_content_rules'), JSON.stringify(contentRules)); } catch(e) {}
+}
+
 // Record an interaction with a sender. kind === 'dismiss' means the user marked
 // the mail read without opening it; 'engage' means they opened or kept it.
 function recordSenderEvent(email, kind) {
@@ -2644,6 +2719,218 @@ function renderBlockSuggestions() {
   }).join('');
 }
 
+// ── Standing body rules ────────────────────────────────────
+// Phrases are compared with case folded, whitespace collapsed, and the
+// typographic quotes and dashes mail clients substitute folded back to plain
+// ASCII — so a phrase pasted out of an email still matches one typed by hand,
+// and "7-day" matches "7–day".
+function normContentText(str) {
+  return String(str || '')
+    .replace(/[\u2018\u2019\u201a\u201b\u2032]/g, "'")
+    .replace(/[\u201c\u201d\u201e\u2033]/g, '"')
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/[\u00a0\u2007\u202f]/g, ' ')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// True when a rule covers this email. Needs a body: an email whose body hasn't
+// been loaded never matches, so callers fetch one first rather than guessing
+// from the snippet — a snippet is truncated, and a truncated body would satisfy
+// a word ceiling that the whole email doesn't.
+function matchesContentRule(rule, email) {
+  if (!rule || !email) return false;
+  if (!rule.phrase && !rule.maxWords) return false;
+  const text = bodyPlainText(email.bodyText, email.bodyHtml);
+  if (!text) return false;
+  if (rule.phrase && !normContentText(text).includes(normContentText(rule.phrase))) return false;
+  if (rule.maxWords && bodyWordCount(email.bodyText, email.bodyHtml) > rule.maxWords) return false;
+  return true;
+}
+
+// Rules sweep spam-first, so that where two of them cover the same email the
+// spam one decides — the same precedence the sender rules have. Each sweep
+// asks for unread mail, so whichever runs first takes the message off the
+// table for the rest.
+function contentRulesInSweepOrder() {
+  return contentRules.filter(r => r.action === 'block').concat(contentRules.filter(r => r.action !== 'block'));
+}
+
+// How a rule reads in the rules list, over the row's two lines. The phrase gets
+// the first to itself: it's the long part, and both lines truncate.
+function contentRuleTitle(rule) {
+  if (!rule) return '';
+  if (rule.phrase) return `\u201c${esc(rule.phrase)}\u201d in the body`;
+  return 'Any email';
+}
+
+function contentRuleDetail(rule) {
+  if (!rule) return '';
+  const bits = [];
+  if (rule.maxWords) bits.push(`under ${rule.maxWords} word${rule.maxWords === 1 ? '' : 's'}`);
+  bits.push(rule.action === 'block' ? 'moved to spam' : 'marked read, stays in inbox');
+  return bits.join(' \u00b7 ');
+}
+
+// The server-side narrowing for a rule. A phrase becomes a quoted full-text
+// search, which Gmail tokenises — so the result is a superset the local check
+// then trims to the mail that really carries the phrase. A word ceiling has no
+// search operator at all, so it narrows on message size instead.
+function contentRuleQuery(rule) {
+  if (rule.phrase) return '"' + String(rule.phrase).replace(/"/g, ' ').trim() + '"';
+  if (rule.maxWords) return 'smaller:' + Math.max(CONTENT_SIZE_FLOOR, rule.maxWords * CONTENT_BYTES_PER_WORD);
+  return '';
+}
+
+// Pulls one message's body for a rule check. Deliberately separate from
+// fetchEmailBodyRich: nothing is written back to the shared email objects or the
+// offline cache, because the rules only need the words. Null when there's no
+// body to judge — a failed fetch must never look like a match.
+async function fetchBodyForRuleCheck(id) {
+  try {
+    const res = await gapi.client.gmail.users.messages.get({ userId: 'me', id, format: 'full' });
+    const parts = getAllParts(res.result.payload);
+    const html = parts.find(p => p.mimeType === 'text/html' && p.body && p.body.data);
+    const plain = parts.find(p => p.mimeType === 'text/plain' && p.body && p.body.data);
+    const bodyHtml = html ? b64decode(html.body.data) : '';
+    const bodyText = plain ? b64decode(plain.body.data) : '';
+    if (!bodyText && !bodyHtml) return null;
+    return { bodyText, bodyHtml };
+  } catch(e) { return null; }
+}
+
+// Messages a rule has already looked at and left alone, keyed by rule. A rule
+// that matches nothing still has to read every candidate's body to find that
+// out, and the candidates barely change between one load and the auto-refresh a
+// few minutes later — so a miss is remembered for the session rather than paid
+// for again. Rules are only ever added and removed, never edited, so a miss
+// stays a miss. Not persisted: it's a saving, not state.
+let contentRuleMisses = new Map();
+
+// Narrows a candidate list to the messages the rule actually matches, by body.
+async function filterIdsByContentRule(ids, rule) {
+  let missed = contentRuleMisses.get(rule.id);
+  if (!missed) { missed = new Set(); contentRuleMisses.set(rule.id, missed); }
+  const todo = ids.filter(id => !missed.has(id));
+  const hits = [];
+  for (let i = 0; i < todo.length; i += CONTENT_SWEEP_CONCURRENCY) {
+    const chunk = todo.slice(i, i + CONTENT_SWEEP_CONCURRENCY);
+    const bodies = await Promise.all(chunk.map(id => fetchBodyForRuleCheck(id)));
+    chunk.forEach((id, j) => {
+      if (!bodies[j]) return;             // no body loaded — try again next time
+      if (matchesContentRule(rule, bodies[j])) hits.push(id);
+      else missed.add(id);
+    });
+  }
+  return hits;
+}
+
+// Applies one body rule across the unread inbox. Returns { ok, ids }: ok is
+// false when the sweep couldn't run or a write failed, so the caller can queue
+// it for reconnect; ids are the messages actioned, for the caller to drop from
+// what's on screen.
+async function applyContentRuleRemote(rule) {
+  if (!rule || (!rule.phrase && !rule.maxWords)) return { ok: true, ids: [] };
+  if (!onlineReady()) return { ok: false, ids: [] };
+  try {
+    const q = ['is:unread', 'in:inbox', contentRuleQuery(rule)].filter(Boolean).join(' ');
+    const listRes = await gapi.client.gmail.users.messages.list({ userId: 'me', q, maxResults: CONTENT_SWEEP_MAX });
+    const ids = (listRes.result.messages || []).slice(0, CONTENT_SWEEP_MAX).map(m => m.id);
+    if (!ids.length) return { ok: true, ids: [] };
+    const matched = await filterIdsByContentRule(ids, rule);
+    if (!matched.length) return { ok: true, ids: [] };
+    const ok = rule.action === 'block'
+      ? await modifyIdsInChunks(matched, { addLabelIds: ['SPAM'], removeLabelIds: ['UNREAD', 'INBOX'] })
+      : await modifyIdsInChunks(matched, { removeLabelIds: ['UNREAD'] });
+    return { ok, ids: ok ? matched : [] };
+  } catch(e) { return { ok: false, ids: [] }; }
+}
+
+// Takes messages a rule has just actioned out of the deck and the bulk list.
+function dropEmailsByIds(ids) {
+  if (!ids || !ids.length) return;
+  const gone = new Set(ids);
+  emails = emails.filter(e => !gone.has(e.id));
+  swipeQueue = swipeQueue.filter(e => !gone.has(e.id));
+  ids.forEach(id => selectedIds.delete(id));
+  renderEmailList();
+  renderSwipeStack();
+  scheduleDeckSnapshot();
+}
+
+// Reads the add-rule form, saves the rule, and sweeps the unread inbox with it
+// so it applies to the mail that's already there, not just the next batch.
+async function addContentRule() {
+  const phraseEl = document.getElementById('content-phrase-input');
+  const wordsEl = document.getElementById('content-words-input');
+  const actionEl = document.getElementById('content-action-select');
+  const phrase = phraseEl ? phraseEl.value.trim() : '';
+  const rawWords = wordsEl ? wordsEl.value.trim() : '';
+  const maxWords = rawWords ? Math.floor(Number(rawWords)) : 0;
+  const action = actionEl && actionEl.value === 'block' ? 'block' : 'read';
+
+  if (!phrase && !rawWords) { toast('Give the rule a phrase, a word limit, or both'); return; }
+  if (phrase && normContentText(phrase).length < CONTENT_PHRASE_MIN_CHARS) {
+    toast(`A phrase needs at least ${CONTENT_PHRASE_MIN_CHARS} characters`);
+    return;
+  }
+  if (rawWords && (!Number.isFinite(maxWords) || maxWords < 1 || maxWords > CONTENT_MAX_WORDS)) {
+    toast(`A word limit has to be between 1 and ${CONTENT_MAX_WORDS}`);
+    return;
+  }
+
+  const rule = {
+    id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    phrase, maxWords, action, since: Date.now()
+  };
+  contentRules.push(rule);
+  saveContentRules();
+  if (phraseEl) phraseEl.value = '';
+  if (wordsEl) wordsEl.value = '';
+  renderSenderRules();
+
+  const label = action === 'block' ? 'Moving to spam' : 'Auto-reading';
+  const res = await applyContentRuleRemote(rule);
+  if (!res.ok) {
+    enqueueOp({ type: 'content-rule', key: rule.id, rule });
+    toast('Rule saved — will apply when you\u2019re back online');
+    return;
+  }
+  dropEmailsByIds(res.ids);
+  toast(res.ids.length
+    ? `${label} ${res.ids.length} email${res.ids.length === 1 ? '' : 's'}`
+    : 'Rule saved — nothing in your inbox matches yet');
+}
+
+// Drops a rule. Mail it already actioned stays as it is.
+function removeContentRule(id) {
+  const before = contentRules.length;
+  contentRules = contentRules.filter(r => r.id !== id);
+  if (contentRules.length === before) return;
+  saveContentRules();
+  // A sweep still queued for it would apply a rule that no longer exists.
+  removeOps(o => o.type === 'content-rule' && o.key === id);
+  contentRuleMisses.delete(id);
+  renderSenderRules();
+  toast('Rule removed');
+}
+
+// Runs every body rule over the unread inbox and reports the messages actioned,
+// so the caller can drop them from the batch it just loaded. The rules match on
+// the body, which that batch's metadata doesn't carry, so the matching happens
+// against Gmail rather than by pulling two hundred bodies on every load.
+async function enforceContentRules(list) {
+  if (!contentRules.length) return list;
+  const done = new Set();
+  for (const rule of contentRulesInSweepOrder()) {
+    const res = await applyContentRuleRemote(rule);
+    res.ids.forEach(id => done.add(id));
+  }
+  if (!done.size) return list;
+  return list.filter(e => !done.has(e.id));
+}
+
 // ── Standing sender rules (two categories) ─────────────────
 // Adds (or replaces) a rule for a sender and applies it to the mail that's
 // already loaded. `action` is 'block' (to spam) or 'read' (read, stays inbox).
@@ -2715,7 +3002,7 @@ function renderSenderRules() {
   ];
   const subjRows = subjectRuleEntries();
   subjectRuleView = subjRows;
-  const total = ruleEntries('block').length + ruleEntries('read').length + subjRows.length;
+  const total = ruleEntries('block').length + ruleEntries('read').length + subjRows.length + contentRules.length;
   const countEl = document.getElementById('rules-count');
   if (countEl) countEl.textContent = total;
 
@@ -2752,10 +3039,27 @@ function renderSenderRules() {
       </div>`).join('')
     : '<div class="suggest-empty">No subject rules yet.</div>';
 
+  // Body rules are the only hand-written ones, and the only ones that can carry
+  // either action, so each row says which it does.
+  const bodyBody = contentRules.length
+    ? contentRules.map(r => `
+      <div class="rule-row">
+        <div class="suggest-meta">
+          <div class="suggest-name">${contentRuleTitle(r)}</div>
+          <div class="suggest-addr">${contentRuleDetail(r)}</div>
+        </div>
+        <button class="suggest-dismiss-btn" title="Remove this rule" onclick="removeContentRule('${esc(r.id)}')">×</button>
+      </div>`).join('')
+    : '<div class="suggest-empty">No body rules yet. Add one above.</div>';
+
   el.innerHTML = senderGroups + `
     <div class="rule-group">
       <div class="rule-group-title">Auto marked read by subject — stays in inbox <span class="pill">${subjRows.length}</span></div>
       ${subjBody}
+    </div>
+    <div class="rule-group">
+      <div class="rule-group-title">By what the email says <span class="pill">${contentRules.length}</span></div>
+      ${bodyBody}
     </div>`;
 }
 
@@ -3279,6 +3583,7 @@ async function flushOutbox() {
       else if (op.type === 'block') ok = await blockSenderRemote(op.addr);
       else if (op.type === 'autoread') ok = await autoReadSenderRemote(op.addr);
       else if (op.type === 'autoread-subject') ok = await autoReadSubjectRemote(op.rule || { addr: op.addr, pattern: op.pattern });
+      else if (op.type === 'content-rule') ok = (await applyContentRuleRemote(op.rule)).ok;
       else ok = true; // unknown op — drop it
       if (!ok) remaining.push(op);
     }
@@ -3375,6 +3680,8 @@ function loadAccountData() {
   loadSenderRules();
   loadKeepReadStats();
   loadSubjectData();
+  loadContentRules();
+  contentRuleMisses = new Map();   // message ids belong to the account we just left
   renderBlockSuggestions();
   renderSubjectSuggestions();
   renderSenderRules();
@@ -3917,6 +4224,9 @@ async function fetchEmails() {
     // Apply the standing block / auto-read rules before anything is shown, so
     // mail from those senders never reaches the deck.
     emails = await enforceSenderRules(emails);
+    // Then the body rules, which need each candidate's body and so match
+    // against Gmail rather than the metadata this batch was built from.
+    emails = await enforceContentRules(emails);
 
     // Hide emails the user previously kept unread so they don't have to
     // re-triage them. They stay in `emails` (still visible in the bulk list
