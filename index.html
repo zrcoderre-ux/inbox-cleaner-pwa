@@ -2056,7 +2056,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v135'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v136'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -8026,6 +8026,55 @@ function ttsKeepAlive(on) {
 }
 
 // ── Transport ──────────────────────────────────────────────
+// Whether the element is holding the passage the session is on, in a state it
+// could be started from. Three things make it not, and all three arrive by way
+// of the app having been in the background:
+//
+//   — it is holding an earlier passage. When the fetch for a passage fails the
+//     session stops where it stands and waits to be played again — and a
+//     backgrounded page failing to get a request away is the ordinary reason
+//     for that, so this is the state a listener comes back to. The element is
+//     still holding the passage before. Starting it replays something already
+//     heard and then stops for good, because the event that would move things
+//     on is ignored as belonging to a passage the session has left behind.
+//   — it has nothing cued at all.
+//   — its source can no longer be decoded. A phone that froze the page can
+//     reclaim what sat behind the blob; the element keeps its src, reports no
+//     source, and refuses play().
+//
+// What each of them needs is the passage cued again, not play().
+function ttsAudioHasCurrent(s) {
+  const a = ttsAudio;
+  if (!a || !a.src || a._chunk !== s.i || a.error) return false;
+  return a.readyState > 0 && a.networkState !== a.NETWORK_NO_SOURCE;
+}
+
+// How far into the passage the sound had got, as a fraction of it, so picking
+// it up again doesn't start the passage over. Nought — which ttsPlayIndex reads
+// as "from the beginning" — wherever there is no position worth keeping.
+function ttsResumeFraction(s) {
+  const a = ttsAudio;
+  if (!a || a._chunk !== s.i || a.ended) return 0;
+  const d = ttsRealDuration(s, s.i);
+  const at = a.currentTime;
+  if (!isFinite(d) || !(d > 0) || !isFinite(at) || !(at > 0)) return 0;
+  return Math.max(at / d - 0.01, 0);
+}
+
+// Start the sound from wherever the element is now. The one place that calls
+// play() on the cloud path, because every caller needs the same two things: not
+// to start an element that isn't holding this passage, and not to drop a
+// refusal. A refused play() used to be swallowed, which leaves the button
+// reading Pause over silence with nothing to press that helps; asking for the
+// passage again replaces the source the browser wouldn't start.
+function ttsStartAudio(s) {
+  if (!ttsAudioHasCurrent(s)) { ttsPlayIndex(s.i, { resumeFrac: ttsResumeFraction(s) }); return; }
+  const p = ttsAudio.play();
+  if (p && p.catch) p.catch(() => {
+    if (ttsSession === s && s.playing) ttsPlayIndex(s.i, { resumeFrac: ttsResumeFraction(s) });
+  });
+}
+
 function ttsTogglePlay(force) {
   const s = ttsSession;
   if (!s) return;
@@ -8038,12 +8087,8 @@ function ttsTogglePlay(force) {
     else if (!s.deviceSpoke) ttsSpeakOnDevice(s.chunks[s.i]);
     else { try { speechSynthesis.resume(); } catch(e) {} }
   } else if (ttsAudio) {
-    if (s.playing) {
-      // Nothing is cued when the device voice was waiting, or when the fetch
-      // for this chunk never ran — ask for it rather than playing silence.
-      if (!ttsAudio.src) { ttsPlayIndex(s.i); return; }
-      const p = ttsAudio.play(); if (p && p.catch) p.catch(() => {});
-    } else ttsAudio.pause();
+    if (s.playing) ttsStartAudio(s);
+    else ttsAudio.pause();
   }
   try { navigator.mediaSession.playbackState = s.playing ? 'playing' : 'paused'; } catch(e) {}
   ttsUpdateUI();
@@ -8154,7 +8199,7 @@ function ttsSeekToChar(s, pos) {
   if (chunk === s.i && s.mode === 'cloud' && ttsAudio && isFinite(ttsAudio.duration) && ttsAudio.duration) {
     const d = ttsRealDuration(s, s.i) || ttsAudio.duration;
     ttsAudio.currentTime = Math.min(frac * d, Math.max(ttsAudio.duration - 0.05, 0));
-    const p = ttsAudio.play(); if (p && p.catch) p.catch(() => {});
+    ttsStartAudio(s);
     ttsUpdateUI();
     return;
   }
@@ -8172,7 +8217,7 @@ function ttsSkipSeconds(delta) {
     if (t >= 0 && t < ttsAudio.duration) {
       ttsAudio.currentTime = t;
       s.scrollPos = null;
-      if (s.playing) { const p = ttsAudio.play(); if (p && p.catch) p.catch(() => {}); }
+      if (s.playing) ttsStartAudio(s);
       ttsUpdateUI();
       return;
     }
