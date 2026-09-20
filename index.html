@@ -2056,7 +2056,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v136'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v137'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -8576,15 +8576,32 @@ function ttsAnchorFor(s, t, key, text) {
   return null;
 }
 
-// Every frame, not every quarter second, and easing towards the voice's
-// position rather than snapping to it. The audio clock is continuous, so the
-// target is too; what made this jump was sampling it coarsely and writing it
-// to a whole-pixel scrollTop. Now it glides the way auto-scroll does.
-const TTS_SCROLL_FOLLOW = 0.08;   // how hard it chases; lower is gentler
+// Every frame, and the page carried along at a speed rather than dragged
+// towards a mark. The anchors the voice is followed by are discrete — each new
+// sentence drops the target a line further down — so easing the position
+// straight at them gave a lurch per sentence and a stall in between. What
+// makes auto-scroll smooth is that it advances a position at a velocity, so
+// this does the same: the gap to the voice is read as the speed to close it
+// at, and the speed itself is what gets eased. The page then glides at
+// reading pace and changes pace gradually, the way auto-scroll does.
+const TTS_FOLLOW_LEAD = 1.0;      // seconds the speed would take to close the gap
+const TTS_FOLLOW_TAU = 0.3;       // how quickly the speed itself may change
+const TTS_FOLLOW_MAX = 240;       // px/sec ceiling while following
+const TTS_RESYNC_LEAD = 0.45;     // catching back up is brisker
+const TTS_RESYNC_TAU = 0.12;
+const TTS_RESYNC_MAX = 2400;
 const TTS_READ_LINE = 0.3;        // where the line being read sits in the view
-const TTS_RESYNC_FOLLOW = 0.22;   // catching back up is brisker than following
 
-function ttsSyncScroll() {
+// Not moving this frame: let the speed fall to nought and forget the last
+// frame's clock, so whatever resumes ramps up from rest instead of spending
+// the time it stood still in one jump.
+function ttsHoldScroll(s) {
+  if (!s) return;
+  s.scrollVel = 0;
+  s.lastFrame = 0;
+}
+
+function ttsSyncScroll(ts) {
   const s = ttsSession;
   if (!s) { ttsScrollRaf = null; return; }
   ttsScrollRaf = requestAnimationFrame(ttsSyncScroll);
@@ -8601,14 +8618,16 @@ function ttsSyncScroll() {
   // hand, or the mail was HTML the reader can't reach into. Which looked, from
   // the outside, like no bar at all.
   ttsPaintTrack();
-  if (!s.playing || ttsDrag) return;
-  if (s.userScrolled) return;
+  if (!s.playing || ttsDrag) { ttsHoldScroll(s); return; }
+  if (s.userScrolled) { ttsHoldScroll(s); return; }
   const t = readerScrollTarget();
-  if (!t) return;
+  if (!t) { ttsHoldScroll(s); return; }
   const span = t.scroller.scrollHeight - t.scroller.clientHeight;
-  if (span <= 4) return;
+  if (span <= 4) { ttsHoldScroll(s); return; }
   // Moved away from where we put it — the reader is scrolling, so stop pushing.
-  if (s.lastTop != null && Math.abs(t.scroller.scrollTop - s.lastTop) > 8) { ttsManualScroll(); return; }
+  if (s.lastTop != null && Math.abs(t.scroller.scrollTop - s.lastTop) > 8) {
+    ttsManualScroll(); ttsHoldScroll(s); return;
+  }
 
   const within = ttsChunkProgress(s);
   const pos = s.starts[s.i] + within * s.chunks[s.i].length;
@@ -8638,24 +8657,54 @@ function ttsSyncScroll() {
     target = span * Math.min(done * s.coverage, 1);
   }
   target = Math.max(0, Math.min(target, span));
-  if (s.scrollPos == null) s.scrollPos = t.scroller.scrollTop;
-  if (s.resyncing) {
-    // Coming back to the voice, which may be above as well as below wherever
-    // the reader wandered to — the one time the page is allowed to move up.
-    s.scrollPos += (target - s.scrollPos) * TTS_RESYNC_FOLLOW;
-    if (Math.abs(target - s.scrollPos) < 1.5) { s.scrollPos = target; s.resyncing = false; }
-  } else {
-    // Never behind where the reader already is, and never backwards: a voice
-    // that has just moved on shouldn't drag the page up to meet it.
-    if (s.scrollPos < t.scroller.scrollTop) s.scrollPos = t.scroller.scrollTop;
-    if (target > s.scrollPos) s.scrollPos += (target - s.scrollPos) * TTS_SCROLL_FOLLOW;
-  }
+  if (s.scrollPos == null) { s.scrollPos = t.scroller.scrollTop; s.scrollVel = 0; }
 
+  // Elapsed time drives the movement, so a dropped frame doesn't change the
+  // pace — and, capped the way auto-scroll caps it, a long one doesn't lurch.
+  const now = (typeof ts === 'number') ? ts
+    : ((window.performance && performance.now) ? performance.now() : Date.now());
+  if (!s.lastFrame) s.lastFrame = now;
+  let dt = (now - s.lastFrame) / 1000;
+  s.lastFrame = now;
+  if (dt > 0.048) dt = 0.048;
+  if (dt <= 0) return;
+
+  if (!s.resyncing) {
+    // Never behind where the reader already is: a page they nudged forward
+    // stays forward, and the follow picks up from there.
+    if (s.scrollPos < t.scroller.scrollTop) { s.scrollPos = t.scroller.scrollTop; s.scrollVel = 0; }
+  }
+  const lead = s.resyncing ? TTS_RESYNC_LEAD : TTS_FOLLOW_LEAD;
+  const tau  = s.resyncing ? TTS_RESYNC_TAU : TTS_FOLLOW_TAU;
+  const cap  = s.resyncing ? TTS_RESYNC_MAX : TTS_FOLLOW_MAX;
+  // How far ahead the voice is, read as how fast to travel. Only a resync may
+  // come out negative — a voice that has just moved on shouldn't drag the page
+  // up to meet it.
+  let want = (target - s.scrollPos) / lead;
+  if (!s.resyncing && want < 0) want = 0;
+  want = Math.max(-cap, Math.min(want, cap));
+  // Easing the speed rather than the position is what turns the step at each
+  // new sentence into a change of pace instead of a jolt. Exponential in dt,
+  // so the smoothing is the same on a 60Hz screen and a 120Hz one.
+  const vel = s.scrollVel || 0;
+  s.scrollVel = vel + (want - vel) * (1 - Math.exp(-dt / tau));
+  s.scrollPos += s.scrollVel * dt;
+  if (s.resyncing && Math.abs(target - s.scrollPos) < 1.5) {
+    s.scrollPos = target; s.scrollVel = 0; s.resyncing = false;
+  }
+  s.scrollPos = Math.max(0, Math.min(s.scrollPos, span));
+
+  // Whole pixels to scrollTop, the leftover fraction to a GPU transform —
+  // the same trick auto-scroll uses, since scrollTop alone steps a pixel at a
+  // time and reading pace is slower than that.
   const whole = Math.floor(s.scrollPos);
   const frac = s.scrollPos - whole;
   t.scroller.scrollTop = whole;
   s.lastTop = t.scroller.scrollTop;
-  s.fracEl = s.fracEl || readerFracEl(t.scroller, t.doc);
+  if (!s.fracEl) {
+    s.fracEl = readerFracEl(t.scroller, t.doc);
+    if (s.fracEl) { try { s.fracEl.style.willChange = 'transform'; } catch(e) {} }
+  }
   if (s.fracEl) { try { s.fracEl.style.transform = 'translate3d(0,' + (-frac) + 'px,0)'; } catch(e) {} }
 }
 
@@ -8687,6 +8736,8 @@ function ttsResync() {
   // Start the glide from where the page actually is, not from wherever the
   // follower had last put it.
   if (t) s.scrollPos = t.scroller.scrollTop;
+  s.scrollVel = 0;
+  s.lastFrame = 0;
   s.userScrolled = false;
   s.resyncing = true;
   s.lastTop = null;
