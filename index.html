@@ -885,6 +885,19 @@ body {
   transition: opacity 0.12s ease;
 }
 .fn-popup.open { opacity: 1; }
+.fn-close {
+  float: right;
+  width: 28px; height: 28px;
+  margin: -6px -8px -4px 8px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.fn-close:active { background: var(--border-mid); }
 
 .reader-autoscroll {
   position: absolute;
@@ -2056,7 +2069,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v137'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v138'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5642,6 +5655,7 @@ function linkFootnotes(root, frameEl) {
       span.dataset.note = r.text;
       span.textContent = tail.nodeValue;
       tail.parentNode.replaceChild(span, tail);
+      if (frameEl) fnAddToggle(doc, span);
       linked++;
     } catch(e) {}
   }
@@ -5666,6 +5680,7 @@ function linkFootnotes(root, frameEl) {
       sup.setAttribute('tabindex', '0');
       sup.setAttribute('aria-label', 'Footnote: ' + def.text);
       sup.dataset.note = def.text;
+      if (frameEl) fnAddToggle(doc, sup);
       linked++;
     });
   }
@@ -5674,9 +5689,41 @@ function linkFootnotes(root, frameEl) {
   return linked;
 }
 
+// Inside the reader's iframe none of the listeners below ever run on an
+// iPhone: WebKit won't call an event listener, whoever added it, on a page
+// sandboxed without scripts — which the email is, and must stay. A label round
+// a hidden checkbox needs no script at all: the tap ticks the box natively, and
+// watchFrameFootnotes() notices. Where the listeners do run, the click handler
+// cancels the tap first, so the box is never ticked and the note never opens
+// twice.
+function fnAddToggle(doc, ref) {
+  // The label goes innermost, so a tap lands on it rather than on a link the
+  // marker sits in or wraps.
+  const host = ref.querySelector('a') || ref;
+  const label = doc.createElement('label');
+  const box = doc.createElement('input');
+  box.type = 'checkbox';
+  box.className = 'fn-cb';
+  box.tabIndex = -1;
+  box.setAttribute('aria-hidden', 'true');
+  box.style.cssText = 'display:none !important;';
+  label.appendChild(box);
+  while (host.firstChild) label.appendChild(host.firstChild);
+  host.appendChild(label);
+  // A link that is only the marker is the newsletter's own jump to the note at
+  // the foot of the email. The note now comes to the marker, and with no
+  // listener to cancel it on iOS the link would open the app in a new tab.
+  const a = ref.closest('a') || ref.querySelector('a');
+  if (a && a.hasAttribute('href') && (a.textContent || '').trim() === (ref.textContent || '').trim()) {
+    a.removeAttribute('href');
+  }
+}
+
 function attachFootnoteHandlers(root, doc, frameEl) {
-  if (root._fnBound) return;
-  root._fnBound = true;
+  // Once per document: the plain-text reader's is the page itself, and a
+  // second set of listeners would open a note and then close it again.
+  if (doc._fnBound) return;
+  doc._fnBound = true;
   const refOf = ev => (ev.target && ev.target.closest) ? ev.target.closest('.fn-ref') : null;
 
   doc.addEventListener('click', ev => {
@@ -5717,18 +5764,42 @@ function attachFootnoteHandlers(root, doc, frameEl) {
 }
 
 // ── Footnote popup ─────────────────────────────────────────
-let fnPopup = null, fnPinned = false, fnHideTimer = null, fnShownAt = 0;
+let fnPopup = null, fnPinned = false, fnHideTimer = null, fnShownAt = 0, fnFrameWatch = null;
 
 function showFootnote(ref, frameEl, pinned) {
   clearTimeout(fnHideTimer);
-  holdAutoScrollForFootnote();
-  if (fnPopup && fnPopup._ref === ref) { if (pinned) fnPinned = true; return; }
+  if (fnPopup && fnPopup._ref === ref) {
+    // Tapping the marker of a note already pinned open puts it away again.
+    if (pinned && fnPinned) { hideFootnote(true); return; }
+    if (pinned) { fnPinned = true; fnHoldVoiceScroll(); }
+    return;
+  }
+  // Close the old note before holding for the new one: closing releases the
+  // hold, which would otherwise set auto-scroll going under the new note.
   hideFootnote(true);
+  holdAutoScrollForFootnote();
+  if (pinned) fnHoldVoiceScroll();
 
   const pop = document.createElement('div');
   pop.className = 'fn-popup';
   pop.textContent = ref.dataset.note || '';
+  // A finger has no hover-away or Escape, and inside the email a tap elsewhere
+  // can't be heard on iOS, so the note carries its own way out.
+  if (!IS_FINE_POINTER) {
+    const x = document.createElement('button');
+    x.className = 'fn-close';
+    x.setAttribute('aria-label', 'Close note');
+    x.textContent = '×';
+    x.addEventListener('click', () => hideFootnote(true));
+    pop.insertBefore(x, pop.firstChild);
+  }
   pop._ref = ref;
+  pop._frame = frameEl || null;
+  // Where the email sat when the note opened; watchFrameFootnotes() closes the
+  // note once the page is scrolled away from it.
+  if (frameEl) {
+    try { const d = frameEl.contentDocument; pop._top0 = (d.scrollingElement || d.documentElement).scrollTop; } catch(e) {}
+  }
   document.body.appendChild(pop);
   fnPopup = pop;
   fnPinned = !!pinned;
@@ -5774,6 +5845,39 @@ function hideFootnote(force) {
   fnPopup = null;
   fnPinned = false;
   releaseAutoScrollForFootnote();
+}
+
+// With read-aloud playing, opening a note takes the page off the voice the way
+// a hand on the page does: the audio carries on, the page stays under the note,
+// and "Back to the voice" is what brings it back — closing the note doesn't.
+function fnHoldVoiceScroll() {
+  if (ttsSession) ttsManualScroll();
+}
+
+// What the iframe's own listeners would do, for the browsers that never run
+// them (see fnAddToggle): open the note whose box a tap has ticked, and close
+// an open one once the email is scrolled away from it.
+function watchFrameFootnotes(iframe, doc, scroller) {
+  unwatchFrameFootnotes();
+  const boxes = Array.from(doc.querySelectorAll('.fn-cb'));
+  if (!boxes.length) return;
+  fnFrameWatch = setInterval(() => {
+    if (!iframe.isConnected) { unwatchFrameFootnotes(); return; }
+    for (const box of boxes) {
+      if (!box.checked) continue;
+      box.checked = false; // untick at once, so the next tap ticks it afresh
+      const ref = box.closest('.fn-ref');
+      if (ref) showFootnote(ref, iframe, true);
+    }
+    if (fnPopup && fnPopup._frame === iframe && fnPopup._top0 != null &&
+        Date.now() - fnShownAt > 350 && Math.abs(scroller.scrollTop - fnPopup._top0) > 12) {
+      hideFootnote(true);
+    }
+  }, 100);
+}
+
+function unwatchFrameFootnotes() {
+  if (fnFrameWatch) { clearInterval(fnFrameWatch); fnFrameWatch = null; }
 }
 
 // ── Auto-scroll while reading ──────────────────────────────
@@ -6302,6 +6406,8 @@ async function openReader(email, opts = {}) {
   ttsShowBar(false);
   updateListenButton();
   stopAutoScrollEngine(); // cancel any scroll from a previously-open email
+  hideFootnote(true);
+  unwatchFrameFootnotes();
   const asPill = document.getElementById('reader-autoscroll');
   if (asPill) asPill.style.display = 'none';
   const withFooter = !!opts.markRead;
@@ -6352,6 +6458,7 @@ async function openReader(email, opts = {}) {
   blockquote{border-left:3px solid #dadce0;margin:0;padding-left:12px;color:#5f6368;}
   .fn-ref{color:#1a73e8;cursor:pointer;border-bottom:1px dotted currentColor;border-radius:2px;padding:0 1px;}
   .fn-ref:hover{background:rgba(26,115,232,0.14);}
+  .fn-ref label{cursor:pointer;pointer-events:auto;}
   ${offline ? 'a{pointer-events:none;cursor:default;}' : ''}
 </style></head>
 <body>${email.bodyHtml}</body></html>`;
@@ -6378,7 +6485,9 @@ async function openReader(email, opts = {}) {
         }
         const scroller = doc.scrollingElement || doc.documentElement || doc.body;
         // Footnote markers become tappable now the email's DOM is reachable.
-        if (doc.body) { try { linkFootnotes(doc.body, iframe); } catch(_) {} }
+        if (doc.body) {
+          try { if (linkFootnotes(doc.body, iframe)) watchFrameFootnotes(iframe, doc, scroller); } catch(_) {}
+        }
         // Focus lives in the iframe once the email is clicked, so the speed
         // keys have to be listened for in there as well as on the page.
         try { doc.addEventListener('keydown', autoScrollSpeedKey); } catch(_) {}
@@ -6579,6 +6688,7 @@ function setReaderZoom(on) {
 
 function closeReader() {
   hideFootnote(true);
+  unwatchFrameFootnotes();
   const overlay = document.getElementById('reader-overlay');
   overlay.classList.remove('open');
   document.body.style.overflow = '';
@@ -8742,6 +8852,7 @@ function ttsResync() {
   s.resyncing = true;
   s.lastTop = null;
   ttsShowResync(false);
+  hideFootnote(true); // the page is leaving the note for the voice
 }
 
 function ttsShowResync(on) {
@@ -9530,7 +9641,13 @@ document.addEventListener('click', e => {
   if (e.target && e.target.closest && e.target.closest('.fn-ref, .fn-popup')) return;
   hideFootnote(true);
 }, true);
-window.addEventListener('resize', () => hideFootnote(true));
+// Width only: a phone fires resize for its toolbars coming and going, which
+// used to close a note before it could be read.
+let fnLastWidth = window.innerWidth;
+window.addEventListener('resize', () => {
+  if (window.innerWidth !== fnLastWidth) hideFootnote(true);
+  fnLastWidth = window.innerWidth;
+});
 // Close the account menu when tapping outside it.
 document.addEventListener('click', e => {
   const menu = document.getElementById('account-menu');
