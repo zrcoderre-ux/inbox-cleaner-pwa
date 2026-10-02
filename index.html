@@ -2069,7 +2069,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v138'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v139'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -3864,6 +3864,7 @@ async function flushOutbox() {
       else if (op.type === 'autoread') ok = await autoReadSenderRemote(op.addr);
       else if (op.type === 'autoread-subject') ok = await autoReadSubjectRemote(op.rule || { addr: op.addr, pattern: op.pattern });
       else if (op.type === 'content-rule') ok = (await applyContentRuleRemote(op.rule)).ok;
+      else if (op.type === 'tts-alert') ok = await insertTtsAlert(op);
       else ok = true; // unknown op — drop it
       if (!ok) remaining.push(op);
     }
@@ -7970,6 +7971,11 @@ async function ttsFetchChunk(text, retried, voice, ssml) {
     if (res.status === 429 && payload.error === 'monthly_cap') {
       ttsBudget = { used: payload.used || 0, cap: payload.cap || TTS_FREE_CHARS };
       renderTtsUsage();
+      // The Worker marks one refusal a month, whichever device it goes to, so
+      // the inbox gets one notice rather than one per phone. Often it's a
+      // prefetch that meets it, whose error nobody sees — hence handling it
+      // here rather than where playback falls back.
+      if (payload.alert) ttsBudgetAlert(ttsBudget);
     } else if (res.status === 429 && !retried) {
       await new Promise(r => setTimeout(r, 1500));
       return ttsFetchChunk(text, true, useVoice, ssml);
@@ -8058,7 +8064,7 @@ function ttsErrorMessage(e) {
   if (e.status === 401) return 'Sign in again for the natural voice — using the device voice';
   if (e.message === 'credential_failed') return 'Voice credential unusable — see Settings for why';
   if (e.status === 403) return 'Google refused the voice request — see Settings for why';
-  if (e.message === 'monthly_cap') return 'Monthly voice budget spent — using the device voice';
+  if (e.message === 'monthly_cap') return 'Free voice allowance used up this month — using the device voice';
   if (e.message === 'budget_unavailable') return 'Voice budget unreadable — using the device voice to be safe';
   if (e.status === 429) return 'Google voice limit hit — device voice for this email';
   if (e.status === 413) return 'That passage was too long to speak';
@@ -9362,7 +9368,7 @@ function ttsVoiceUnavailableReason(e) {
 // this counts only what this browser asked for.
 function recordTtsChars(n) {
   if (!n) return;
-  const month = new Date().toISOString().slice(0, 7);
+  const month = ttsBillingMonth();
   let rec = ttsUsage;
   if (!rec || rec.month !== month) rec = { month, chars: 0 };
   rec.chars += n;
@@ -9374,7 +9380,7 @@ function recordTtsChars(n) {
 function renderTtsUsage() {
   const el = document.getElementById('tts-usage');
   if (!el) return;
-  const month = new Date().toISOString().slice(0, 7);
+  const month = ttsBillingMonth();
   const local = (ttsUsage && ttsUsage.month === month) ? ttsUsage.chars : 0;
   // The Worker's figure wins when there's one: it counts every device, and
   // it's the number the cap is actually enforced against.
@@ -9394,7 +9400,7 @@ function renderTtsUsage() {
   el.textContent = ttsBudget
     ? 'Spoken this month: ' + used.toLocaleString() + ' of ' + cap.toLocaleString() +
       ' characters (' + pct + '%), counted across every device.' +
-      (used >= cap ? ' Budget spent — the device voice takes over until next month.' : '')
+      (used >= cap ? ' Free allowance used up — the device voice reads until the month turns over at midnight Pacific time.' : '')
     : 'Spoken this month: ' + used.toLocaleString() + ' characters — about ' + pct +
       '% of Google’s monthly free allowance, as counted on this device.';
 }
@@ -9409,6 +9415,66 @@ async function loadTtsBudget() {
     ttsBudget = data.enforced ? { used: data.used || 0, cap: data.cap || TTS_FREE_CHARS } : null;
   } catch(e) { /* no budget reported — the local estimate stands */ }
   renderTtsUsage();
+}
+
+// Google's billing month closes at midnight Pacific time, and the Worker's
+// budget closes with it, so this month does too. "2026-10".
+function ttsBillingMonth(d) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit'
+    }).formatToParts(d || new Date());
+    const part = type => parts.find(p => p.type === type).value;
+    return part('year') + '-' + part('month');
+  } catch(e) { return (d || new Date()).toISOString().slice(0, 7); }
+}
+
+// ── Spent-budget notice ────────────────────────────────────
+// The device voice taking over is easy to miss: with the phone in a pocket
+// it's the only sign, and the toast is gone in two seconds. So the month the
+// allowance runs out, a note goes into the inbox as well, where it reaches
+// every device and stays until it's dealt with. It's placed there directly
+// rather than sent, so nothing leaves the account.
+function ttsBudgetAlert(budget) {
+  const op = { type: 'tts-alert', key: ttsBillingMonth(), used: budget.used, cap: budget.cap, at: Date.now() };
+  insertTtsAlert(op).then(ok => { if (!ok) enqueueOp(op); });
+}
+
+async function insertTtsAlert(op) {
+  if (!onlineReady()) return false;
+  try {
+    const at = new Date(op.at || Date.now());
+    const [y, m] = String(op.key).split('-').map(Number);
+    const monthName = new Date(Date.UTC(y, m - 1, 15)).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' });
+    const me = activeEmail || '';
+    const body = [
+      'Read-aloud has used this month\'s free allowance of Google voice characters: ' +
+        Number(op.used).toLocaleString('en-US') + ' of ' + Number(op.cap).toLocaleString('en-US') +
+        ', counted across every device.',
+      '',
+      'Until the month turns over at midnight Pacific time at the end of ' + monthName +
+        ', Inbox Cleaner reads with the device\'s own voice and sends nothing more to Google.',
+      '',
+      'This is Inbox Cleaner\'s own count. What Google actually charged is on the billing page:',
+      'https://console.cloud.google.com/billing'
+    ].join('\r\n');
+    const msg = [
+      'From: Inbox Cleaner <' + me + '>',
+      'To: ' + me,
+      'Subject: Read-aloud: free voice allowance used up for ' + monthName,
+      'Date: ' + at.toUTCString(),
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=UTF-8',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      body
+    ].join('\r\n');
+    const raw = btoa(unescape(encodeURIComponent(msg))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    await gapi.client.gmail.users.messages.insert({
+      userId: 'me', resource: { raw, labelIds: ['INBOX', 'UNREAD'] }
+    });
+    return true;
+  } catch(e) { return false; }
 }
 
 // ── Bulk UI ────────────────────────────────────────────────

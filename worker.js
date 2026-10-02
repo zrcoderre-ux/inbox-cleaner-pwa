@@ -14,6 +14,8 @@
 // Setup: see AUTH-SETUP.md. You must set the GOOGLE_CLIENT_SECRET secret and,
 // optionally, override GOOGLE_CLIENT_ID via a var.
 
+import { DurableObject } from 'cloudflare:workers';
+
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const TTS_SYNTH_URL = 'https://texttospeech.googleapis.com/v1/text:synthesize';
 const TTS_VOICES_URL = 'https://texttospeech.googleapis.com/v1/voices';
@@ -30,12 +32,16 @@ const TTS_MAX_CHARS = 1300;
 const TTS_TIERS = ['Chirp3-HD', 'Chirp-HD', 'Studio', 'Neural2', 'Polyglot', 'Wavenet'];
 // Monthly character budget, enforced here so it holds across every device
 // instead of per-browser. Sits under Google's 1,000,000-character free
-// allowance: the margin covers both the counter's own imprecision (below) and
-// the fact that Google's month and this one may not end at the same instant.
+// allowance, which is the smallest any of the offered voice families gets.
+// The count is exact now (see the meter below), so the margin is only for
+// usage Google reports that the meter never saw.
 // Override with the TTS_MONTHLY_CHAR_CAP var; unset it and this applies.
 const TTS_DEFAULT_CAP = 950000;
-// Spent months are worth keeping briefly for a look back, not forever.
-const TTS_USAGE_TTL = 70 * 24 * 60 * 60;
+// Google closes its billing month at midnight Pacific time, so the budget's
+// month does too. A UTC month closes seven or eight hours early, and whatever
+// is spoken in those hours lands on a month of Google's that the counter has
+// already stopped counting.
+const TTS_BILLING_TZ = 'America/Los_Angeles';
 const DEFAULT_CLIENT_ID = '348956142337-6g3l76tuaqsl0f20rdbd0u5bhuag2c4g.apps.googleusercontent.com';
 const COOKIE_NAME = 'ic_rt';
 // Refresh tokens are long-lived; keep the cookie ~400 days (Chrome's max).
@@ -223,13 +229,17 @@ async function handleTts(request, env, url) {
     const billed = ssml || text;
     if (billed.length > TTS_MAX_CHARS) return json({ error: 'text_too_long', max: TTS_MAX_CHARS }, 413);
 
-    // Check the budget before spending any of it. Refusing here costs nothing;
-    // finding out from Google's bill costs money.
+    // Count the characters before spending them. The meter checks the cap and
+    // adds to the total in one step, so requests in flight together can't all
+    // slip under it, and one whose answer never arrives is counted anyway.
+    // Refusing here costs nothing; finding out from Google's bill costs money.
     let usage;
-    try { usage = await ttsReadUsage(env); }
+    try { usage = await ttsReserve(env, billed.length); }
     catch (e) { return json({ error: 'budget_unavailable', detail: String(e && e.message || e) }, 429); }
-    if (usage && usage.used + billed.length > usage.cap) {
-      return json({ error: 'monthly_cap', used: usage.used, cap: usage.cap }, 429);
+    if (usage && !usage.ok) {
+      // `alert` is true for exactly one refusal a month, so whichever device
+      // gets it can tell the user once, rather than every device every time.
+      return json({ error: 'monthly_cap', used: usage.used, cap: usage.cap, alert: !!usage.alert }, 429);
     }
 
     const name = typeof body.voice === 'string' ? body.voice : '';
@@ -250,11 +260,10 @@ async function handleTts(request, env, url) {
         audioConfig: { audioEncoding: 'MP3' }
       })
     });
+    // A refusal stays counted. Whether Google bills a request it turned down
+    // isn't something to bet the cap on.
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.audioContent) return ttsUpstreamError(res, data);
-
-    // Only spend the budget on audio actually delivered.
-    await ttsAddUsage(env, usage, billed.length);
 
     const headers = {
       'content-type': 'audio/mpeg',
@@ -265,7 +274,7 @@ async function handleTts(request, env, url) {
     // And where that leaves the month, so the app shows a figure covering
     // every device rather than only this browser's share.
     if (usage) {
-      headers['x-tts-month-chars'] = String(usage.used + billed.length);
+      headers['x-tts-month-chars'] = String(usage.used);
       headers['x-tts-month-cap'] = String(usage.cap);
     }
     return new Response(b64ToBytes(data.audioContent), { headers });
@@ -294,9 +303,6 @@ const TTS_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
 // Access tokens last an hour. The isolate outlives a single request, so
 // caching one here saves a round trip on nearly every call.
 let ttsTokenCache = null;   // { token, expires }
-// Set when a budget write fails, so the next request refuses rather than
-// spending against a counter that has stopped moving.
-let ttsBudgetBroken = false;
 
 function ttsHasCredential(env) {
   return !!(env && (env.GOOGLE_TTS_API_KEY || env.GOOGLE_TTS_SA_KEY));
@@ -399,11 +405,22 @@ function pemToDer(pem) {
 }
 
 // ── Monthly budget ─────────────────────────────────────────────────────────
-// Kept in KV under one key per calendar month. With no KV namespace bound the
-// budget simply isn't enforced and the app falls back to its own per-browser
-// estimate, so this is safe to deploy before the namespace exists.
-function ttsMonthKey() {
-  return 'chars:' + new Date().toISOString().slice(0, 7);
+// One Durable Object keeps the month's running total. It takes requests one at
+// a time and its SQL calls are synchronous, so checking the cap and adding to
+// the total happen as a single step: two requests can't read the same total,
+// and no addition is lost. KV kept this total before and lost additions —
+// it has no atomic increment, and the app fetches up to five chunks at once as
+// the screen locks — which is the likely way September's count stayed under
+// the cap while Google's went past the free allowance.
+//
+// With no TTS_METER binding the budget isn't enforced and the app falls back
+// to its own per-browser estimate.
+function ttsMonth(now) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: TTS_BILLING_TZ, year: 'numeric', month: '2-digit'
+  }).formatToParts(now || new Date());
+  const part = type => parts.find(p => p.type === type).value;
+  return part('year') + '-' + part('month');
 }
 
 function ttsCap(env) {
@@ -411,47 +428,68 @@ function ttsCap(env) {
   return (isFinite(n) && n > 0) ? n : TTS_DEFAULT_CAP;
 }
 
-// A budget that can't be read is a budget that isn't enforced, so this fails
-// closed: the point of the cap is that nothing is ever spent past it, and
-// "the counter was unreachable" is not a reason to spend. Silence is the one
-// answer a spending limit must never give.
-async function ttsReadUsage(env) {
-  if (!env || !env.TTS_BUDGET) return null;  // no namespace bound — not enforced
-  const key = ttsMonthKey();
-  let raw;
-  try { raw = await env.TTS_BUDGET.get(key); }
-  catch (e) { throw new Error('the monthly budget could not be read'); }
-  const used = parseInt(raw, 10) || 0;
-  if (ttsBudgetBroken) {
-    // An earlier increment never landed. Prove the counter is writable again
-    // before spending against it — otherwise one broken write would strand the
-    // feature until the isolate was recycled.
-    try {
-      await env.TTS_BUDGET.put(key, String(used), { expirationTtl: TTS_USAGE_TTL });
-      ttsBudgetBroken = false;
-    } catch (e) {
-      throw new Error('the monthly budget could not be recorded');
-    }
-  }
-  return { key, used, cap: ttsCap(env) };
+function ttsMeter(env) {
+  if (!env || !env.TTS_METER) return null;
+  return env.TTS_METER.get(env.TTS_METER.idFromName('tts-budget'));
 }
 
-// KV has no atomic increment, so two requests in flight can read the same
-// total and one of their additions is lost. The app sends at most two at once
-// (the playing chunk and the one fetched ahead), each at most TTS_MAX_CHARS,
-// so the drift is small and always an undercount — which is what the margin
-// under the free allowance is for. Exact accounting would want a Durable
-// Object; this is a budget, not a ledger.
-// Spend that never reaches the counter is spend the cap can't see, so a failed
-// write stops the next request rather than being shrugged off. The audio just
-// paid for is still delivered — refusing after the fact wouldn't unspend it.
-async function ttsAddUsage(env, state, n) {
-  if (!state || !n) return;
-  try {
-    await env.TTS_BUDGET.put(state.key, String(state.used + n), { expirationTtl: TTS_USAGE_TTL });
-    ttsBudgetBroken = false;
-  } catch (e) {
-    ttsBudgetBroken = true;
+// Both fail closed: the point of the cap is that nothing is ever spent past
+// it, and "the counter was unreachable" is not a reason to spend. Silence is
+// the one answer a spending limit must never give.
+async function ttsReserve(env, n) {
+  const meter = ttsMeter(env);
+  if (!meter) return null;
+  try { return await meter.reserve(ttsMonth(), n, ttsCap(env)); }
+  catch (e) { throw new Error('the monthly budget could not be checked'); }
+}
+
+async function ttsReadUsage(env) {
+  const meter = ttsMeter(env);
+  if (!meter) return null;
+  try { return await meter.usage(ttsMonth(), ttsCap(env)); }
+  catch (e) { throw new Error('the monthly budget could not be read'); }
+}
+
+export class TtsMeter extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.sql = ctx.storage.sql;
+    this.sql.exec('CREATE TABLE IF NOT EXISTS months (' +
+      'month TEXT PRIMARY KEY, used INTEGER NOT NULL, alerted INTEGER NOT NULL DEFAULT 0)');
+    ctx.blockConcurrencyWhile(() => this.carryOver());
+  }
+
+  // The first time the meter starts, it picks up the month KV had counted so
+  // far, so the switch doesn't hand back what was already spent. If KV can't
+  // be read this throws, the object resets, and requests are refused until it
+  // can — the same fail-closed rule as everywhere else here.
+  async carryOver() {
+    if (!this.env.TTS_BUDGET) return;
+    if (this.sql.exec('SELECT COUNT(*) AS n FROM months').one().n) return;
+    const month = ttsMonth();
+    const raw = await this.env.TTS_BUDGET.get('chars:' + month);
+    this.sql.exec('INSERT OR IGNORE INTO months (month, used) VALUES (?, ?)', month, parseInt(raw, 10) || 0);
+  }
+
+  row(month) {
+    return this.sql.exec('SELECT used, alerted FROM months WHERE month = ?', month).toArray()[0] ||
+           { used: 0, alerted: 0 };
+  }
+
+  reserve(month, n, cap) {
+    const row = this.row(month);
+    if (row.used + n > cap) {
+      this.sql.exec('INSERT INTO months (month, used, alerted) VALUES (?, ?, 1) ' +
+                    'ON CONFLICT(month) DO UPDATE SET alerted = 1', month, row.used);
+      return { ok: false, used: row.used, cap, alert: !row.alerted };
+    }
+    this.sql.exec('INSERT INTO months (month, used) VALUES (?, ?) ' +
+                  'ON CONFLICT(month) DO UPDATE SET used = used + ?', month, n, n);
+    return { ok: true, used: row.used + n, cap };
+  }
+
+  usage(month, cap) {
+    return { used: this.row(month).used, cap };
   }
 }
 

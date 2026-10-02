@@ -21,11 +21,24 @@ binding = "ASSETS"
 # The client SECRET is set as an encrypted secret, NOT here:
 #   npx wrangler secret put GOOGLE_CLIENT_SECRET
 
-# Monthly character budget for read-aloud (see AUTH-SETUP.md). With this bound
-# the Worker refuses to spend past the cap, counted across every device rather
-# than per-browser, and refuses too when the counter can't be read or written.
-# Remove the binding and nothing is enforced — the app falls back to its own
-# per-browser estimate, which is how it shipped.
+# Monthly character budget for read-aloud (see AUTH-SETUP.md). The Worker
+# refuses to spend past the cap, counted across every device rather than
+# per-browser, and refuses too when the meter can't be reached. A Durable
+# Object holds the count because it can check and add in one step; the deploy
+# creates it, so there is nothing to set up in the dashboard. Remove the
+# binding and nothing is enforced — the app falls back to its own per-browser
+# estimate.
+[[durable_objects.bindings]]
+name = "TTS_METER"
+class_name = "TtsMeter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TtsMeter"]
+
+# Where the budget was counted before the meter. Read once, the first time the
+# meter starts, so the month already under way keeps what it had spent. Safe
+# to delete from November 2026 on.
 [[kv_namespaces]]
 binding = "TTS_BUDGET"
 id = "094a20c9d104450aaeb146bcc00a4145"
