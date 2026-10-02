@@ -32,7 +32,9 @@ The app is a single-file PWA. There is no build step — edit and ship.
   all state and logic. ~4,300 lines.
 - `sw.js` — service worker, network-first so a reload always gets fresh code.
 - `worker.js` — Cloudflare Worker backing the OAuth auth-code / refresh-token
-  flow (see `AUTH-SETUP.md`).
+  flow, the read-aloud proxy to Google Text-to-Speech, and the `TtsMeter`
+  Durable Object that holds read-aloud's monthly character budget (see
+  `AUTH-SETUP.md`).
 - `manifest.json`, `icon-*.png` — PWA install metadata.
 
 ## Conventions

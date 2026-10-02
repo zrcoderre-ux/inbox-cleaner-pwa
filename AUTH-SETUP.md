@@ -256,55 +256,68 @@ Two controls, which do different things:
 
   This is the quota that hard-stops, so it's what bounds a runaway. Be clear
   about what it does and doesn't do, though: it caps the *rate*, not the
-  month. Paired with the Worker's 1000-character request cap, 60 requests a
-  minute is a ceiling of 60,000 characters a minute — far more than a month's
+  month. Paired with the Worker's 1,300-character request cap, 60 requests a
+  minute is a ceiling of 78,000 characters a minute — far more than a month's
   free allowance if something ran at that rate unattended. Its real job is to
   keep abuse slow enough that the budget alert below reaches you first.
   (The quotas here are per-minute, not per-day; there's no monthly ceiling to
   set.)
-- **Billing → Budgets & alerts**, scoped to this project, with alerts at
-  50/90/100% of a few dollars. This only notifies; it doesn't stop anything,
-  but it's what catches slow drift past the free allowance.
+- **Billing → Budgets & alerts**, scoped to this project and to the Cloud
+  Text-to-Speech API service, with a budget of $1 and an *actual* spend alert
+  at 1%. Inside the free allowance the cost is $0, so the first cent is the
+  moment the allowance has run out, and Google emails the billing account's
+  admins then. It only notifies, and Google's usage reporting can lag by
+  hours, but it's Google's own count rather than the app's: the one alert
+  that still fires if the Worker's count is ever wrong.
 
 Also note the restrictions in step 1 do real work here: a key restricted to
 the Text-to-Speech API can't be spent on anything else.
 
-## Step 4 — Stop at the free allowance (optional)
+## Step 4 — Stop at the free allowance
 
-Steps 3's controls bound the *rate* and tell you after the fact. Neither can
+Step 3's controls bound the *rate* and tell you after the fact. Neither can
 hold you inside the monthly free allowance, because no per-minute number can:
 1,000,000 characters spread over a month is 23 characters a minute, and the
 app needs about 1,200 just to speak continuously. The only thing that can is
-the Worker refusing to spend past a total, which is what this step adds.
+the Worker refusing to spend past a total, which is what this step is.
 
-```sh
-npx wrangler kv namespace create TTS_BUDGET
-```
+There's nothing to set up. `wrangler.toml` declares a Durable Object,
+`TtsMeter`, and the deploy creates it. SQLite-backed Durable Objects, which
+this is, run on the Workers Free plan.
 
-Wrangler prints an id. Uncomment the `[[kv_namespaces]]` block in
-`wrangler.toml`, paste the id in, and commit — the deploy picks it up.
+The Worker keeps a character total per month and refuses any request that
+would pass the cap, answering before it calls Google so a refusal costs
+nothing. The month is Google's billing month, which closes at midnight
+Pacific time. The app drops to the device voice for the rest of the month and
+says why. The default cap is 950,000, a little under the 1,000,000 that the
+Chirp 3 HD, Neural2 and Studio voices each get free (WaveNet and Standard get
+4,000,000); set `TTS_MONTHLY_CHAR_CAP` in `wrangler.toml` to change it. One
+cap covers every voice, so switching between families can't take any one of
+them past its allowance.
 
-No CLI to hand? The dashboard does the same: **Storage & Databases → KV →
-Create a namespace**, name it `TTS_BUDGET`, and copy the id it shows. The id
-still has to go into `wrangler.toml`, because a deploy from the repo replaces
-whatever bindings the dashboard holds. It isn't a secret — every Cloudflare
-project keeps these in config.
+The count is exact. The meter takes one request at a time and adds its
+characters in the same step that checks them against the cap, *before* the
+request goes to Google, so requests in flight together can't all slip under
+it, and one whose answer never comes back is counted anyway. A request Google
+refuses stays counted too. (Until October 2026 the total lived in KV, which
+has no atomic increment. With several chunks fetched at once — up to five as
+the screen locks — it lost additions, which is the likely way September's
+spend went past the free allowance while the count stayed under the cap. The
+meter picks up KV's count for the month it starts in, and the KV binding can
+go after that.)
 
-From then on the Worker keeps a character total per calendar month and refuses
-requests that would pass the cap, answering before it calls Google so a refusal
-costs nothing. The app drops to the device voice for the rest of the month and
-says why. The default cap is 950,000, a little under Google's 1,000,000; set
-`TTS_MONTHLY_CHAR_CAP` in `wrangler.toml` to change it.
+The cap fails closed. A meter that can't be reached refuses the request
+rather than assuming zero, and the app drops to the device voice and says
+why. Once the meter answers again, the Google voice resumes on its own.
 
-Two things this buys beyond the in-app counter: the total covers **every
-device** rather than one browser's share, and it's a stop rather than a
-notice. Settings shows the Worker's figure once the namespace is bound.
-
-The cap fails closed, which is the whole point of it. A budget that can't be
-read refuses the request rather than assuming zero, and a failed write stops
-the *next* request rather than being shrugged off — spend the counter can't
-see is spend the cap can't bound. Either way the app drops to the device
-voice and says why. Once the counter is writable again it resumes on its own.
+**When the allowance runs out** the app tells you in two places: a notice in
+the reader, and a message in the inbox titled *Read-aloud: free voice
+allowance used up for* (the month). The Worker attaches the alert to exactly
+one refused request a month, so one device delivers it, once. The message is
+placed in the mailbox through the Gmail API rather than sent, so nothing
+leaves the account, and a device that's offline at that moment keeps it in
+the outbox like any other Gmail change. Settings shows the month's total
+throughout.
 
 Emphasis is charged too. When an email has italicised words, the passage is
 sent as SSML so the voice leans on them, and Google bills every character of
@@ -316,13 +329,7 @@ are. Voices differ on whether they accept SSML at all; the app asks once, and
 a voice that refuses is remembered and sent plain text from then on, with the
 player saying "no emphasis" so the silence is explained.
 
-The margin under the allowance is doing real work too. KV has no atomic
-increment, so two requests in flight can read the same total and one of their
-additions is lost. The app sends at most two at a time, so the drift is small
-and always an undercount — the 50,000-character gap absorbs it. Exact
-accounting would want a Durable Object; this is a budget, not a ledger.
-
-Leave the namespace uncreated and nothing is enforced: the Worker skips the
+Remove the `TTS_METER` binding and nothing is enforced: the Worker skips the
 whole mechanism and the app falls back to its own per-browser estimate.
 
 ## Playing through the list
