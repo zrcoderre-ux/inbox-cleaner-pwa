@@ -6473,8 +6473,22 @@ async function openReader(email, opts = {}) {
     if (!offline) sb.push('allow-popups');
     if (showFooter) sb.push('allow-same-origin');
     iframe.setAttribute('sandbox', sb.join(' '));
+    // Read-aloud starts once the email's page has been parsed, not once it has
+    // loaded: loading waits for every picture in it, and a newsletter's can
+    // take long enough on a phone's connection — playing on, with only the
+    // silence sounding — that the next email opened paused. The voice works
+    // from the body (buildSpeech), not the frame. Started once, by whichever
+    // comes first.
+    const speak = ttsWillAutoStart() || opts.speak;
+    let spoken = false;
+    const startSpeaking = () => {
+      if (spoken || readerEmail !== email) return;
+      spoken = true;
+      startReadAloud(email, { paused: opts.paused, handoff: opts.handoff });
+    };
     iframe.addEventListener('load', () => {
       if (readerEmail !== email) return;
+      if (speak) setTimeout(startSpeaking, 400);
       try {
         const doc = iframe.contentDocument;
         const win = iframe.contentWindow;
@@ -6499,9 +6513,6 @@ async function openReader(email, opts = {}) {
         if (autoScrollEnabled && doc && !ttsWillAutoStart() && !opts.speak) {
           setTimeout(() => { if (readerEmail === email) startAutoScroll(scroller, doc); }, 500);
         }
-        if (ttsWillAutoStart() || opts.speak) {
-          setTimeout(() => { if (readerEmail === email) startReadAloud(email, { paused: opts.paused, handoff: opts.handoff }); }, 400);
-        }
       } catch(e) {
         if (showFooter) revealReaderFooter(email); // can't watch scroll — just show it
       }
@@ -6509,6 +6520,19 @@ async function openReader(email, opts = {}) {
     iframe.srcdoc = wrapped;
     bodyEl.innerHTML = '';
     bodyEl.appendChild(iframe);
+    if (speak) {
+      // The frame's own document is the one waited for: until the srcdoc
+      // commits, the frame holds an empty one, and the scroll watch would
+      // attach to that. A frame closed to the page has nothing to wait for.
+      const parsed = () => {
+        if (spoken || readerEmail !== email || !iframe.isConnected) return;
+        let doc = null;
+        try { doc = iframe.contentDocument; } catch(_) {}
+        if (!doc || (doc.URL === 'about:srcdoc' && doc.readyState !== 'loading')) setTimeout(startSpeaking, 400);
+        else setTimeout(parsed, 50);
+      };
+      setTimeout(parsed, 0);
+    }
   } else {
     bodyEl.innerHTML = `<div class="reader-text"></div>`;
     const el = bodyEl.querySelector('.reader-text');
@@ -6757,9 +6781,10 @@ const TTS_RETRY_VISIBLE = 2;      // tries before giving up on the good voice
 const TTS_RETRY_HIDDEN = 8;       // backgrounded, waiting beats downgrading
 // How often a playing passage checks that what comes after it is in hand.
 const TTS_TOPUP_EVERY = 4000;
-// How long a request for a passage may wait for its answer to start. Synthesis
-// takes a second or two; a request with no answer after this was lost on the
-// way, and waiting on it is only silence.
+// How long a request for a passage may go with nothing arriving: before its
+// answer starts (synthesis takes a second or two) or between one piece of the
+// download and the next. A request quiet for this long was lost on the way,
+// and waiting on it is only silence.
 const TTS_FETCH_TIMEOUT = 30000;
 // The longest the app keeps silence playing while it waits for something to
 // say (see ttsBridge). After that it holds its place, paused, as it would have.
@@ -6781,6 +6806,8 @@ let ttsAudio = null;
 let ttsMemo = new Map();    // voice|text → object URL, so a re-listen is free
 let ttsInflight = new Map(); // voice|text → the request already on its way
 let ttsUnderlay = null;     // silence under the voice while reading (see ttsHum)
+let ttsUnderlayData = '';
+let ttsWatchTimer = null;
 let ttsBridgeTimer = null;
 // Set between emails while playing on: the one finished, the next not yet open.
 // { paused } — whether the next one should open paused.
@@ -7653,6 +7680,9 @@ function ttsAudioEl() {
   ttsAudio.addEventListener('error', () => ttsAudioStopped('error'));
   ttsAudio.addEventListener('pause', ttsAudioPaused);
   ttsAudio.addEventListener('play', ttsAudioPlayed);
+  // Whether sound has come out of it since it was last started (ttsAudioPaused).
+  ttsAudio.addEventListener('play', () => { ttsAudio._sounding = false; });
+  ttsAudio.addEventListener('playing', () => { ttsAudio._sounding = true; });
   ttsAudio.addEventListener('timeupdate', ttsTopUp);
   return ttsAudio;
 }
@@ -7681,11 +7711,19 @@ function ttsHeld(s) {
 // long as reading wants sound. The voice ending a passage is then never the
 // last sound in the app: the session stays up, the next passage starts as it
 // would with the screen on, and a wait for the network is a wait the app stays
-// awake through. Half a second of it, because WebKit takes anything shorter
-// than a second for a notification sound rather than something to put on the
-// lock screen, so it never stands in for the email there.
+// awake through.
+//
+// How long the loop is depends on the browser. Chrome takes anything of five
+// seconds or less for a passing sound: it asks other apps to duck for it, and
+// on Android a session holding only that loses its lock-screen controls — so
+// six seconds there. Safari would put the app on the lock screen for anything
+// over a second, and the loop is played once, to unlock it, on the first tap
+// in the app — so just under a second there, or the lock screen would offer to
+// play the app before anything had been read. userAgentData is Chrome's alone;
+// every browser on an iPhone is Safari underneath.
 function ttsUnderlaySource() {
-  const n = 8000;                      // half a second of 16-bit mono at 8 kHz
+  if (ttsUnderlayData) return ttsUnderlayData;
+  const n = Math.round((navigator.userAgentData ? 6 : 0.9) * 8000) * 2;   // 16-bit mono at 8 kHz
   const b = new Uint8Array(44 + n);    // zeroed, and zero is silence
   const v = new DataView(b.buffer);
   const tag = (at, str) => { for (let i = 0; i < 4; i++) b[at + i] = str.charCodeAt(i); };
@@ -7695,7 +7733,8 @@ function ttsUnderlaySource() {
   tag(36, 'data'); v.setUint32(40, n, true);
   let bin = '';
   for (let i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
-  return 'data:audio/wav;base64,' + btoa(bin);
+  ttsUnderlayData = 'data:audio/wav;base64,' + btoa(bin);
+  return ttsUnderlayData;
 }
 
 function ttsUnderlayEl() {
@@ -7703,6 +7742,7 @@ function ttsUnderlayEl() {
   ttsUnderlay = new Audio();
   ttsUnderlay.loop = true;
   ttsUnderlay.src = ttsUnderlaySource();
+  ttsUnderlay.addEventListener('playing', () => { ttsUnderlay._sounding = true; ttsUnderlay._retried = false; });
   ttsUnderlay.addEventListener('pause', ttsUnderlayPaused);
   ttsUnderlay.addEventListener('play', ttsUnderlayPlayed);
   return ttsUnderlay;
@@ -7713,8 +7753,32 @@ function ttsUnderlayEl() {
 function ttsHum(on) {
   const u = ttsUnderlayEl();
   u._on = !!on;
-  if (on && u.paused) { const p = u.play(); if (p && p.catch) p.catch(() => {}); }
-  else if (!on && !u.paused) { try { u.pause(); } catch(e) {} }
+  if (on) {
+    if (!u.hasAttribute('src')) u.src = ttsUnderlaySource();   // let go of when reading last stopped
+    if (u.paused) {
+      u._sounding = false;
+      const p = u.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+    if (!ttsWatchTimer) ttsWatchTimer = setInterval(ttsWatchProgress, 1000);
+  } else {
+    if (!u.paused) { try { u.pause(); } catch(e) {} }
+    if (ttsWatchTimer) { clearInterval(ttsWatchTimer); ttsWatchTimer = null; }
+  }
+}
+
+// Reading is over: the silence is let go of, not just paused. Paused, it is
+// still the page's media player, and Chrome keeps a paused player's session —
+// the notification, a Play button on the lock screen, audio focus — for as
+// long as there is one. Taken up again (ttsHum) when reading next wants sound.
+function ttsReleaseHum() {
+  const u = ttsUnderlay;
+  if (!u) return;
+  ttsHum(false);
+  if (u.hasAttribute('src')) {
+    u.removeAttribute('src');
+    try { u.load(); } catch(e) {}
+  }
 }
 
 // A wait begins: something to say is on its way and nothing is saying it yet.
@@ -7740,6 +7804,7 @@ function ttsUnbridge() {
 function ttsBridgeExpired() {
   ttsBridgeTimer = null;
   const s = ttsSession;
+  if (s && s.mode === 'device') return;   // the device voice is its own sound
   if (s) s.playing = false;
   if (ttsHandoff) ttsHandoff.paused = true;
   ttsUnbridge();
@@ -7757,11 +7822,20 @@ function ttsAudioPaused() {
   const s = ttsSession;
   if (!a || !a.paused || a.ended) return;   // a passage finishing, or already going again
   if (!s || !s.playing || !ttsHeld(s)) return;
+  // Paused before a sound came out of it: WebKit putting away a start that was
+  // still loading when the page went out of sight, which it does to anything
+  // not yet audible. The play() it refused is asked again (ttsPlayIndex's
+  // retries); taking this for a pause from outside held the reading instead.
+  if (!a._sounding) return;
   ttsStoppedFromOutside(s);
 }
 
+// s.outside remembers that the phone, not the listener, paused it, so that
+// the phone giving the sound back carries on (ttsUnderlayPlayed). Anything the
+// listener presses clears it (ttsTogglePlay).
 function ttsStoppedFromOutside(s) {
   s.playing = false;
+  s.outside = true;
   ttsUnbridge();
   try { navigator.mediaSession.playbackState = 'paused'; } catch(e) {}
   ttsUpdateUI();
@@ -7773,6 +7847,7 @@ function ttsAudioPlayed() {
   const s = ttsSession;
   if (!a || a.paused || !s || s.playing || !ttsHeld(s)) return;
   s.playing = true;
+  s.outside = false;
   ttsHum(true);
   try { navigator.mediaSession.playbackState = 'playing'; } catch(e) {}
   ttsUpdateUI();
@@ -7783,9 +7858,23 @@ function ttsAudioPlayed() {
 function ttsUnderlayPaused() {
   const u = ttsUnderlay;
   if (!u || !u._on || !u.paused) return;
+  // Put away before it had made a sound, as the voice can be (ttsAudioPaused).
+  // Nothing waits on it, so it is simply started again — once.
+  if (!u._sounding && !u._retried) {
+    u._retried = true;
+    const p = u.play();
+    if (p && p.catch) p.catch(() => {});
+    return;
+  }
+  u._sounding = false;
   const s = ttsSession;
   if (!s) {
-    if (ttsHandoff) { ttsHandoff.paused = true; ttsUnbridge(); }
+    if (ttsHandoff && !ttsHandoff.paused) {
+      ttsHandoff.paused = true;
+      ttsHandoff.outside = true;
+      ttsUnbridge();
+      try { navigator.mediaSession.playbackState = 'paused'; } catch(e) {}
+    }
     return;
   }
   if (!s.playing) return;
@@ -7795,11 +7884,41 @@ function ttsUnderlayPaused() {
   ttsStoppedFromOutside(s);
 }
 
-// Started from outside when nothing wants it — given back after a call that
-// came between two passages, say. Put it away again.
+// Started from outside. When it is the phone giving back what it took — a call
+// that came between two passages, or between two emails — reading carries on,
+// as it does when the call comes mid-passage (ttsAudioPlayed). Otherwise it is
+// silence nobody wants: put it away again.
 function ttsUnderlayPlayed() {
   const u = ttsUnderlay;
-  if (u && !u._on && !u.paused) { try { u.pause(); } catch(e) {} }
+  if (!u || u._on || u.paused) return;
+  const s = ttsSession;
+  if (s ? (s.outside && !s.playing) : (ttsHandoff && ttsHandoff.outside && ttsHandoff.paused)) {
+    ttsTogglePlay(true);
+    return;
+  }
+  try { u.pause(); } catch(e) {}
+}
+
+// The voice can stop without a word to the page. WebKit ignores an
+// interruption for an element it already counts as interrupted — one started
+// while the page was out of sight — though the player underneath stops all the
+// same, so the element goes on saying it is playing while its clock stands
+// still, and nothing (no pause, no timeupdate, no ended) says otherwise. Once a
+// second, a clock that hasn't moved in three is given a push: paused and
+// started again, which either plays or is refused openly (ttsAudioPaused).
+function ttsWatchProgress() {
+  const s = ttsSession, a = ttsAudio;
+  if (!s || !s.playing || s.mode !== 'cloud' || !ttsHeld(s) ||
+      a.paused || a.ended || a.seeking || a.readyState < 3) {
+    if (s) s.stillSince = 0;
+    return;
+  }
+  const t = a.currentTime, now = Date.now();
+  if (s.stillAt !== t || !s.stillSince) { s.stillAt = t; s.stillSince = now; return; }
+  if (now - s.stillSince < 3000) return;
+  s.stillSince = 0;
+  try { a.pause(); } catch(e) {}
+  ttsStartAudio(s);
 }
 
 // How far short of the end still counts as having finished. MP3 durations are
@@ -7819,7 +7938,7 @@ function ttsAudioStopped(why) {
   // An event left over from a passage the session has moved on from — a skip
   // made while it was still playing, and it ran out before the new one came.
   // The session is waiting on that one, so the sound is kept going until then.
-  if (!ttsHeld(s)) { if (why === 'ended') ttsBridge(); return; }
+  if (!ttsHeld(s)) { if (why === 'ended' && s.mode === 'cloud') ttsBridge(); return; }
 
   // Measured from the file, not asked of the element: where the element's own
   // figure is short, playback stops there and "ended" arrives with the clock
@@ -7914,6 +8033,7 @@ function ttsUnlockAudio() {
     const u = ttsUnderlayEl();
     if (!u._unlocked) {
       u._unlocked = true;
+      if (!u.hasAttribute('src')) u.src = ttsUnderlaySource();
       const q = u.play();
       if (q && q.catch) q.catch(e => { if (e && e.name === 'NotAllowedError') u._unlocked = false; });
     }
@@ -7937,8 +8057,8 @@ function toggleReadAloud() {
 async function startReadAloud(email, opts = {}) {
   if (!email) return;
   // Playing on from the email before: the sound was kept going while this one
-  // opened. Gone means something ended the hand-over meanwhile — stop pressed
-  // on the lock screen — and this email isn't to start.
+  // opened. Gone means something ended the hand-over meanwhile — the reader
+  // closed, another email opened — and this email isn't to start.
   const handoff = opts.handoff ? ttsHandoff : null;
   if (opts.handoff && !handoff) return;
   const built = buildSpeech(email);
@@ -7968,10 +8088,13 @@ async function startReadAloud(email, opts = {}) {
     i: 0, playing: !paused, mode: ttsBackend === 'device' ? 'device' : 'cloud',
     durations: [], trueDur: [],
     voice: voiceForEmail(email),
-    // Playing on, the voice has just proved itself on the email before, so a
-    // failure opening this one is the connection — waited out, not given up on
-    // for a device voice that can't be heard from a pocket.
-    played: !!handoff,
+    // Playing on after the good voice read the email before, a failure opening
+    // this one is the connection — waited out, not given up on for a device
+    // voice that can't be heard from a pocket.
+    played: !!(handoff && handoff.proven),
+    // Paused by the phone during the hand-over, so the phone giving the sound
+    // back starts it (ttsUnderlayPlayed).
+    outside: !!(handoff && handoff.outside && handoff.paused && !opts.paused),
     // Cued paused by the batch rest rather than by anyone pressing pause.
     resting: !!(handoff && opts.paused),
     chunkStarted: Date.now(), userScrolled: false, resumeTimer: null, lastTop: null
@@ -8025,6 +8148,7 @@ async function ttsPlayIndex(i, opts = {}) {
     ttsLeaveBridge();
     a._chunk = i;            // so a stale event can be told from a live one
     a._sess = s;
+    a._sounding = false;
     if (!s.trueDur) s.trueDur = [];
     s.trueDur[i] = got.secs;
     a.src = got.url;
@@ -8033,7 +8157,7 @@ async function ttsPlayIndex(i, opts = {}) {
     // Pausing while this chunk was in flight has to hold: the audio is ready
     // and cued, but nothing starts until play is asked for again.
     s.played = true;   // the service works; later failures are the connection
-    if (!s.playing) { s.tries = 0; ttsSetMediaSession(); ttsUpdateUI(); return; }
+    if (!s.playing) { s.tries = 0; ttsUnbridge(); ttsSetMediaSession(); ttsUpdateUI(); return; }
     // Start the next passage downloading before waiting on this one to begin,
     // so the gap between passages is the network's and not ours as well.
     ttsPrefetch(i + 1);
@@ -8052,8 +8176,6 @@ async function ttsPlayIndex(i, opts = {}) {
     // A backgrounded page often can't get a request away, and the device voice
     // can't play in the background at all — so switching there guarantees
     // silence AND loses the good voice. Wait and ask again instead.
-    // Only a request that never landed is retried here; a rate limit already
-    // gets its own wait inside the fetch, and doubling that just adds silence.
     // Google having a bad moment counts as not landing: its 500s and 503s come
     // straight through the Worker and pass in seconds, and they used to end the
     // reading outright, with a notice nobody in the background could see. 501
@@ -8080,9 +8202,13 @@ async function ttsPlayIndex(i, opts = {}) {
     const limit = away ? TTS_RETRY_HIDDEN : TTS_RETRY_VISIBLE;
     if (waitable && (s.tries || 0) < limit) {
       s.tries = (s.tries || 0) + 1;
+      // A rate limit is a per-minute quota, and every ask is metered by the
+      // Worker before Google sees it, so those are spaced out enough for the
+      // minute to turn over inside the wait the silence will carry.
+      const rateLimited = e && e.status === 429 && !unreadable;
       setTimeout(() => {
         if (ttsSession === s && s.i === i && s.playing) ttsPlayIndex(i, opts);
-      }, Math.min(600 * s.tries, 4000));
+      }, rateLimited ? Math.min(3000 * s.tries, 12000) : Math.min(600 * s.tries, 4000));
       return;
     }
     // Out of tries on an email that was playing happily: hold the place rather
@@ -8185,6 +8311,39 @@ function ttsRealDuration(s, i) {
   return (ratio > 0.5 && ratio < 3) ? Math.max(own, el) : el;
 }
 
+// The body of a passage, given up on only if it stops arriving. A long passage
+// on a slow connection still comes down, however long it takes, since cutting
+// it off would only buy it again; a connection that died part-way through is
+// let go of once it has said nothing for TTS_FETCH_TIMEOUT.
+async function ttsReadBody(res, ctl) {
+  let timer = null;
+  const arm = () => {
+    if (!ctl) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => ctl.abort(), TTS_FETCH_TIMEOUT);
+  };
+  arm();
+  try {
+    if (!res.body || !res.body.getReader) return await res.arrayBuffer();
+    const reader = res.body.getReader();
+    const parts = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      size += value.length;
+      arm();
+    }
+    const out = new Uint8Array(size);
+    let at = 0;
+    parts.forEach(p => { out.set(p, at); at += p.length; });
+    return out.buffer;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function ttsChunkKey(text, voice, ssml) {
   return (voice || ttsVoice) + '|' + (ssml || text);
 }
@@ -8210,12 +8369,11 @@ function ttsFetchChunk(text, retried, voice, ssml) {
 }
 
 async function ttsRequestChunk(text, retried, useVoice, ssml, key) {
-  // Bounded until the answer starts to arrive, so a request lost on the way
-  // fails and is asked again rather than holding up everything waiting on it
-  // for as long as the connection takes to notice. Not the download after
-  // that: by then the passage has been paid for, and on a slow connection a
-  // long one can take a while to come down — cutting it off would only buy it
-  // again.
+  // Bounded, so a request lost on the way fails and is asked again rather than
+  // holding up everything waiting on it (ttsInflight) for as long as the phone
+  // takes to notice — which, on an iPhone, it doesn't: a fetch there has no
+  // timeout of its own. The answer has this long to start, and the download
+  // this long between one piece and the next (ttsReadBody).
   const ctl = (typeof AbortController === 'function') ? new AbortController() : null;
   const timer = ctl ? setTimeout(() => ctl.abort(), TTS_FETCH_TIMEOUT) : null;
   let res;
@@ -8276,7 +8434,7 @@ async function ttsRequestChunk(text, retried, useVoice, ssml, key) {
   const monthCap = parseInt(res.headers.get('x-tts-month-cap') || '', 10);
   if (isFinite(monthChars) && isFinite(monthCap)) ttsBudget = { used: monthChars, cap: monthCap };
   recordTtsChars(parseInt(res.headers.get('x-tts-chars') || '0', 10) || text.length);
-  const bytes = await res.arrayBuffer();
+  const bytes = await ttsReadBody(res, ctl);
   const entry = {
     url: URL.createObjectURL(new Blob([bytes], { type: res.headers.get('content-type') || 'audio/mpeg' })),
     // Nought for anything that isn't MP3 frames, which reads as "no opinion"
@@ -8314,13 +8472,30 @@ function ttsPrefetch(from, depth) {
   for (let i = from; i < upto; i++) {
     const text = ttsSpeakable(s.chunks[i]), ssml = ttsSsmlFor(s, i);
     const key = ttsChunkKey(text, s.voice, ssml);
-    if (s.refused && s.refused.has(key)) continue;
+    if ((s.refused && s.refused.has(key)) || ttsCooling(s, key)) continue;
     ttsFetchChunk(text, false, s.voice, ssml).catch(e => {
       // Refused rather than lost: asking again would only be told again. A rate
       // limit passes, so it isn't one of these.
       if (e && e.status && e.status < 500 && e.status !== 429) (s.refused || (s.refused = new Set())).add(key);
+      else if (e && e.status) ttsCoolDown(s, key);
     });
   }
+}
+
+// Google down (a 5xx) or rate-limited (a 429) is an answer, and the Worker
+// counts the characters before it asks, refusal or not — so a passage refused
+// that way is left alone for a while before the top-up asks again, twice as
+// long each time. Only an ask that got no answer at all is repeated at once.
+// The player's own request for the passage it is about to play ignores this.
+function ttsCooling(s, key) {
+  const c = s.cooling && s.cooling.get(key);
+  return !!c && Date.now() < c.until;
+}
+
+function ttsCoolDown(s, key) {
+  const m = s.cooling || (s.cooling = new Map());
+  const wait = Math.min(((m.get(key) || {}).wait || TTS_TOPUP_EVERY) * 2, 60000);
+  m.set(key, { until: Date.now() + wait, wait });
 }
 
 // Kept ahead of the voice continuously, not once. A passage is fetched when the
@@ -8503,8 +8678,11 @@ function ttsResumeFraction(s) {
 function ttsStartAudio(s) {
   if (!ttsAudioHasCurrent(s)) { ttsPlayIndex(s.i, { resumeFrac: ttsResumeFraction(s) }); return; }
   ttsHum(true);
+  const cue = s.cue;
   ttsPlayStarted(ttsAudio).catch(() => {
-    if (ttsSession === s && s.playing) ttsPlayIndex(s.i, { resumeFrac: ttsResumeFraction(s) });
+    // Unless something has cued a passage since — a scrub, a skip — whose
+    // start this refusal would otherwise undo.
+    if (ttsSession === s && s.playing && s.cue === cue) ttsPlayIndex(s.i, { resumeFrac: ttsResumeFraction(s) });
   });
 }
 
@@ -8527,6 +8705,10 @@ function ttsPlayStarted(a) {
 
 function ttsTogglePlay(force) {
   const s = ttsSession;
+  // Pressed by the listener, or the lock screen on their behalf: whatever the
+  // phone paused is now theirs (see ttsStoppedFromOutside).
+  if (s) s.outside = false;
+  if (ttsHandoff) ttsHandoff.outside = false;
   if (!s) {
     // Between emails, playing on: the lock screen's controls are still up, and
     // a pause pressed there is for the email about to open, which opens paused.
@@ -8546,8 +8728,7 @@ function ttsTogglePlay(force) {
     else if (!s.deviceSpoke) ttsSpeakOnDevice(s.chunks[s.i]);
     else { try { speechSynthesis.resume(); } catch(e) {} }
   } else if (s.playing) ttsStartAudio(s);
-  else if (ttsAudio) { ttsUnbridge(); ttsAudio.pause(); }
-  if (s.playing && s.resting) { s.resting = false; ttsSetMediaSession(); }
+  else { ttsUnbridge(); if (ttsAudio) ttsAudio.pause(); }
   try { navigator.mediaSession.playbackState = s.playing ? 'playing' : 'paused'; } catch(e) {}
   ttsUpdateUI();
 }
@@ -8659,6 +8840,7 @@ function ttsSeekToChar(s, pos) {
     ttsAudio.currentTime = Math.min(frac * d, Math.max(ttsAudio.duration - 0.05, 0));
     ttsStartAudio(s);
     ttsUpdateUI();
+    ttsSetMediaSession();   // playing again, from here
     return;
   }
   ttsPlayIndex(chunk, { resumeFrac: frac });
@@ -8845,6 +9027,7 @@ async function ttsPrefetchNextEmail(current) {
 async function ttsPrefetchNextEmailAudio(s) {
   if (!ttsPlayThrough || s.nextAhead) return;
   s.nextAhead = true;
+  let key = '';
   try {
     const next = await ttsNextEmail(s.email);
     // The body is ttsPrefetchNextEmail's to fetch; until it is in, there's
@@ -8855,15 +9038,21 @@ async function ttsPrefetchNextEmailAudio(s) {
     const built = buildSpeech(next);
     if (!built.chunks.length) return;
     const ahead = { chunks: built.chunks, emph: built.emph, voice: voiceForEmail(next) };
-    await ttsFetchChunk(ttsSpeakable(ahead.chunks[0]), false, ahead.voice, ttsSsmlFor(ahead, 0));
+    const text = ttsSpeakable(ahead.chunks[0]), ssml = ttsSsmlFor(ahead, 0);
+    key = ttsChunkKey(text, ahead.voice, ssml);
+    if (ttsCooling(s, key)) { s.nextAhead = false; return; }
+    await ttsFetchChunk(text, false, ahead.voice, ssml);
   } catch(e) {
     // Lost on the way: the next top-up asks again. Refused: it would be again.
+    // Google down or rate-limited: again, but not yet (ttsCoolDown).
     if (!(e && e.status && e.status < 500 && e.status !== 429)) s.nextAhead = false;
+    if (key && e && e.status && (e.status >= 500 || e.status === 429)) ttsCoolDown(s, key);
   }
 }
 
 async function finishReadAloud() {
-  const email = ttsSession && ttsSession.email;
+  const prev = ttsSession;
+  const email = prev && prev.email;
   // Only an email still open finished where you could hear it; one the reader
   // has already moved off was left behind, not listened to.
   const here = !!(email && readerEmail === email);
@@ -8874,7 +9063,9 @@ async function finishReadAloud() {
   // whole of listening — the likeliest place for a phone in a pocket to
   // freeze the app, with nothing on the lock screen to start it again.
   const onward = here && ttsPlayThrough;
-  if (onward) { ttsHandoff = { paused: false }; ttsBridge(); }
+  // The good voice proving itself on this email counts for the next one; the
+  // device voice reading it to the end proves nothing about a pocket.
+  if (onward) { ttsHandoff = { paused: false, proven: !!(prev.mode === 'cloud' && prev.played) }; ttsBridge(); }
   stopReadAloud({ keepSound: onward });
   // Where to go next is settled before the mailbox changes: marking this email
   // read takes it out of the Keep list the queue is read from, and the row
@@ -8901,9 +9092,9 @@ async function finishReadAloud() {
   if (restAfterThis) toast(TTS_AUTO_BATCH + ' read — press play to carry on');
 }
 
-// keepSound is for playing on to the next email: the element goes on sounding
-// and the lock screen keeps its controls through the hand-over. Anything else
-// stopping read-aloud ends a hand-over as well.
+// keepSound is for playing on to the next email: the silence under the voice
+// goes on and the lock screen keeps its controls through the hand-over.
+// Anything else stopping read-aloud ends a hand-over as well.
 function stopReadAloud(opts = {}) {
   const s = ttsSession;
   ttsSession = null;
@@ -8913,7 +9104,8 @@ function stopReadAloud(opts = {}) {
   try { speechSynthesis.cancel(); } catch(e) {}
   if (!opts.keepSound) {
     ttsHandoff = null;
-    ttsUnbridge();
+    ttsLeaveBridge();
+    ttsReleaseHum();
     if (ttsAudio) { try { ttsAudio.pause(); } catch(e) {} }
   }
   if (s) {
@@ -9470,6 +9662,9 @@ function ttsUpdateUI() {
     const prog = document.getElementById('rtts-progress');
     if (prog) prog.textContent = '';
   }
+  // Playing again by any route ends the batch rest: the lock screen names the
+  // sender again, and a later pause is just a pause.
+  if (s && s.playing && s.resting) { s.resting = false; ttsSetMediaSession(); }
   ttsPaintTrack();
   const rate = document.getElementById('rtts-rate');
   if (rate) rate.innerHTML = ttsRateLabel(ttsRate) + '&times;';
