@@ -6557,12 +6557,21 @@ function watchScrollForFooter(scroller, scrollTarget, owin, odoc, email) {
   let dismissed = false;   // scrolled back up — keep the button away for now
   let everHidden = false;  // once it has, scroll position alone decides
   const atBottom = () => scroller.scrollHeight - (scroller.scrollTop + scroller.clientHeight) <= 12;
-  const reveal = () => { if (!dismissed && readerEmail === email) revealReaderFooter(email); };
+  // An email whose end is on its first screen was never scrolled to the end, so
+  // reaching it says nothing about being done listening: the player stays.
+  // Read-aloud can start before this is set up — before an HTML email's
+  // pictures have loaded — and the footer used to put its bar away for good.
+  let fits = false;
+  const reveal = () => { if (!dismissed && readerEmail === email) revealReaderFooter(email, fits); };
   try {
+    const sentinel = odoc.createElement('div');
+    sentinel.style.cssText = 'height:1px;width:100%;';
+    (scroller === odoc.scrollingElement ? odoc.body : scroller).appendChild(sentinel);
+    // Measured by the sentinel, not by scrollHeight: an HTML email's
+    // full-height body and its margin always leave a few pixels to scroll.
+    const top0 = scroller === odoc.scrollingElement ? 0 : scroller.getBoundingClientRect().top;
+    fits = sentinel.getBoundingClientRect().bottom - top0 + scroller.scrollTop <= scroller.clientHeight + 12;
     if (owin && owin.IntersectionObserver) {
-      const sentinel = odoc.createElement('div');
-      sentinel.style.cssText = 'height:1px;width:100%;';
-      (scroller === odoc.scrollingElement ? odoc.body : scroller).appendChild(sentinel);
       const io = new owin.IntersectionObserver(entries => {
         // Only the first reveal leans on the sentinel: showing and hiding the
         // footer resizes the scroller, which moves the sentinel in and out of
@@ -6590,7 +6599,7 @@ function watchScrollForFooter(scroller, scrollTarget, owin, odoc, email) {
   setTimeout(check, 1500);
 }
 
-function revealReaderFooter(email) {
+function revealReaderFooter(email, keepBar) {
   if (readerEmail !== email) return;
   const overlay = document.getElementById('reader-overlay');
   if (overlay.querySelector('.reader-footer')) return; // already shown
@@ -6599,7 +6608,7 @@ function revealReaderFooter(email) {
   pauseAutoScroll();
   const pill = document.getElementById('reader-autoscroll');
   if (pill) pill.style.display = 'none';
-  ttsShowBar(false);
+  if (!keepBar) ttsShowBar(false);
   const footer = document.createElement('div');
   footer.className = 'reader-footer';
   // An email heard to the end has already been marked; the bottom of the page
@@ -7715,15 +7724,18 @@ function ttsHeld(s) {
 //
 // How long the loop is depends on the browser. Chrome takes anything of five
 // seconds or less for a passing sound: it asks other apps to duck for it, and
-// on Android a session holding only that loses its lock-screen controls — so
-// six seconds there. Safari would put the app on the lock screen for anything
-// over a second, and the loop is played once, to unlock it, on the first tap
-// in the app — so just under a second there, or the lock screen would offer to
-// play the app before anything had been read. userAgentData is Chrome's alone;
-// every browser on an iPhone is Safari underneath.
+// on Android a session holding only that loses its lock-screen controls; and
+// Firefox gives lock-screen controls to nothing under three — so six seconds.
+// Safari puts the app on the lock screen for anything longer than 0.95 s (the
+// length of AOL's "You've got mail", by its own source), and the loop is
+// played once, to unlock it, on the first tap in the app — so 0.9 s there, or
+// the lock screen would offer to play the app before anything had been read.
+// GestureEvent is Safari's alone, and every browser on an iPhone is Safari
+// underneath; userAgentData is Chrome's.
 function ttsUnderlaySource() {
   if (ttsUnderlayData) return ttsUnderlayData;
-  const n = Math.round((navigator.userAgentData ? 6 : 0.9) * 8000) * 2;   // 16-bit mono at 8 kHz
+  const safari = !navigator.userAgentData && typeof GestureEvent !== 'undefined';
+  const n = Math.round((safari ? 0.9 : 6) * 8000) * 2;   // 16-bit mono at 8 kHz
   const b = new Uint8Array(44 + n);    // zeroed, and zero is silence
   const v = new DataView(b.buffer);
   const tag = (at, str) => { for (let i = 0; i < 4; i++) b[at + i] = str.charCodeAt(i); };
@@ -7767,17 +7779,22 @@ function ttsHum(on) {
   }
 }
 
-// Reading is over: the silence is let go of, not just paused. Paused, it is
-// still the page's media player, and Chrome keeps a paused player's session —
-// the notification, a Play button on the lock screen, audio focus — for as
-// long as there is one. Taken up again (ttsHum) when reading next wants sound.
+// Reading is over: the silence is let go of, not just paused, and so is the
+// voice (stopReadAloud). Paused, an element is still the page's media player,
+// and Chrome keeps a paused player's session — the notification, a Play button
+// on the lock screen that would play an old passage, audio focus — for as long
+// as there is one. The silence is taken up again (ttsHum) when reading next
+// wants sound; the voice is given a passage of its own (ttsPlayIndex).
 function ttsReleaseHum() {
-  const u = ttsUnderlay;
-  if (!u) return;
+  if (!ttsUnderlay) return;
   ttsHum(false);
-  if (u.hasAttribute('src')) {
-    u.removeAttribute('src');
-    try { u.load(); } catch(e) {}
+  ttsLetGo(ttsUnderlay);
+}
+
+function ttsLetGo(el) {
+  if (el && el.hasAttribute('src')) {
+    el.removeAttribute('src');
+    try { el.load(); } catch(e) {}
   }
 }
 
@@ -7822,11 +7839,13 @@ function ttsAudioPaused() {
   const s = ttsSession;
   if (!a || !a.paused || a.ended) return;   // a passage finishing, or already going again
   if (!s || !s.playing || !ttsHeld(s)) return;
-  // Paused before a sound came out of it: WebKit putting away a start that was
-  // still loading when the page went out of sight, which it does to anything
-  // not yet audible. The play() it refused is asked again (ttsPlayIndex's
-  // retries); taking this for a pause from outside held the reading instead.
-  if (!a._sounding) return;
+  // Paused before a sound came out of it while a start is still waiting on its
+  // answer: WebKit putting away a start that was loading when the page went
+  // out of sight, which it does to anything not yet audible. The play() it
+  // refused is asked again (ttsPlayIndex's retries); taking this for a pause
+  // from outside held the reading instead. With no start outstanding there is
+  // nothing to ask again, and it is a pause like any other.
+  if (!a._sounding && a._starting) return;
   ttsStoppedFromOutside(s);
 }
 
@@ -7846,6 +7865,11 @@ function ttsAudioPlayed() {
   const a = ttsAudio;
   const s = ttsSession;
   if (!a || a.paused || !s || s.playing || !ttsHeld(s)) return;
+  // Only what the phone took (ttsStoppedFromOutside). WebKit also starts an
+  // element when the page comes back into view if it was last started while
+  // the page was out of it — even after a pause pressed on the lock screen
+  // since — and the app would open talking.
+  if (!s.outside) { try { a.pause(); } catch(e) {} return; }
   s.playing = true;
   s.outside = false;
   ttsHum(true);
@@ -7905,8 +7929,22 @@ function ttsUnderlayPlayed() {
 // same, so the element goes on saying it is playing while its clock stands
 // still, and nothing (no pause, no timeupdate, no ended) says otherwise. Once a
 // second, a clock that hasn't moved in three is given a push: paused and
-// started again, which either plays or is refused openly (ttsAudioPaused).
+// started again (ttsStartAudio), which either plays or is refused, and a
+// refusal goes through the same retries and hold as any other. The silence
+// under the voice can stop the same way, and is pushed the same way.
 function ttsWatchProgress() {
+  const u = ttsUnderlay;
+  if (u && u._on && !u.paused && u.readyState >= 3) {
+    const t = u.currentTime, now = Date.now();
+    if (u._stillAt !== t || !u._stillSince) { u._stillAt = t; u._stillSince = now; }
+    else if (now - u._stillSince >= 3000) {
+      u._stillSince = 0;
+      try { u.pause(); } catch(e) {}
+      u._sounding = false;
+      const p = u.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+  } else if (u) u._stillSince = 0;
   const s = ttsSession, a = ttsAudio;
   if (!s || !s.playing || s.mode !== 'cloud' || !ttsHeld(s) ||
       a.paused || a.ended || a.seeking || a.readyState < 3) {
@@ -8695,7 +8733,14 @@ function ttsStartAudio(s) {
 function ttsPlayStarted(a) {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const finish = (ok, err) => { if (settled) return; settled = true; clearTimeout(timer); ok ? resolve() : reject(err); };
+    a._starting = (a._starting || 0) + 1;   // starts still waiting on an answer (ttsAudioPaused)
+    const finish = (ok, err) => {
+      if (settled) return;
+      settled = true;
+      a._starting--;
+      clearTimeout(timer);
+      ok ? resolve() : reject(err);
+    };
     const timer = setTimeout(() => finish(!a.paused, new Error('play_stalled')), TTS_PLAY_TIMEOUT);
     let p;
     try { p = a.play(); } catch(e) { finish(false, e); return; }
@@ -9106,7 +9151,7 @@ function stopReadAloud(opts = {}) {
     ttsHandoff = null;
     ttsLeaveBridge();
     ttsReleaseHum();
-    if (ttsAudio) { try { ttsAudio.pause(); } catch(e) {} }
+    if (ttsAudio) { try { ttsAudio.pause(); } catch(e) {} ttsLetGo(ttsAudio); }
   }
   if (s) {
     if (s.resumeTimer) clearTimeout(s.resumeTimer);
