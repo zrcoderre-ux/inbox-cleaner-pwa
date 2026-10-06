@@ -2526,7 +2526,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v142'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v143'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6198,9 +6198,8 @@ function setKeepListen(on) {
 }
 
 function toggleKeepListen() {
-  // The tap is the gesture audio needs: unlocking here is what lets an email
-  // opened a moment later start speaking without one of its own.
-  if (!keepListenMode) ttsUnlockAudio();
+  // Nothing is unlocked here: the tap that opens an email in listen mode is
+  // the one that plays it (openKept).
   setKeepListen(!keepListenMode);
   toast(keepListenMode
     ? 'Listen mode on — long reads only, played as you open them'
@@ -7139,6 +7138,7 @@ async function ensureReaderBody(email) {
 // read without swiping back to the deck.
 function openInGmail() {
   if (!currentEmail) return;
+  ttsUnlockForOpen(false);
   openReader(currentEmail, { markRead: true });
 }
 
@@ -7397,6 +7397,7 @@ async function openKept(id) {
   if (Date.now() - keepClickGuardTs < 400) return;
   const openRow = document.querySelector('.keep-row.kr-open');
   if (openRow) { closeKeepRow(openRow); return; }
+  ttsUnlockForOpen(true);
   let email = emails.find(e => e.id === id);
   if (!email) {
     try {
@@ -8826,7 +8827,15 @@ function ttsUnlockAudio() {
       u._unlocked = true;
       if (!u.hasAttribute('src')) u.src = ttsUnderlaySource();
       const q = u.play();
-      if (q && q.catch) q.catch(e => { if (e && e.name === 'NotAllowedError') u._unlocked = false; });
+      // Played under the tap, it's unlocked for good; loaded and paused,
+      // though, it would go on holding the phone's audio (ttsReleaseHum), so
+      // unless reading has taken it up meanwhile it's let go. Either way the
+      // play settles: ttsUnderlayPlayed pausing it at once aborts the request.
+      const settle = e => {
+        if (e && e.name === 'NotAllowedError') u._unlocked = false;
+        if (!u._on) { try { u.pause(); } catch(_) {} ttsLetGo(u); }
+      };
+      if (q && q.then) q.then(() => settle(), settle);
     }
   } catch(e) {}
 }
@@ -8836,6 +8845,14 @@ function ttsUnlockAudio() {
 // switched off must not leave the reader with neither.
 function ttsWillAutoStart() {
   return !!(ttsEnabled && ttsAutoStart);
+}
+
+// Called first thing in a tap that opens an email, before anything is
+// awaited, since only the tap itself can unlock audio. Only when the email is
+// going to start speaking without a tap of its own (auto-start, or listen
+// mode); otherwise opening an email leaves other apps' audio alone.
+function ttsUnlockForOpen(listen) {
+  if (ttsWillAutoStart() || (listen && keepListenMode && ttsEnabled)) ttsUnlockAudio();
 }
 
 function toggleReadAloud() {
@@ -10527,12 +10544,11 @@ function loadTts() {
   // closed — the page is gone but the speech isn't. Take it back on the way out.
   window.addEventListener('pagehide', ttsSilenceDeviceVoice);
   window.addEventListener('beforeunload', ttsSilenceDeviceVoice);
-  if (ttsEnabled) {
-    // Unlock audio on the first tap anywhere, so auto-start can begin speaking
-    // on an email opened later without a gesture of its own.
-    document.addEventListener('pointerdown', ttsUnlockAudio, { once: true, passive: true });
-    populateTtsVoices();
-  }
+  // Audio is not unlocked on a first tap anywhere: playing even silence takes
+  // the phone's audio from whatever else is playing (music, a podcast) when
+  // nothing here is being read. It's unlocked by the tap that opens an email
+  // which will start reading by itself (ttsUnlockForOpen), or that starts it.
+  if (ttsEnabled) populateTtsVoices();
 }
 
 function setTtsEnabled(on) {
@@ -10542,7 +10558,7 @@ function setTtsEnabled(on) {
   // must not keep hiding the short mail for a feature that no longer speaks.
   if (!on) { stopReadAloud(); if (keepListenMode) setKeepListen(false); }
   syncTtsUI();
-  if (on) { ttsUnlockAudio(); populateTtsVoices(); }
+  if (on) populateTtsVoices();
 }
 
 // ── A voice per author ─────────────────────────────────────
