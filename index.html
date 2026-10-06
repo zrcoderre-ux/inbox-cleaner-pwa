@@ -604,6 +604,9 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
 }
 .kept-bar > svg { width: 20px; height: 20px; margin-right: 8px; color: var(--on-surface-variant); }
 .kept-bar .kept-msg { flex: 1; min-width: 0; }
+.kept-bar.has-action { flex-wrap: wrap; padding-top: 8px; }
+.kept-bar.has-action .kept-msg { flex-basis: calc(100% - 32px); }
+.kept-bar.has-action #kept-mark-read { margin-left: auto; }
 .kept-bar button {
   height: 36px;
   padding: 0 12px;
@@ -2136,6 +2139,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
       <div class="kept-bar" id="kept-bar" style="display:none;">
         <svg class="mi" viewBox="0 -960 960 960"><path d="m480-240-168 72q-40 17-76-6.5T200-241v-519q0-33 23.5-56.5T280-840h400q33 0 56.5 23.5T760-760v519q0 43-36 66.5t-76 6.5l-168-72Zm0-88 200 86v-518H280v518l200-86Zm0-432H280h400-200Z"/></svg>
         <span class="kept-msg" id="kept-bar-msg"></span>
+        <button id="kept-mark-read" onclick="markKeptBarRead()" style="display:none;">Mark read</button>
         <button onclick="reviewKept()">Review</button>
         <button onclick="clearKept()">Reset</button>
       </div>
@@ -2330,7 +2334,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
           <label class="setting-row">
             <span class="setting-text">
               <span class="setting-title">Mark kept emails as read</span>
-              <span class="setting-desc">Swiping Keep just applies the Keep label (no longer keeps them unread). They still appear in the Keep tab.</span>
+              <span class="setting-desc">Swiping Keep marks the email read; it stays in the Keep tab. Turning this on also marks the ones you've already kept as read, after telling you how many.</span>
             </span>
             <input type="checkbox" id="keep-marks-read" onchange="setKeepMarksRead(this.checked)">
           </label>
@@ -2522,7 +2526,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v141'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v142'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2676,6 +2680,12 @@ let keepListenMode = false;
 const KEEP_NEWSLETTER_WORDS = 300;
 // When true, swiping Keep also marks the email read (label only, not unread).
 let keepMarksRead = false;
+// Kept emails Gmail has as unread, listed at each full load and kept current
+// through the session's keeps and catch-ups. null until a load has asked
+// Gmail (offline, or before the first load).
+let keptUnreadIds = null;
+let keptReadBusy = false;        // a catch-up is counting or writing
+let keptReadMarks = 0;           // catch-ups that have written, to spot stale listings
 // Optional auto-scroll while reading. Speed is a reading pace in words/minute;
 // each email's scroll speed is derived from its length so it finishes when a
 // reader at that pace would. asState holds the running animation.
@@ -3846,6 +3856,7 @@ function saveKept() {
 // Once an email is read (or blocked) there's no reason to remember it as kept.
 // Also drops the Gmail label so the un-keep propagates to other devices.
 function forgetKept(id) {
+  if (keptUnreadIds) keptUnreadIds.delete(id);
   if (keptIds.delete(id)) {
     saveKept();
     idbDelete(id).catch(() => {});
@@ -4207,6 +4218,7 @@ function removeOps(pred) {
 // Removes a kept email from all local state (list + offline cache).
 function dropKeptLocally(id) {
   keptIds.delete(id);
+  if (keptUnreadIds) keptUnreadIds.delete(id);
   saveKept();
   idbDelete(id).catch(() => {});
 }
@@ -4233,6 +4245,38 @@ async function sendKeepToGmail(id, alsoRead) {
     const resource = { addLabelIds: [keepLabelId] };
     if (alsoRead) resource.removeLabelIds = ['UNREAD'];
     await gapi.client.gmail.users.messages.modify({ userId: 'me', id, resource });
+    return true;
+  } catch(e) { return false; }
+}
+
+// Every kept email Gmail has as unread: the Keep label and UNREAD together,
+// archived mail included. complete is false if it stopped at the cap.
+async function listKeptUnreadIds() {
+  await ensureKeepLabel();
+  const ids = [];
+  let pageToken;
+  do {
+    const res = await gapi.client.gmail.users.messages.list({
+      userId: 'me', labelIds: [keepLabelId, 'UNREAD'], maxResults: 500, pageToken
+    });
+    (res.result.messages || []).forEach(m => ids.push(m.id));
+    pageToken = res.result.nextPageToken;
+  } while (pageToken && ids.length < 10000);
+  return { ids, complete: !pageToken };
+}
+
+// Marks kept emails read without un-keeping them: only UNREAD comes off. The
+// ids come from Gmail's own Keep-label listing, so the label is already there,
+// and it's never added here: putting it back on an email another device has
+// since finished would re-keep it everywhere.
+async function markKeptReadRemote(ids) {
+  if (!onlineReady()) return false;
+  try {
+    for (let i = 0; i < ids.length; i += 1000) {
+      await gapi.client.gmail.users.messages.batchModify({
+        userId: 'me', resource: { ids: ids.slice(i, i + 1000), removeLabelIds: ['UNREAD'] }
+      });
+    }
     return true;
   } catch(e) { return false; }
 }
@@ -4436,6 +4480,7 @@ function adoptAccount(email, token, expiry, legacy) {
 // (Re)loads the active account's namespaced data and resets its Keep label.
 function loadAccountData() {
   keepLabelId = null;
+  keptUnreadIds = null;
   loadKept();
   loadPendingOps();
   loadSenderStats();
@@ -4847,7 +4892,7 @@ function enterOfflineMode() {
   // deck and shown in the Keep tab as usual.
   emails = loadDeckSnapshot().map(e => ({
     id: e.id, sender: e.sender, subject: e.subject, date: e.date,
-    important: !!e.important, bodyText: null, bodyLoaded: false
+    important: !!e.important, keptRead: !!e.keptRead, bodyText: null, bodyLoaded: false
   }));
   swipeQueue = emails.filter(e => !keptIds.has(e.id));
   sortQueue();
@@ -5003,6 +5048,13 @@ async function fetchEmails() {
     // Reconcile the kept set with the Gmail label so it matches other devices
     // before we decide what to hide from the deck.
     try { await syncKeptFromLabel(); } catch(_) {}
+    // The exact kept-but-unread count, for the kept bar and the catch-up.
+    {
+      const marks = keptReadMarks;   // a catch-up landing meanwhile makes this listing stale
+      let listed = null;
+      try { listed = new Set((await listKeptUnreadIds()).ids); } catch(_) {}
+      if (marks === keptReadMarks) keptUnreadIds = listed;
+    }
 
     const MAX_TOTAL = 200;
     const { messages, importantIds } = await listUnreadMessages(MAX_TOTAL);
@@ -5013,6 +5065,7 @@ async function fetchEmails() {
       renderEmailList();
       renderKeepList();
       backfillKeptCache();
+      maybeCatchUpKeptRead();
       return;
     }
 
@@ -5036,6 +5089,7 @@ async function fetchEmails() {
     renderKeepList();
     pickInitialTab();
     setStatus(false, `${emails.length} emails loaded.`);
+    maybeCatchUpKeptRead();
     startAutoRefresh();
     saveDeckSnapshot();
     // Cache all kept emails first, then the rest of the deck (lower priority),
@@ -5214,7 +5268,7 @@ let deckSnapTimer = null;
 function saveDeckSnapshot() {
   try {
     localStorage.setItem(nsKey('ic_deck'), JSON.stringify(
-      emails.map(e => ({ id: e.id, sender: e.sender, subject: e.subject, date: e.date, important: !!e.important }))
+      emails.map(e => ({ id: e.id, sender: e.sender, subject: e.subject, date: e.date, important: !!e.important, keptRead: !!e.keptRead }))
     ));
   } catch(e) {}
 }
@@ -5561,6 +5615,9 @@ async function doKeep(email) {
   saveKept();
   enqueueCache(email, 0);
   const alsoRead = keepMarksRead;
+  // Read or not, it's now known locally, so the kept bar counts it right.
+  email.keptRead = alsoRead;
+  if (keptUnreadIds) { if (alsoRead) keptUnreadIds.delete(email.id); else keptUnreadIds.add(email.id); }
   const ok = await sendKeepToGmail(email.id, alsoRead);
   if (!ok) enqueueOp({ type: 'keep', id: email.id, read: alsoRead });
   toast(alsoRead ? 'Kept' : 'Kept unread');
@@ -5605,9 +5662,20 @@ async function undoSwipe() {
     }
     emails.push(last.email);
   } else if (last.action === 'skip') {
-    // The email was kept unread — undoing means we no longer remember it.
+    // The email was kept — undoing means we no longer remember it.
     removeOps(o => o.type === 'keep' && o.id === last.email.id);
     forgetKept(last.email.id);
+    // A keep that also marked it read is put back to unread, as it was.
+    if (last.email.keptRead) {
+      last.email.keptRead = false;
+      if (onlineReady()) {
+        try {
+          await gapi.client.gmail.users.messages.modify({
+            userId: 'me', id: last.email.id, resource: { addLabelIds: ['UNREAD'] }
+          });
+        } catch(e) {}
+      }
+    }
   } else if (last.action === 'block') {
     // Can only restore the one card to the queue; spam emails stay spammed
     toast('Block cannot be fully undone — email restored to queue only');
@@ -5626,20 +5694,162 @@ function updateSwipeCounter() {
 }
 
 // Shows a bar when loaded emails are being hidden from the deck because they
-// were previously kept unread, with options to review or forget them.
+// were previously kept unread, with options to review or forget them. Its
+// count is Gmail's, against the whole kept list, so it squares with the Keep
+// tab's number. With "Mark kept emails as read" on, kept emails still unread
+// are leftovers (kept before the setting, or unread on another device), so it
+// also shows when none are loaded, and offers to mark them read.
 function updateKeptBar() {
   const bar = document.getElementById('kept-bar');
   const msg = document.getElementById('kept-bar-msg');
   if (!bar) return;
   const inDeck = new Set(swipeQueue.map(e => e.id));
-  const hidden = emails.filter(e => keptIds.has(e.id) && !inDeck.has(e.id)).length;
-  if (hidden > 0) {
+  const exact = !!keptUnreadIds;
+  // Gmail's word on what's unread wins over the loaded copy, which can be
+  // stale (read, or un-kept, on another device since it loaded).
+  const hidden = emails.filter(e => keptIds.has(e.id) && !inDeck.has(e.id) && !e.keptRead &&
+    (!exact || keptUnreadIds.has(e.id))).length;
+  const unread = exact ? Math.max(keptUnreadCount(), hidden) : hidden;
+  if (hidden > 0 || (keepMarksRead && unread > 0)) {
+    const total = Math.max(keptIds.size, unread);
+    const still = keepMarksRead ? 'still ' : '';
     bar.style.display = 'flex';
-    msg.textContent = `${hidden} kept unread, in the Keep tab`;
+    msg.textContent = !exact
+      ? `${hidden} unread kept ${hidden === 1 ? 'email isn\u2019t' : 'emails aren\u2019t'} in the deck`
+      : unread >= total
+        ? (total === 1 ? `Your kept email is ${still}unread` : `All ${total} kept emails are ${still}unread`)
+        : `${unread} of your ${total} kept emails ${unread === 1 ? 'is' : 'are'} ${still}unread`;
+    bar.classList.toggle('has-action', keepMarksRead);
+    const markBtn = document.getElementById('kept-mark-read');
+    if (markBtn) markBtn.style.display = keepMarksRead ? '' : 'none';
   } else {
     bar.style.display = 'none';
   }
   updateKeepBadge();
+}
+
+// ── Marking kept emails read ───────────────────────────────
+// With "Mark kept emails as read" on, a kept email is read in Gmail and stays
+// in Keep. These bring the emails kept before that (or kept unread on another
+// device) into line. It only ever happens online, straight after a warning
+// that gives Gmail's own count; offline, the account is marked as owed and the
+// warning comes on its next load. Nothing is queued blind.
+
+function keptUnreadCount() {
+  return keptUnreadIds ? keptUnreadIds.size : 0;
+}
+
+// Whether this account's earlier keeps have been dealt with (marked read, or
+// the warning declined) since the setting last went on. Each turn-on starts a
+// new generation, so every account is owed its catch-up again, not just the
+// one it was turned on from.
+function keptReadGen() {
+  try { return localStorage.getItem('ic_kept_read_gen') || '1'; } catch(e) { return '1'; }
+}
+function newKeptReadGen() {
+  try { localStorage.setItem('ic_kept_read_gen', String(Date.now())); } catch(e) {}
+}
+function keptReadCaughtUp() {
+  try { return localStorage.getItem(nsKey('ic_kept_read_done')) === keptReadGen(); } catch(e) { return false; }
+}
+function setKeptReadCaughtUp(done) {
+  try { localStorage.setItem(nsKey('ic_kept_read_done'), done ? keptReadGen() : ''); } catch(e) {}
+}
+
+// Waits out an outbox flush already under way, which may be sending a keep
+// the catch-up has counted. Bounded, in case a flush hangs.
+async function waitForOutbox() {
+  for (let i = 0; flushingOps && i < 100; i++) await new Promise(r => setTimeout(r, 100));
+}
+
+// Marks every kept email still unread as read, after a warning saying how
+// many; none, no warning. confirmText(n) words the warning for where it's
+// asked from; wanted() is checked again just before asking, since the setting
+// can change while Gmail is being counted. Returns 'done' or 'declined', or
+// why nothing happened: 'busy' (one is running), 'offline', 'unreachable'
+// (the count failed), 'failed' (the write failed; already said), 'switched'
+// (the account changed underneath) or 'unwanted'.
+async function catchUpKeptRead(confirmText, wanted) {
+  if (keptReadBusy) return 'busy';
+  keptReadBusy = true;
+  const cb = document.getElementById('keep-marks-read');
+  if (cb) cb.disabled = true;     // no toggling while it counts and writes
+  const acct = activeEmail;
+  try {
+    if (!onlineReady()) return 'offline';
+    let listing;
+    try { listing = await listKeptUnreadIds(); } catch(e) { return 'unreachable'; }
+    if (activeEmail !== acct) return 'switched';
+    if (wanted && !wanted()) return 'unwanted';
+    // Keeps still waiting in the outbox aren't labelled yet; they land read
+    // by flipping their queued op instead.
+    const pendingIds = pendingOps.filter(o => o.type === 'keep' && !o.read).map(o => o.id);
+    const all = new Set([...listing.ids, ...pendingIds]);
+    keptUnreadIds = new Set([...listing.ids, ...pendingIds]);
+    if (!all.size) {
+      setKeptReadCaughtUp(true);
+      updateKeptBar();
+      return 'done';
+    }
+    if (!confirm(confirmText(all.size))) { updateKeptBar(); return 'declined'; }
+    if (listing.ids.length && !await markKeptReadRemote(listing.ids)) {
+      if (activeEmail === acct) toast('Couldn\u2019t reach Gmail \u2014 kept emails are still unread');
+      return 'failed';
+    }
+    if (activeEmail !== acct) return 'switched';
+    keptReadMarks++;
+    // Flip the counted keeps still queued. One a flush sent meanwhile went out
+    // unread, but it carries the label now, so it's marked read directly.
+    await waitForOutbox();
+    const queued = new Set();
+    let touched = false;
+    pendingOps.forEach(o => {
+      if (o.type !== 'keep' || !all.has(o.id)) return;
+      queued.add(o.id);
+      if (!o.read) { o.read = true; touched = true; }
+    });
+    if (touched) savePendingOps();
+    const sentUnread = pendingIds.filter(id => !queued.has(id));
+    if (sentUnread.length) await markKeptReadRemote(sentUnread);
+    if (activeEmail !== acct) return 'switched';
+    all.forEach(id => keptUnreadIds.delete(id));
+    // Read now: they stay in Keep, and leave the deck if Review had put them there.
+    emails.forEach(e => { if (all.has(e.id)) e.keptRead = true; });
+    swipeQueue = swipeQueue.filter(e => !all.has(e.id));
+    // A listing cut off at the cap leaves the rest for the next load.
+    setKeptReadCaughtUp(listing.complete);
+    renderSwipeStack();
+    renderEmailList();
+    renderKeepList();
+    toast(`Marked ${all.size} kept ${all.size === 1 ? 'email' : 'emails'} as read`);
+    return 'done';
+  } finally {
+    keptReadBusy = false;
+    if (cb) cb.disabled = false;
+  }
+}
+
+const keptStay = n => `${n === 1 ? 'It stays' : 'They stay'} in the Keep tab.`;
+const keptCount = n => `${n} kept ${n === 1 ? 'email' : 'emails'}`;
+
+// After a load: with the setting on and this account not yet caught up (it
+// was turned on offline, on another account, or before this existed), ask now.
+async function maybeCatchUpKeptRead() {
+  if (!keepMarksRead || keptReadCaughtUp()) return;
+  const r = await catchUpKeptRead(n =>
+    `"Mark kept emails as read" is on.\n\nMark the ${keptCount(n)} that ${n === 1 ? 'is' : 'are'} still unread as read? ${keptStay(n)}`,
+    () => keepMarksRead);
+  // Asked once; declining is an answer. The bar's Mark read stays available.
+  if (r === 'declined') setKeptReadCaughtUp(true);
+}
+
+// The bar's Mark read button.
+async function markKeptBarRead() {
+  const r = await catchUpKeptRead(n => `Mark ${keptCount(n)} as read? ${keptStay(n)}`, () => keepMarksRead);
+  if (r === 'declined') setKeptReadCaughtUp(true);   // the same answer the load prompt would get
+  else if (r === 'busy') toast('Already checking kept emails\u2026');
+  else if (r === 'offline') toast('You\u2019re offline \u2014 try again once you\u2019re back online');
+  else if (r === 'unreachable') toast('Couldn\u2019t reach Gmail \u2014 try again');
 }
 
 // Bring previously-kept emails back into the deck for this session (without
@@ -6012,10 +6222,30 @@ function loadKeepMarksRead() {
   if (cb) cb.checked = keepMarksRead;
 }
 
-function setKeepMarksRead(on) {
+// Turning it on applies to what's already kept, too: every kept email still
+// unread is marked read (and stays kept), after a warning saying how many.
+// Declining the warning leaves the setting off. If Gmail can't be counted
+// (offline), it turns on and the warning waits for the next load. Each
+// turn-on owes every account its catch-up again.
+async function setKeepMarksRead(on) {
+  const cb = document.getElementById('keep-marks-read');
+  if (on && !keepMarksRead) {
+    newKeptReadGen();
+    const r = await catchUpKeptRead(n =>
+      `Turn on "Mark kept emails as read"?\n\nThis also marks the ${keptCount(n)} that ${n === 1 ? 'is' : 'are'} still unread as read. ${keptStay(n)}`);
+    if (r === 'declined' || r === 'busy') {
+      if (cb) cb.checked = false;
+      if (r === 'busy') toast('Already checking kept emails \u2014 try again in a moment');
+      return;
+    }
+    if (r === 'offline' || r === 'unreachable' || r === 'failed') {
+      toast('On \u2014 you\u2019ll be asked about emails you\u2019ve already kept on your next load');
+    }
+  }
   keepMarksRead = !!on;
   try { localStorage.setItem('ic_keep_marks_read', on ? '1' : '0'); } catch(e) {}
   if (swipeMode === 'triage') setSwipeMode('triage'); // refresh the hint text
+  updateKeptBar();
 }
 
 // Restores the "sort swipe deck by sender" setting and reflects it in the toggle.
