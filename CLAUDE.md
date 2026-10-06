@@ -51,6 +51,10 @@ The app is a single-file PWA. There is no build step — edit and ship.
   `enqueueOp(...)` so `flushOutbox()` retries on reconnect.
 - Escape anything user- or mail-derived with `esc()` before it reaches
   `innerHTML`.
+- Styling follows Material 3: colour roles (`--primary`, `--surface`,
+  `--on-surface-variant`, …) are defined on `:root` and redefined in the
+  dark-scheme block — use the roles, never raw hex. Icons are Material
+  Symbols: inline `<svg class="mi">` in markup, `icon(name)` in script.
 - Settings follow a `loadX()` / `setX(value)` pair; call `loadX()` from the
   init block at the bottom of the script.
 

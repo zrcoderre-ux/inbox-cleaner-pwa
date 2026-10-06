@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<meta name="theme-color" content="#EA4335">
+<meta name="theme-color" content="#F6F8FC" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131314" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Inbox Cleaner">
@@ -12,50 +13,136 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
 <title>Inbox Cleaner</title>
+<!-- Google Sans, loaded without blocking first paint: offline or on a slow
+     connection the app draws in the system font and swaps when it arrives. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" media="print" onload="this.media='all'">
 <style>
 /* ── Reset & Base ─────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Material 3 colour roles, in the tones Google's own apps use (Gmail, Drive).
+   Components read these roles, never raw hex, so the dark block below is the
+   only other place a colour needs to change. */
 :root {
-  --red: #EA4335;
-  --red-light: #FCE8E6;
-  --green: #34A853;
-  --green-light: #E6F4EA;
-  --surface: #ffffff;
-  --surface-2: #F8F9FA;
-  --surface-3: #F1F3F4;
-  --border: rgba(0,0,0,0.10);
-  --border-mid: rgba(0,0,0,0.16);
-  --text-1: #202124;
-  --text-2: #5F6368;
-  --text-3: #9AA0A6;
-  --radius: 16px;
-  --radius-sm: 10px;
-  --nav-h: 64px;
-  --header-h: 56px;
-  --sans: 'Google Sans', 'DM Sans', system-ui, sans-serif;
-  --mono: 'DM Mono', 'Fira Mono', monospace;
-  --orange: #F29900;
-  --orange-light: #FEF3E2;
-  --shadow-card: 0 2px 12px rgba(0,0,0,0.10), 0 1px 3px rgba(0,0,0,0.06);
-  --shadow-card-lifted: 0 12px 40px rgba(0,0,0,0.14), 0 4px 12px rgba(0,0,0,0.08);
+  color-scheme: light;
+  --primary: #0B57D0;
+  --on-primary: #FFFFFF;
+  --primary-container: #D3E3FD;
+  --on-primary-container: #041E49;
+  --secondary-container: #C2E7FF;
+  --on-secondary-container: #001D35;
+  --success: #146C2E;
+  --on-success: #FFFFFF;
+  --success-container: #C4EED0;
+  --on-success-container: #072711;
+  --error: #B3261E;
+  --on-error: #FFFFFF;
+  --error-container: #F9DEDC;
+  --on-error-container: #410E0B;
+  --warning: #8B5000;
+  --warning-container: #FFDDB3;
+  --on-warning-container: #2C1600;
+
+  --bg: #F6F8FC;                 /* page */
+  --surface: #FFFFFF;            /* cards, sheets, the reader */
+  --surface-container: #F0F4F9;
+  --surface-high: #E9EEF6;
+  --surface-highest: #DDE3EA;
+  --row-bg: #F0F4F9;             /* rows set inside a card */
+  --menu-bg: #FFFFFF;
+  --on-surface: #1F1F1F;
+  --on-surface-variant: #444746;
+  --outline: #747775;
+  --outline-variant: #C4C7C5;
+  --inverse-surface: #303030;
+  --inverse-on-surface: #F2F2F2;
+
+  /* Translucent washes of the action colours, for the swipe overlays. */
+  --primary-wash: rgba(11, 87, 208, 0.12);
+  --success-wash: rgba(20, 108, 46, 0.12);
+  --error-wash: rgba(179, 38, 30, 0.12);
+
+  /* The reader's floating players stay dark in both schemes. */
+  --player-bg: rgba(31, 31, 31, 0.94);
+  --player-accent: #A8C7FA;
+  --on-player-accent: #062E6F;
+
+  /* State layers: an 8% / 12% wash of whatever colour the control's text is. */
+  --hover-layer: color-mix(in srgb, currentColor 8%, transparent);
+  --press-layer: color-mix(in srgb, currentColor 12%, transparent);
+
+  --elev-1: 0 1px 2px 0 rgba(60, 64, 67, 0.30), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
+  --elev-2: 0 1px 2px 0 rgba(60, 64, 67, 0.30), 0 2px 6px 2px rgba(60, 64, 67, 0.15);
+  --elev-3: 0 4px 8px 3px rgba(60, 64, 67, 0.15), 0 1px 3px rgba(60, 64, 67, 0.30);
+
+  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960' fill='%23444746'%3E%3Cpath d='M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z'/%3E%3C/svg%3E");
+  --check-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960' fill='%23FFFFFF'%3E%3Cpath d='m382-354 339-339q12-12 28-12t28 12q12 12 12 28.5T777-636L410-268q-12 12-28 12t-28-12L182-440q-12-12-11.5-28.5T183-497q12-12 28.5-12t28.5 12l142 143Z'/%3E%3C/svg%3E");
+
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 28px;
+  --nav-h: 72px;
+  --header-h: 64px;
+  --sans: 'Google Sans', 'Google Sans Text', Roboto, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+  --mono: 'Google Sans Mono', 'Roboto Mono', ui-monospace, Menlo, monospace;
+
+  /* Older names, still used by a few inline styles. */
+  --text-1: var(--on-surface);
+  --text-2: var(--on-surface-variant);
+  --text-3: var(--outline);
+  --blue: var(--primary);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --surface: #1C1C1E;
-    --surface-2: #2C2C2E;
-    --surface-3: #3A3A3C;
-    --border: rgba(255,255,255,0.10);
-    --border-mid: rgba(255,255,255,0.18);
-    --text-1: #F2F2F7;
-    --text-2: #AEAEB2;
-    --text-3: #636366;
-    --red-light: #3B1210;
-    --green-light: #0D2B18;
-    --orange-light: #2D1F00;
-    --shadow-card: 0 2px 12px rgba(0,0,0,0.40);
-    --shadow-card-lifted: 0 12px 40px rgba(0,0,0,0.50);
+    color-scheme: dark;
+    --primary: #A8C7FA;
+    --on-primary: #062E6F;
+    --primary-container: #0842A0;
+    --on-primary-container: #D3E3FD;
+    --secondary-container: #004A77;
+    --on-secondary-container: #C2E7FF;
+    --success: #6DD58C;
+    --on-success: #00391A;
+    --success-container: #0F5223;
+    --on-success-container: #C4EED0;
+    --error: #F2B8B5;
+    --on-error: #601410;
+    --error-container: #8C1D18;
+    --on-error-container: #F9DEDC;
+    --warning: #FFB95C;
+    --warning-container: #6A3C00;
+    --on-warning-container: #FFDDB3;
+
+    --bg: #131314;
+    --surface: #1E1F20;
+    --surface-container: #1E1F20;
+    --surface-high: #282A2C;
+    --surface-highest: #333537;
+    --row-bg: #282A2C;
+    --menu-bg: #282A2C;
+    --on-surface: #E3E3E3;
+    --on-surface-variant: #C4C7C5;
+    --outline: #8E918F;
+    --outline-variant: #444746;
+    --inverse-surface: #E3E3E3;
+    --inverse-on-surface: #303030;
+
+    --primary-wash: rgba(168, 199, 250, 0.16);
+    --success-wash: rgba(109, 213, 140, 0.16);
+    --error-wash: rgba(242, 184, 181, 0.16);
+
+    --player-bg: rgba(51, 53, 55, 0.97);
+
+    --elev-1: 0 1px 2px 0 rgba(0, 0, 0, 0.30), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+    --elev-2: 0 1px 2px 0 rgba(0, 0, 0, 0.30), 0 2px 6px 2px rgba(0, 0, 0, 0.15);
+    --elev-3: 0 4px 8px 3px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.30);
+
+    --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960' fill='%23C4C7C5'%3E%3Cpath d='M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z'/%3E%3C/svg%3E");
+    --check-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960' fill='%23062E6F'%3E%3Cpath d='m382-354 339-339q12-12 28-12t28 12q12 12 12 28.5T777-636L410-268q-12 12-28 12t-28-12L182-440q-12-12-11.5-28.5T183-497q12-12 28.5-12t28.5 12l142 143Z'/%3E%3C/svg%3E");
   }
 }
 
@@ -65,9 +152,13 @@ html, body {
   overflow: hidden;
   overscroll-behavior: none;        /* no rubber-band/scroll chaining to the page */
   font-family: var(--sans);
-  background: var(--surface-2);
-  color: var(--text-1);
+  font-size: 14px;
+  line-height: 20px;
+  background: var(--bg);
+  color: var(--on-surface);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
 }
 /* Lock the app shell so dragging up/down can't shift it and reveal the
    background behind it (iOS standalone overscroll). */
@@ -76,9 +167,42 @@ body {
   top: 0; left: 0; right: 0; bottom: 0;
 }
 /* Keep each scroll area's bounce to itself. */
-.keep-scroll, .bulk-scroll, .email-list-inner, .card-body,
+.keep-scroll, .bulk-scroll, .settings-scroll, .email-list-inner, .card-body,
 .reader-body, .reader-body .reader-text {
   overscroll-behavior: contain;
+}
+button, input, select { font-family: inherit; }
+button { -webkit-user-select: none; user-select: none; }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* Every inline Material Symbol takes the colour of the text around it. */
+svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
+
+/* ── State layers ─────────────────────────────────────────── */
+/* Hover only where there is a pointer that hovers, so a tap on a phone never
+   leaves a control looking stuck. */
+@media (hover: hover) {
+  .icon-btn:hover, .user-chip:hover, .nav-btn:hover .nav-icon, .mode-btn:hover,
+  .fetch-btn:hover, .kept-bar button:hover, .open-gmail-btn:hover,
+  .action-btn:hover, .chip:hover, .sort-select:hover, .btn-sm:not(:disabled):hover,
+  .suggest-block-btn:hover, .suggest-read-btn:hover,
+  .suggest-dismiss-btn:hover, .section-card-header:hover, .email-item:hover,
+  .acct-row:hover, .reader-close:hover, .reader-listen:hover, .reader-mark-read:hover,
+  .btn-secondary:hover, .gsi-btn:not(:disabled):hover,
+  .keep-row-mark:hover, .setting-row:not(.setting-slider):hover, .tts-linkbtn:hover {
+    background-image: linear-gradient(var(--hover-layer), var(--hover-layer));
+  }
+}
+.icon-btn:active, .user-chip:active, .nav-btn:active .nav-icon, .mode-btn:active,
+.fetch-btn:active, .kept-bar button:active, .open-gmail-btn:active,
+.action-btn:active, .chip:active, .btn-sm:not(:disabled):active,
+.suggest-block-btn:active, .suggest-read-btn:active,
+.suggest-dismiss-btn:active, .section-card-header:active, .email-item:active,
+.acct-row:active, .reader-close:active, .reader-listen:active, .reader-mark-read:active,
+.btn-secondary:active, .gsi-btn:not(:disabled):active,
+.keep-row-mark:active, .setting-row:not(.setting-slider):active {
+  background-image: linear-gradient(var(--press-layer), var(--press-layer));
 }
 
 /* ── Layout Shell ─────────────────────────────────────────── */
@@ -89,111 +213,164 @@ body {
   min-height: 0;
   max-width: 480px;
   margin: 0 auto;
-  background: var(--surface-2);
+  background: var(--bg);
   overflow: hidden;
+}
+
+/* On a desktop the phone-width column is framed as a pane of its own. */
+@media (min-width: 600px) {
+  html, body { background: var(--surface-container); }
+  #app { border-left: 1px solid var(--outline-variant); border-right: 1px solid var(--outline-variant); }
 }
 
 .screen { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 .screen.active { display: flex; }
 
+/* ── Buttons (shared) ─────────────────────────────────────── */
+.icon-btn {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  border: none;
+  background-color: transparent;
+  color: var(--on-surface-variant);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.icon-btn svg { width: 24px; height: 24px; }
+.icon-btn.active { background-color: var(--secondary-container); color: var(--on-secondary-container); }
+
 /* ── Header ───────────────────────────────────────────────── */
 .app-header {
   height: var(--header-h);
-  background: var(--surface);
-  border-bottom: 0.5px solid var(--border);
+  background: var(--bg);
   display: flex;
   align-items: center;
-  padding: 0 16px;
-  gap: 12px;
+  padding: 0 8px 0 16px;
+  gap: 10px;
   flex-shrink: 0;
   position: relative;
 }
 
 .app-header .logo {
   width: 32px; height: 32px;
-  background: var(--red);
-  border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
 }
+.app-header .logo svg { width: 32px; height: 32px; }
 
-.app-header .logo svg { width: 18px; height: 18px; }
-
-.app-header h1 { font-size: 17px; font-weight: 500; }
+.app-header h1 {
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 400;
+  color: var(--on-surface-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
 
 .header-right {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
+/* The account button: just the avatar on a phone, as in every Google app; the
+   address joins it where there's room, and "Offline" always shows. */
 .user-chip {
-  display: flex; align-items: center; gap: 6px;
-  background: var(--surface-2);
-  border: 0.5px solid var(--border-mid);
+  display: flex; align-items: center; gap: 8px;
+  height: 40px;
+  padding: 4px;
+  border: none;
   border-radius: 20px;
-  padding: 4px 10px 4px 4px;
+  background-color: transparent;
   cursor: pointer;
-  font-size: 12px;
-  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--on-surface-variant);
 }
-
 .user-chip .avatar {
-  width: 24px; height: 24px;
+  width: 32px; height: 32px;
   border-radius: 50%;
-  background: var(--red);
-  color: white;
-  font-size: 11px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 14px;
   font-weight: 500;
   display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
 }
-.user-chip .chip-caret { width: 12px; height: 12px; flex-shrink: 0; }
+.user-chip #user-email-short {
+  display: none;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-chip .chip-caret { width: 20px; height: 20px; display: none; }
+.user-chip.offline { background-color: var(--warning-container); color: var(--on-warning-container); padding-right: 12px; }
+.user-chip.offline #user-email-short { display: block; }
+@media (min-width: 440px) {
+  .user-chip { padding: 4px 8px 4px 4px; background-color: var(--surface-high); }
+  .user-chip #user-email-short, .user-chip .chip-caret { display: block; }
+}
 
 /* Account switcher menu */
 .account-menu {
   position: absolute;
-  top: calc(var(--header-h) - 6px);
-  right: 12px;
+  top: calc(var(--header-h) - 8px);
+  right: 8px;
   z-index: 1200;
-  background: var(--surface);
-  border: 0.5px solid var(--border-mid);
-  border-radius: 12px;
-  box-shadow: var(--shadow-card-lifted);
-  padding: 6px;
-  min-width: 220px;
-  max-width: 86vw;
+  background: var(--menu-bg);
+  border-radius: var(--r-lg);
+  box-shadow: var(--elev-3);
+  padding: 8px 0;
+  min-width: 280px;
+  max-width: calc(100vw - 16px);
+  overflow: hidden;
 }
 .acct-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 16px;
   width: 100%;
+  min-height: 56px;
   text-align: left;
-  background: none;
+  background-color: transparent;
   border: none;
-  border-radius: 8px;
-  padding: 10px 10px;
-  font-family: var(--sans);
-  font-size: 13px;
-  color: var(--text-1);
+  padding: 8px 16px;
+  font-size: 14px;
+  color: var(--on-surface);
   cursor: pointer;
 }
-.acct-row:active { background: var(--surface-3); }
-.acct-row.active { font-weight: 500; }
-.acct-check { width: 14px; flex-shrink: 0; color: var(--red); align-self: flex-start; margin-top: 1px; }
-.acct-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
-.acct-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.acct-counts { font-size: 11px; font-weight: 400; color: var(--text-3); }
-.acct-action { color: var(--text-2); border-top: 0.5px solid var(--border); margin-top: 4px; }
+.acct-row.active { background-color: var(--surface-container); }
+.acct-avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.acct-check { width: 24px; height: 24px; flex-shrink: 0; color: var(--primary); }
+.acct-check svg { width: 24px; height: 24px; }
+.acct-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.acct-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.acct-counts { font-size: 12px; line-height: 16px; color: var(--on-surface-variant); }
+.acct-action { min-height: 48px; color: var(--on-surface); }
+.acct-action svg { width: 24px; height: 24px; margin: 0 4px; color: var(--on-surface-variant); }
+.acct-divider { height: 1px; background: var(--outline-variant); margin: 8px 0; }
 
 /* ── Bottom Nav ───────────────────────────────────────────── */
 .bottom-nav {
   height: var(--nav-h);
-  background: var(--surface);
-  border-top: 0.5px solid var(--border);
+  background: var(--surface-container);
   display: flex;
   flex-shrink: 0;
+  padding: 0 8px;
 }
 
 .nav-btn {
@@ -206,45 +383,42 @@ body {
   cursor: pointer;
   border: none;
   background: none;
-  color: var(--text-3);
-  font-family: var(--sans);
-  font-size: 11px;
+  color: var(--on-surface-variant);
+  font-size: 12px;
   font-weight: 500;
-  padding: 8px 0;
-  transition: color 0.15s;
+  line-height: 16px;
+  letter-spacing: 0.3px;
+  padding: 12px 0 14px;
+}
+.nav-btn.active { color: var(--on-surface); font-weight: 700; }
+
+.nav-icon {
   position: relative;
+  width: 56px; height: 32px;
+  border-radius: 16px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background-color 0.2s;
 }
-
-.nav-btn.active { color: var(--red); }
-
-.nav-btn svg { width: 22px; height: 22px; stroke-width: 1.8; }
-
-.nav-indicator {
-  position: absolute;
-  top: 0; left: 50%;
-  transform: translateX(-50%);
-  width: 32px; height: 2px;
-  background: var(--red);
-  border-radius: 0 0 2px 2px;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.nav-btn.active .nav-indicator { opacity: 1; }
+.nav-icon svg { width: 24px; height: 24px; }
+.nav-icon .i-fill { display: none; }
+.nav-btn.active .nav-icon { background-color: var(--secondary-container); color: var(--on-secondary-container); }
+.nav-btn.active .nav-icon .i-fill { display: block; }
+.nav-btn.active .nav-icon .i-out { display: none; }
 
 .nav-badge {
   position: absolute;
-  top: 7px;
-  left: calc(50% + 9px);
+  top: 0;
+  left: calc(50% + 4px);
   min-width: 16px;
   height: 16px;
   padding: 0 4px;
   border-radius: 8px;
-  background: var(--red);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 600;
+  background: var(--error);
+  color: var(--on-error);
+  font-size: 11px;
+  font-weight: 500;
   line-height: 16px;
+  letter-spacing: 0;
   text-align: center;
 }
 
@@ -255,167 +429,193 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--surface-2);
+  background: var(--bg);
   z-index: 50;
 }
 .boot-spinner {
-  width: 28px; height: 28px;
-  border: 3px solid var(--border-mid);
-  border-top-color: var(--red);
+  width: 40px; height: 40px;
+  border: 4px solid var(--surface-highest);
+  border-top-color: var(--primary);
   border-radius: 50%;
-  animation: spin 0.7s linear infinite;
+  animation: spin 0.8s linear infinite;
 }
 
 /* ── Auth Screen ──────────────────────────────────────────── */
 #auth-screen {
   justify-content: center;
   align-items: center;
-  padding: 24px;
-  background: var(--surface-2);
+  background: var(--bg);
+}
+.auth-wrap {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  flex: 1;
+  width: 100%;
+  padding: 24px 16px;
+  overflow-y: auto;
 }
 
 .auth-card {
   background: var(--surface);
-  border-radius: var(--radius);
-  border: 0.5px solid var(--border);
-  padding: 32px 24px;
+  border-radius: var(--r-xl);
+  padding: 40px 28px 28px;
   width: 100%;
-  max-width: 400px;
+  max-width: 420px;
 }
 
 .auth-card .auth-logo {
-  width: 52px; height: 52px;
-  background: var(--red);
-  border-radius: 14px;
+  width: 56px; height: 56px;
   display: flex; align-items: center; justify-content: center;
   margin: 0 auto 20px;
 }
+.auth-card .auth-logo svg { width: 56px; height: 56px; }
 
-.auth-card .auth-logo svg { width: 28px; height: 28px; }
+.auth-card h2 { font-size: 24px; line-height: 32px; font-weight: 400; text-align: center; margin-bottom: 8px; }
+.auth-card .subtitle { font-size: 14px; line-height: 20px; color: var(--on-surface-variant); text-align: center; margin-bottom: 28px; }
 
-.auth-card h2 { font-size: 20px; font-weight: 500; text-align: center; margin-bottom: 6px; }
-.auth-card .subtitle { font-size: 13px; color: var(--text-2); text-align: center; margin-bottom: 24px; line-height: 1.6; }
-
-.input-group { margin-bottom: 12px; }
-.input-group label { display: block; font-size: 12px; font-weight: 500; color: var(--text-2); margin-bottom: 5px; }
+.input-group { margin-bottom: 16px; }
+.input-group label { display: block; font-size: 12px; line-height: 16px; font-weight: 500; color: var(--on-surface-variant); margin: 0 0 6px 4px; }
 
 .input-group input {
   width: 100%;
-  height: 40px;
-  border: 0.5px solid var(--border-mid);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--text-1);
+  height: 48px;
+  border: 1px solid var(--outline);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--on-surface);
   font-family: var(--mono);
-  font-size: 12px;
-  padding: 0 12px;
+  font-size: 14px;
+  padding: 0 15px;
   outline: none;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
+.input-group input:focus { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
 
-.input-group input:focus { border-color: var(--red); }
-
-.btn-primary {
+/* Google's own "Sign in with Google" button, per its branding guidelines. */
+.gsi-btn {
   width: 100%;
   height: 44px;
-  background: var(--red);
-  color: white;
-  border: none;
-  border-radius: var(--radius-sm);
-  font-family: var(--sans);
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  background-color: #FFFFFF;
+  color: #1F1F1F;
+  border: 1px solid #747775;
+  border-radius: 22px;
   font-size: 15px;
   font-weight: 500;
+  letter-spacing: 0.25px;
   cursor: pointer;
-  transition: opacity 0.15s;
-  margin-top: 4px;
+  transition: box-shadow 0.15s;
 }
-
-.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn-primary:not(:disabled):active { opacity: 0.85; transform: scale(0.99); }
+.gsi-btn .gsi-logo { width: 20px; height: 20px; flex-shrink: 0; }
+.gsi-btn:not(:disabled):hover { box-shadow: var(--elev-1); }
+.gsi-btn:disabled { opacity: 0.38; cursor: not-allowed; }
+@media (prefers-color-scheme: dark) {
+  .gsi-btn { background-color: #131314; color: #E3E3E3; border-color: #8E918F; }
+}
 
 .btn-secondary {
   width: 100%;
   height: 44px;
-  background: var(--surface-2);
-  color: var(--text-1);
-  border: 0.5px solid var(--border-mid);
-  border-radius: var(--radius-sm);
-  font-family: var(--sans);
+  background-color: transparent;
+  color: var(--primary);
+  border: 1px solid var(--outline);
+  border-radius: 22px;
   font-size: 15px;
   font-weight: 500;
+  letter-spacing: 0.1px;
   cursor: pointer;
-  margin-top: 10px;
+  margin-top: 12px;
 }
-.btn-secondary:active { background: var(--surface-3); transform: scale(0.99); }
 
 .setup-steps {
-  margin-top: 20px;
-  background: var(--surface-2);
-  border-radius: var(--radius-sm);
-  padding: 14px 16px;
+  margin-top: 24px;
+  background: var(--surface-high);
+  border-radius: var(--r-lg);
+  padding: 16px 20px;
 }
-
-.setup-steps p { font-size: 12px; font-weight: 500; color: var(--text-2); margin-bottom: 8px; }
-
-.setup-steps ol { padding-left: 16px; }
-.setup-steps li { font-size: 12px; color: var(--text-2); line-height: 1.7; }
-.setup-steps code { font-family: var(--mono); background: var(--surface-3); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+.setup-steps p { font-size: 14px; line-height: 20px; font-weight: 500; color: var(--on-surface); margin-bottom: 8px; }
+.setup-steps ol { padding-left: 18px; }
+.setup-steps li { font-size: 13px; color: var(--on-surface-variant); line-height: 22px; }
+.setup-steps strong { font-weight: 500; color: var(--on-surface); }
+.setup-steps code { font-family: var(--mono); background: var(--surface-high); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 
 /* ── Swipe Screen ─────────────────────────────────────────── */
 #swipe-screen {
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  transition: background-color 0.2s;
 }
 
 .swipe-toolbar {
-  padding: 10px 16px;
+  padding: 4px 16px 10px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   flex-shrink: 0;
 }
 
-.swipe-toolbar .counter { font-size: 13px; color: var(--text-2); }
-.swipe-toolbar .fetch-btn {
-  height: 32px;
-  padding: 0 14px;
-  border: 0.5px solid var(--border-mid);
-  border-radius: 20px;
-  background: var(--surface);
-  color: var(--text-1);
-  font-family: var(--sans);
-  font-size: 13px;
+.swipe-toolbar .counter {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
   font-weight: 500;
-  cursor: pointer;
-  display: flex; align-items: center; gap: 6px;
+  color: var(--on-surface-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.swipe-toolbar .fetch-btn:active { background: var(--surface-3); }
+/* Filled tonal button */
+.swipe-toolbar .fetch-btn {
+  height: 36px;
+  padding: 0 16px 0 12px;
+  border: none;
+  border-radius: 18px;
+  background-color: var(--secondary-container);
+  color: var(--on-secondary-container);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.swipe-toolbar .fetch-btn svg { width: 18px; height: 18px; }
+.swipe-toolbar .fetch-btn:disabled { opacity: 0.7; cursor: default; }
 
 /* Kept-unread status bar */
 .kept-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 16px 4px;
-  font-size: 12px;
-  color: var(--text-2);
+  gap: 2px;
+  margin: 0 16px 10px;
+  padding: 4px 4px 4px 12px;
+  min-height: 44px;
+  border-radius: var(--r-md);
+  background: var(--surface-high);
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--on-surface-variant);
   flex-shrink: 0;
 }
+.kept-bar > svg { width: 20px; height: 20px; margin-right: 8px; color: var(--on-surface-variant); }
 .kept-bar .kept-msg { flex: 1; min-width: 0; }
 .kept-bar button {
-  background: none;
+  height: 36px;
+  padding: 0 12px;
   border: none;
-  color: var(--red);
-  font-family: var(--sans);
-  font-size: 12px;
+  border-radius: 18px;
+  background-color: transparent;
+  color: var(--primary);
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  padding: 2px 4px;
   flex-shrink: 0;
 }
-.kept-bar button:active { opacity: 0.6; }
 
 /* Card stack area */
 .card-stack-area:focus, .card-stack-area:focus-visible { outline: none; }
@@ -425,18 +625,33 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px 16px 0;
+  padding: 0 16px;
   overflow: hidden;
 }
 
 .empty-swipe {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  max-width: 280px;
   text-align: center;
-  color: var(--text-3);
-  font-size: 14px;
-  line-height: 1.8;
+  color: var(--on-surface-variant);
+  font-size: 16px;
+  line-height: 24px;
 }
-
-.empty-swipe .empty-icon { font-size: 48px; margin-bottom: 12px; }
+.empty-swipe .empty-icon {
+  width: 112px; height: 112px;
+  border-radius: 50%;
+  background: var(--surface-high);
+  color: var(--primary);
+  display: flex; align-items: center; justify-content: center;
+}
+.empty-swipe .empty-icon svg { width: 56px; height: 56px; }
+.empty-swipe .empty-icon .ei-done { display: none; }
+.empty-swipe.done .empty-icon { background: var(--success-container); color: var(--on-success-container); }
+.empty-swipe.done .empty-icon .ei-done { display: block; }
+.empty-swipe.done .empty-icon .ei-inbox { display: none; }
 
 /* Email card */
 .swipe-card {
@@ -444,8 +659,8 @@ body {
   width: calc(100% - 32px);
   max-width: 440px;
   background: var(--surface);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-card);
+  border-radius: var(--r-xl);
+  box-shadow: var(--elev-1);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -454,25 +669,25 @@ body {
   touch-action: none;
   user-select: none;
   top: 0;
-  bottom: 0;
+  bottom: 6px;
   max-height: 100%;
 }
 
 .swipe-card.is-dragging {
   transition: none;
   cursor: grabbing;
-  box-shadow: var(--shadow-card-lifted);
+  box-shadow: var(--elev-3);
 }
 
 .swipe-card.fly-left {
-  transition: transform 0.38s cubic-bezier(0.4,0,0.6,1), opacity 0.38s ease;
-  transform: translateX(-130%) rotate(-18deg) !important;
+  transition: transform 0.38s cubic-bezier(0.3, 0, 0.8, 0.15), opacity 0.38s ease;
+  transform: translateX(-130%) rotate(-14deg) !important;
   opacity: 0;
 }
 
 .swipe-card.fly-right {
-  transition: transform 0.38s cubic-bezier(0.4,0,0.6,1), opacity 0.38s ease;
-  transform: translateX(130%) rotate(18deg) !important;
+  transition: transform 0.38s cubic-bezier(0.3, 0, 0.8, 0.15), opacity 0.38s ease;
+  transform: translateX(130%) rotate(14deg) !important;
   opacity: 0;
 }
 
@@ -480,17 +695,18 @@ body {
 .swipe-card.behind {
   transform: scale(0.94) translateY(14px);
   box-shadow: none;
+  background: var(--surface-container);
   pointer-events: none;
   z-index: 0;
 }
 
 .swipe-card.front { z-index: 2; }
 
-/* Swipe overlays */
+/* Swipe overlays: a wash of the action's colour with its label in a pill. */
 .swipe-overlay {
   position: absolute;
   inset: 0;
-  border-radius: var(--radius);
+  border-radius: inherit;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -498,46 +714,51 @@ body {
   transition: opacity 0.1s;
   pointer-events: none;
   z-index: 10;
-  flex-direction: column;
-  gap: 8px;
 }
-
-.swipe-overlay.read-overlay { background: rgba(234,67,53,0.18); }
-.swipe-overlay.unread-overlay { background: rgba(52,168,83,0.18); }
+.swipe-overlay.read-overlay { background: var(--primary-wash); }
+.swipe-overlay.unread-overlay { background: var(--success-wash); }
 
 .overlay-label {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  border: 3px solid;
-  padding: 6px 18px;
-  border-radius: 8px;
-  transform: rotate(-12deg);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 52px;
+  padding: 0 24px 0 18px;
+  border-radius: 26px;
+  font-size: 17px;
+  font-weight: 500;
+  box-shadow: var(--elev-2);
 }
-
-.read-overlay .overlay-label { color: var(--red); border-color: var(--red); }
-.unread-overlay .overlay-label { color: var(--green); border-color: var(--green); transform: rotate(12deg); }
+.overlay-label svg { width: 24px; height: 24px; }
+.read-overlay .overlay-label { background: var(--primary); color: var(--on-primary); }
+.unread-overlay .overlay-label { background: var(--success); color: var(--on-success); }
+/* The left swipe blocks in block mode; its overlay says so. */
+.ol-block { display: none; }
+#swipe-screen.block-mode .read-overlay { background: var(--error-wash); }
+#swipe-screen.block-mode .read-overlay .overlay-label { background: var(--error); color: var(--on-error); }
+#swipe-screen.block-mode .read-overlay .ol-read { display: none; }
+#swipe-screen.block-mode .read-overlay .ol-block { display: inline; }
+#swipe-screen.block-mode .read-overlay svg.ol-block { display: block; }
 
 /* Card content */
 .card-header {
-  padding: 16px 16px 12px;
-  border-bottom: 0.5px solid var(--border);
+  padding: 20px 20px 14px;
   flex-shrink: 0;
 }
 
 .card-sender-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 
 .sender-avatar {
-  width: 38px; height: 38px;
+  width: 40px; height: 40px;
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 500;
   color: white;
   flex-shrink: 0;
 }
@@ -545,7 +766,8 @@ body {
 .sender-info { flex: 1; min-width: 0; }
 
 .sender-name {
-  font-size: 14px;
+  font-size: 15px;
+  line-height: 20px;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -553,37 +775,43 @@ body {
 }
 
 .sender-email {
-  font-size: 11px;
-  color: var(--text-3);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--on-surface-variant);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .card-date {
-  font-size: 11px;
-  color: var(--text-3);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--on-surface-variant);
   flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 2px;
 }
 
 .card-subject {
-  font-size: 15px;
-  font-weight: 500;
-  line-height: 1.4;
-  color: var(--text-1);
+  font-size: 20px;
+  font-weight: 400;
+  line-height: 28px;
+  color: var(--on-surface);
 }
 
 .card-body {
   flex: 1;
   overflow-y: auto;
-  padding: 14px 16px;
+  margin: 0 20px;
+  padding: 14px 0 20px;
+  border-top: 1px solid var(--outline-variant);
   -webkit-overflow-scrolling: touch;
 }
 
 .card-body-text {
-  font-size: 13px;
-  color: var(--text-2);
-  line-height: 1.7;
+  font-size: 14px;
+  color: var(--on-surface-variant);
+  line-height: 22px;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -591,143 +819,177 @@ body {
 .body-loading {
   display: flex;
   align-items: center;
-  gap: 8px;
-  color: var(--text-3);
-  font-size: 13px;
+  gap: 10px;
+  color: var(--on-surface-variant);
+  font-size: 14px;
   padding: 12px 0;
 }
 
 .mini-spinner {
-  width: 14px; height: 14px;
-  border: 2px solid var(--border-mid);
-  border-top-color: var(--red);
+  width: 16px; height: 16px;
+  border: 2px solid var(--surface-highest);
+  border-top-color: var(--primary);
   border-radius: 50%;
-  animation: spin 0.7s linear infinite;
+  animation: spin 0.8s linear infinite;
   flex-shrink: 0;
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Swipe action buttons */
+/* Swipe action buttons: extended FABs, left and right of Undo, matching the
+   direction each one swipes. */
 .swipe-actions {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 24px;
-  padding: 16px;
+  gap: 12px;
+  padding: 14px 16px 6px;
   flex-shrink: 0;
 }
+.action-center { display: flex; flex-direction: column; align-items: center; gap: 8px; flex-shrink: 0; }
 
 .action-btn {
-  width: 60px; height: 60px;
-  border-radius: 50%;
-  border: 2px solid;
-  background: var(--surface);
-  display: flex; align-items: center; justify-content: center;
+  flex: 1 1 0;
+  max-width: 156px;
+  height: 56px;
+  min-width: 56px;
+  padding: 0 18px 0 14px;
+  border: none;
+  border-radius: var(--r-lg);
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  white-space: nowrap;
   cursor: pointer;
-  transition: transform 0.12s, background 0.12s;
-  flex-shrink: 0;
+  box-shadow: var(--elev-1);
+  transition: transform 0.12s, box-shadow 0.15s;
 }
+.action-btn svg { width: 24px; height: 24px; }
+.action-btn:active { transform: scale(0.96); box-shadow: none; }
 
-.action-btn svg { width: 26px; height: 26px; }
+.action-btn.read-btn { background-color: var(--primary-container); color: var(--on-primary-container); }
+.action-btn.skip-btn { background-color: var(--success-container); color: var(--on-success-container); }
+.action-btn.block-btn { background-color: var(--error-container); color: var(--on-error-container); }
 
-.action-btn.read-btn { border-color: var(--red); color: var(--red); }
-.action-btn.read-btn:active { background: var(--red-light); transform: scale(0.9); }
+.action-btn.undo-btn {
+  flex: none;
+  width: 48px; height: 48px; min-width: 48px;
+  padding: 0;
+  border-radius: 14px;
+  background-color: var(--surface-high);
+  color: var(--on-surface-variant);
+  box-shadow: none;
+}
+.action-btn.undo-btn svg { width: 22px; height: 22px; }
 
-.action-btn.skip-btn { border-color: var(--green); color: var(--green); }
-.action-btn.skip-btn:active { background: var(--green-light); transform: scale(0.9); }
-
-.action-btn.block-btn { border-color: var(--orange); color: var(--orange); }
-.action-btn.block-btn:active { background: var(--orange-light); transform: scale(0.9); }
-
-.swipe-mode-toggle {
+.open-gmail-btn {
   display: flex;
   align-items: center;
-  background: var(--surface-3);
-  border-radius: 20px;
-  padding: 3px;
-  gap: 2px;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px 0 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--outline-variant);
+  background-color: transparent;
+  color: var(--on-surface-variant);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.open-gmail-btn svg { width: 16px; height: 16px; }
+
+.action-hint {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--on-surface-variant);
+  text-align: center;
+  padding: 4px 16px 12px;
+  flex-shrink: 0;
+}
+.hint-keys { margin-top: 4px; font-size: 11px; color: var(--outline); }
+.hint-keys kbd {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 0 5px;
+  margin: 0 1px;
+  border: 1px solid var(--outline-variant);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--on-surface-variant);
+}
+
+/* Segmented button for the swipe mode */
+.swipe-mode-toggle {
+  display: flex;
+  align-items: stretch;
+  height: 36px;
+  border: 1px solid var(--outline);
+  border-radius: 18px;
+  overflow: hidden;
+  flex-shrink: 0;
 }
 .mode-btn {
-  padding: 5px 14px;
-  border-radius: 17px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
   border: none;
-  background: none;
-  font-family: var(--sans);
-  font-size: 12px;
+  background-color: transparent;
+  font-size: 14px;
   font-weight: 500;
-  color: var(--text-2);
+  letter-spacing: 0.1px;
+  color: var(--on-surface);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background-color 0.15s, color 0.15s;
 }
-.mode-btn.active { background: var(--surface); color: var(--text-1); }
+.mode-btn + .mode-btn { border-left: 1px solid var(--outline); }
+.mode-btn .mode-check { width: 18px; height: 18px; display: none; }
+.mode-btn.active { background-color: var(--secondary-container); color: var(--on-secondary-container); padding-left: 10px; }
+.mode-btn.active .mode-check { display: block; }
+@media (max-width: 370px) {
+  .mode-btn { padding: 0 12px; }
+  .mode-btn.active { padding-left: 12px; }
+  .mode-btn.active .mode-check { display: none; }
+}
 /* When block mode is on, make the Block toggle loud so it's unmistakable. */
-#swipe-screen.block-mode .swipe-mode-toggle { background: var(--red-light); }
 #swipe-screen.block-mode #mode-block.active {
-  background: var(--red);
-  color: #fff;
-  box-shadow: 0 1px 4px rgba(234,67,53,0.5);
+  background-color: var(--error);
+  color: var(--on-error);
 }
 
 /* Prominent warning banner shown only while in block mode. */
 .block-banner {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 0 16px 6px;
-  padding: 9px 12px;
-  border-radius: 10px;
-  background: var(--red-light);
-  border: 1px solid var(--red);
-  color: var(--red);
-  font-size: 12.5px;
-  line-height: 1.35;
+  gap: 12px;
+  margin: 0 16px 10px;
+  padding: 10px 16px 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--error-container);
+  color: var(--on-error-container);
+  font-size: 13px;
+  line-height: 18px;
   flex-shrink: 0;
 }
-.block-banner svg { width: 18px; height: 18px; flex-shrink: 0; }
+.block-banner svg { width: 22px; height: 22px; flex-shrink: 0; }
 .block-banner strong { font-weight: 700; }
 
-/* Tint the whole swipe surface so the active mode is obvious at a glance. */
-#swipe-screen.block-mode { background: var(--red-light); }
-#swipe-screen.block-mode .card-stack-area { box-shadow: inset 0 0 0 2px var(--red); border-radius: 16px; margin: 0 8px; }
-#swipe-screen.block-mode .hint-keys { margin-top: 6px; font-size: 11px; color: var(--text-3); }
-.hint-keys kbd {
-  font-family: var(--sans);
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 5px;
-  margin: 0 1px;
-  border: 1px solid var(--border-mid);
-  border-bottom-width: 2px;
-  border-radius: 4px;
-  background: var(--surface);
-  color: var(--text-2);
-}
-.action-hint { color: var(--red); font-weight: 600; }
-
-.open-gmail-btn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 30px;
-  padding: 0 12px;
-  border-radius: 20px;
-  border: 0.5px solid var(--border-mid);
-  background: var(--surface);
-  color: var(--text-2);
-  font-family: var(--sans);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  text-decoration: none;
-}
-.open-gmail-btn svg { width: 14px; height: 14px; }
+/* Tint the swipe surface and ring the card so the active mode is obvious at a
+   glance. */
+#swipe-screen.block-mode { background: var(--error-wash); }
+#swipe-screen.block-mode .swipe-card.front { box-shadow: 0 0 0 2px var(--error), var(--elev-1); }
+#swipe-screen.block-mode .swipe-card.front.is-dragging { box-shadow: 0 0 0 2px var(--error), var(--elev-3); }
 
 /* Focused reader overlay: full-screen distraction-free email view */
 .reader-overlay {
   position: fixed;
   inset: 0;
-  background: var(--bg, #fff);
+  background: var(--surface);
   z-index: 1000;
   display: none;
   flex-direction: column;
@@ -737,61 +999,49 @@ body {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border-bottom: 0.5px solid var(--border-mid);
-  background: var(--surface, #fff);
+  gap: 4px;
+  min-height: 64px;
+  padding: 8px 8px 8px 4px;
+  border-bottom: 1px solid var(--outline-variant);
+  background: var(--surface);
 }
-.reader-close {
-  width: 36px;
-  height: 36px;
+.reader-close, .reader-listen {
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   border: none;
-  background: var(--surface-3, #f1f3f4);
+  background-color: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
-  color: var(--text-1, #202124);
+  color: var(--on-surface-variant);
 }
-.reader-close svg { width: 18px; height: 18px; }
+.reader-close svg, .reader-listen svg { width: 24px; height: 24px; }
 /* Read-aloud lives opposite the close button, so the header keeps its shape. */
-.reader-listen {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: none;
-  background: var(--surface-3, #f1f3f4);
-  display: none;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  flex-shrink: 0;
-  color: var(--text-1, #202124);
-}
+.reader-listen { display: none; }
 .reader-listen.available { display: flex; }
-.reader-listen.speaking { background: var(--red, #d93025); color: #fff; }
-.reader-listen svg { width: 18px; height: 18px; }
+.reader-listen.speaking { background-color: var(--primary); color: var(--on-primary); }
 .reader-header-info {
   flex: 1;
   min-width: 0;
+  padding: 0 4px;
 }
 .reader-subject {
-  font-family: var(--sans);
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-1, #202124);
-  line-height: 1.3;
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--on-surface);
+  line-height: 24px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .reader-sender {
-  font-family: var(--sans);
-  font-size: 12px;
-  color: var(--text-2, #5f6368);
-  margin-top: 2px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--on-surface-variant);
+  margin-top: 1px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -813,11 +1063,10 @@ body {
   width: 100%;
   height: 100%;
   overflow-y: auto;
-  padding: 20px 18px 40px;
-  font-family: var(--sans);
-  font-size: 15px;
-  line-height: 1.6;
-  color: var(--text-1, #202124);
+  padding: 20px 20px 40px;
+  font-size: 16px;
+  line-height: 26px;
+  color: var(--on-surface);
   white-space: pre-wrap;
   word-wrap: break-word;
   -webkit-overflow-scrolling: touch;
@@ -827,41 +1076,40 @@ body {
    user has scrolled to the bottom; flex-shrink keeps it out of the scroll. */
 .reader-footer {
   flex-shrink: 0;
-  padding: 18px 18px calc(24px + env(safe-area-inset-bottom, 0px));
-  border-top: 0.5px solid var(--border-mid);
-  background: var(--surface, #fff);
+  padding: 14px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--outline-variant);
+  background: var(--surface);
 }
 .reader-footer-hint {
   text-align: center;
-  font-size: 12px;
-  color: var(--text-3);
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--on-surface-variant);
   margin-bottom: 10px;
 }
 .reader-mark-read {
   width: 100%;
-  height: 46px;
+  height: 48px;
   border: none;
-  border-radius: var(--radius-sm);
-  background: var(--red);
-  color: #fff;
-  font-family: var(--sans);
+  border-radius: 24px;
+  background-color: var(--primary);
+  color: var(--on-primary);
   font-size: 15px;
   font-weight: 500;
+  letter-spacing: 0.1px;
   cursor: pointer;
 }
-.reader-mark-read:active { opacity: 0.85; transform: scale(0.99); }
 .reader-mark-read:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* Floating auto-scroll control, overlaid at the bottom of the reader. */
 /* Footnotes: in-text marker and its popup */
 .fn-ref {
-  color: var(--blue, #1a73e8);
+  color: var(--primary);
   cursor: pointer;
   border-bottom: 1px dotted currentColor;
   border-radius: 2px;
   padding: 0 1px;
 }
-.fn-ref:hover, .fn-ref:focus-visible { background: rgba(26,115,232,0.14); outline: none; }
+.fn-ref:hover, .fn-ref:focus-visible { background: var(--primary-wash); outline: none; }
 .fn-popup {
   position: fixed;
   /* Above the reader overlay (1000) it belongs to, below the toast (9999). */
@@ -871,14 +1119,14 @@ body {
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   box-sizing: border-box;
-  padding: 10px 12px;
-  background: var(--surface);
-  color: var(--text-1);
-  border: 1px solid var(--border-mid);
-  border-radius: 10px;
-  box-shadow: var(--shadow-card-lifted, 0 8px 28px rgba(0,0,0,0.18));
-  font-size: 13px;
-  line-height: 1.5;
+  padding: 12px 16px;
+  background: var(--menu-bg);
+  color: var(--on-surface);
+  border: none;
+  border-radius: var(--r-md);
+  box-shadow: var(--elev-3);
+  font-size: 14px;
+  line-height: 20px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   opacity: 0;
@@ -887,18 +1135,19 @@ body {
 .fn-popup.open { opacity: 1; }
 .fn-close {
   float: right;
-  width: 28px; height: 28px;
-  margin: -6px -8px -4px 8px;
+  width: 32px; height: 32px;
+  margin: -6px -10px -4px 8px;
   border: none;
   border-radius: 50%;
   background: transparent;
-  color: var(--text-2);
+  color: var(--on-surface-variant);
   font-size: 20px;
   line-height: 1;
   cursor: pointer;
 }
-.fn-close:active { background: var(--border-mid); }
+.fn-close:active { background: var(--surface-high); }
 
+/* Floating auto-scroll control, overlaid at the bottom of the reader. */
 .reader-autoscroll {
   position: absolute;
   left: 50%;
@@ -912,26 +1161,26 @@ body {
   display: none;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
-  background: rgba(20,20,20,0.78);
+  padding: 8px 14px 8px 10px;
+  background: var(--player-bg);
   color: #fff;
-  border-radius: 26px;
+  border-radius: 28px;
   z-index: 5;
-  box-shadow: 0 4px 18px rgba(0,0,0,0.3);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
+  box-shadow: var(--elev-3);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 .ras-toggle {
-  width: 32px; height: 32px;
+  width: 36px; height: 36px;
   border-radius: 50%;
   border: none;
-  background: rgba(255,255,255,0.2);
-  color: #fff;
+  background: var(--player-accent);
+  color: var(--on-player-accent);
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
 }
-.ras-toggle svg { width: 16px; height: 16px; }
+.ras-toggle svg { width: 18px; height: 18px; }
 .reader-autoscroll.dragging { cursor: grabbing; }
 
 /* The read-aloud player. Same look as the auto-scroll pill, but it stays put:
@@ -943,31 +1192,31 @@ body {
   bottom: calc(18px + env(safe-area-inset-bottom, 0px));
   display: none;
   flex-direction: column;
-  gap: 7px;
-  width: min(360px, calc(100% - 24px));
-  padding: 10px 12px 11px;
-  background: rgba(20,20,20,0.82);
+  gap: 8px;
+  width: min(380px, calc(100% - 24px));
+  padding: 12px 14px 12px;
+  background: var(--player-bg);
   color: #fff;
-  border-radius: 26px;
+  border-radius: 28px;
   z-index: 6;
   max-width: calc(100% - 24px);
-  box-shadow: 0 4px 18px rgba(0,0,0,0.3);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
+  box-shadow: var(--elev-3);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 .reader-tts.open { display: flex; }
 .rtts-row { display: flex; align-items: center; gap: 6px; }
 /* The line being read, so the bar has something to point at. */
 .rtts-line {
-  font-family: var(--sans);
-  font-size: 11.5px;
-  line-height: 1.35;
+  font-size: 12px;
+  line-height: 16px;
   opacity: 0.82;
-  max-height: 2.7em;
+  max-height: 32px;
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  padding: 0 4px;
 }
 .rtts-line:empty { display: none; }
 .rtts-line em { font-style: italic; font-weight: 700; opacity: 1; }
@@ -979,24 +1228,23 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  font-family: var(--sans);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   border: none;
-  border-radius: 14px;
-  padding: 7px 10px;
-  background: rgba(255,255,255,0.18);
-  color: #fff;
+  border-radius: 16px;
+  padding: 8px 12px;
+  background: var(--player-accent);
+  color: var(--on-player-accent);
   cursor: pointer;
   width: 100%;
 }
 .rtts-resync.open { display: flex; }
-.rtts-resync svg { width: 14px; height: 14px; flex-shrink: 0; }
+.rtts-resync svg { width: 16px; height: 16px; flex-shrink: 0; }
 /* A generous hit area around a slim bar: easy to grab, quiet to look at. */
 .rtts-track {
   position: relative;
   height: 22px;
-  margin: -6px 0;
+  margin: -6px 4px;
   cursor: pointer;
   touch-action: none;
   flex-shrink: 0;
@@ -1004,75 +1252,72 @@ body {
 .rtts-track::before {
   content: '';
   position: absolute;
-  left: 0; right: 0; top: 10px;
-  height: 3px;
+  left: 0; right: 0; top: 9px;
+  height: 4px;
   border-radius: 2px;
-  background: rgba(255,255,255,0.25);
+  background: rgba(255, 255, 255, 0.22);
 }
 .rtts-fill {
   position: absolute;
-  left: 0; top: 10px;
-  height: 3px;
+  left: 0; top: 9px;
+  height: 4px;
   width: 0;
   border-radius: 2px;
-  background: #fff;
+  background: var(--player-accent);
 }
 .rtts-thumb {
   position: absolute;
-  top: 5.5px;
+  top: 4px;
   left: 0;
-  width: 12px;
-  height: 12px;
-  margin-left: -6px;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  background: var(--player-accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
   transition: transform 0.12s ease;
 }
-.rtts-track.dragging .rtts-thumb { transform: scale(1.35); }
+.rtts-track.dragging .rtts-thumb { transform: scale(1.3); }
 .rtts-secs {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -42%);
-  font-family: var(--sans);
   font-size: 8.5px;
   font-weight: 700;
   letter-spacing: -0.2px;
   pointer-events: none;
 }
-.rtts-btn { position: relative; }
 .rtts-btn {
-  width: 30px; height: 30px;
+  position: relative;
+  width: 32px; height: 32px;
   border-radius: 50%;
   border: none;
-  background: rgba(255,255,255,0.16);
+  background: rgba(255, 255, 255, 0.12);
   color: #fff;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
   padding: 0;
 }
-.rtts-btn svg { width: 15px; height: 15px; }
-.rtts-btn.primary { width: 34px; height: 34px; background: rgba(255,255,255,0.28); }
-.rtts-btn.primary svg { width: 17px; height: 17px; }
+.rtts-btn svg { width: 16px; height: 16px; }
+.rtts-btn.primary { width: 40px; height: 40px; background: var(--player-accent); color: var(--on-player-accent); }
+.rtts-btn.primary svg { width: 20px; height: 20px; }
 .rtts-progress {
-  font-family: var(--sans);
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   opacity: 0.8;
   padding: 0 2px;
   flex-shrink: 0;
 }
 .rtts-rate {
-  font-family: var(--sans);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   border: none;
-  border-radius: 12px;
-  padding: 5px 8px;
-  background: rgba(255,255,255,0.16);
+  border-radius: 14px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.12);
   color: #fff;
   cursor: pointer;
   flex-shrink: 0;
@@ -1080,7 +1325,6 @@ body {
 /* Which voice is actually talking — only worth saying when it isn't the good
    one, so a fallback doesn't look like the feature is broken. */
 .rtts-note {
-  font-family: var(--sans);
   font-size: 11px;
   opacity: 0.7;
   max-width: 120px;
@@ -1095,55 +1339,65 @@ body {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(76px + env(safe-area-inset-bottom, 0px));
   display: none;
   flex-direction: column;
   gap: 2px;
-  padding: 6px;
+  padding: 8px;
   max-height: 46vh;
   overflow-y: auto;
   width: min(300px, calc(100% - 24px));
-  background: rgba(20,20,20,0.92);
-  border-radius: 14px;
+  background: var(--player-bg);
+  border-radius: var(--r-lg);
   z-index: 7;
-  box-shadow: 0 8px 28px rgba(0,0,0,0.38);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
+  box-shadow: var(--elev-3);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 .rtts-voices.open { display: flex; }
 .rtts-voice {
-  font-family: var(--sans);
-  font-size: 13px;
+  font-size: 14px;
   text-align: left;
-  padding: 9px 12px;
+  padding: 10px 14px;
   border: none;
-  border-radius: 9px;
+  border-radius: var(--r-sm);
   background: transparent;
   color: #fff;
   cursor: pointer;
 }
-.rtts-voice.current { background: rgba(255,255,255,0.2); font-weight: 600; }
+.rtts-voice.current { background: rgba(168, 199, 250, 0.22); font-weight: 500; }
 .tts-linkbtn {
   border: none;
-  background: none;
-  padding: 0;
+  background-color: transparent;
+  padding: 0 2px;
+  border-radius: 4px;
   font: inherit;
-  color: var(--red);
-  text-decoration: underline;
+  font-weight: 500;
+  color: var(--primary);
   cursor: pointer;
 }
-.tts-usage { margin-top: 8px; font-size: 11px; color: var(--text-3); line-height: 1.5; }
-.tts-voice-select {
-  font-family: var(--sans);
+.tts-usage {
+  padding: 12px 20px 14px;
   font-size: 12px;
-  padding: 5px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border-mid);
-  background: var(--surface, #fff);
-  color: var(--text-1, #202124);
-  max-width: 190px;
-  flex-shrink: 0;
+  line-height: 18px;
+  color: var(--on-surface-variant);
+  border-top: 1px solid var(--outline-variant);
 }
+.tts-voice-select {
+  width: 100%;
+  height: 44px;
+  padding: 0 40px 0 14px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--outline);
+  background: var(--select-arrow) no-repeat right 12px center / 20px 20px, transparent;
+  color: var(--on-surface);
+  font-size: 14px;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+.tts-voice-select:disabled { opacity: 0.6; cursor: default; }
+.tts-voice-select:focus { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
 /* Almost every part of the pill is a control, so it gets a grip of its own. */
 .ras-grip {
   width: 10px;
@@ -1157,23 +1411,8 @@ body {
 }
 /* The controls stay controls — only the pill's chrome is a grab handle. */
 .ras-toggle, .ras-slider { touch-action: auto; cursor: pointer; }
-.ras-slider { width: 120px; accent-color: #fff; }
+.ras-slider { width: 120px; accent-color: var(--player-accent); }
 .ras-wpm { font-size: 12px; font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
-
-/* Settings speed slider row */
-.setting-slider input[type="range"] { width: 130px; accent-color: var(--red); }
-
-.action-btn.undo-btn { border-color: var(--border-mid); color: var(--text-2); width: 44px; height: 44px; }
-.action-btn.undo-btn svg { width: 20px; height: 20px; }
-.action-btn.undo-btn:active { background: var(--surface-3); transform: scale(0.9); }
-
-.action-hint {
-  font-size: 11px;
-  color: var(--text-3);
-  text-align: center;
-  padding: 0 16px 12px;
-  flex-shrink: 0;
-}
 
 /* ── Keep Screen ──────────────────────────────────────────── */
 #keep-screen { flex-direction: column; overflow: hidden; }
@@ -1183,83 +1422,146 @@ body {
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 12px 12px 0;
+  padding: 0 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 /* Don't let the list card shrink to fit — it has overflow:hidden, which would
    otherwise let flexbox clip the list (capping visible rows) instead of
    letting .keep-scroll scroll through all of them. */
 .keep-scroll > .section-card,
-.bulk-scroll > .section-card { flex-shrink: 0; }
+.bulk-scroll > .section-card,
+.settings-scroll > .section-card { flex-shrink: 0; }
+
+/* Search and filters stay put while the list scrolls under them. */
+.keep-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 -16px;
+  padding: 4px 16px 4px;
+  background: var(--bg);
+}
 
 .keep-intro {
-  font-size: 12px;
-  color: var(--text-2);
-  padding: 2px 6px;
-  line-height: 1.6;
-}
-
-.keep-search-wrap {
-  padding: 10px 12px;
-  border-bottom: 0.5px solid var(--border);
-}
-.keep-search {
-  width: 100%;
-  height: 36px;
-  border: 0.5px solid var(--border-mid);
-  border-radius: 8px;
-  background: var(--surface-2);
-  color: var(--text-1);
-  font-family: var(--sans);
   font-size: 13px;
-  padding: 0 12px;
-  outline: none;
+  line-height: 18px;
+  color: var(--on-surface-variant);
+  padding: 0 4px;
 }
-.keep-search:focus { border-color: var(--red); }
+.keep-intro strong { font-weight: 500; color: var(--on-surface); }
 
-.keep-filter {
-  font-size: 12px;
-  color: var(--text-2);
+.search-bar {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 12px;
+  height: 48px;
+  padding: 0 16px;
+  border-radius: 24px;
+  background: var(--surface-high);
+  color: var(--on-surface-variant);
+  transition: background-color 0.15s, box-shadow 0.15s;
+}
+.search-bar svg { width: 24px; height: 24px; }
+.search-bar:focus-within { background: var(--surface); box-shadow: var(--elev-1); }
+.keep-search {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--on-surface);
+  font-size: 16px;
+  outline: none;
+}
+.keep-search::placeholder { color: var(--on-surface-variant); }
+
+/* Filter chips, scrolling sideways when they run out of room. */
+.chip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin: 0 -16px;
+  padding: 0 16px;
+}
+.chip-row::-webkit-scrollbar { display: none; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 16px;
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--r-sm);
+  background-color: transparent;
+  color: var(--on-surface-variant);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
 }
-.keep-filter input { accent-color: var(--red); }
+.chip svg { width: 18px; height: 18px; }
+.chip.has-icon { padding-left: 8px; }
+
+.keep-filter { display: inline-flex; flex-shrink: 0; position: relative; }
+.keep-filter input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.keep-filter .chip-check { display: none; }
+.keep-filter input:checked + .chip {
+  background-color: var(--secondary-container);
+  border-color: var(--secondary-container);
+  color: var(--on-secondary-container);
+  padding-left: 8px;
+}
+.keep-filter input:checked + .chip .chip-check { display: block; }
+.keep-filter input:focus-visible + .chip { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* Listen mode's own chip: on, it reads as the mode the tab is in rather than
+   one more filter, so it takes the accent rather than the toolbar's grey. */
+.keep-listen.on {
+  background-color: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+
+.list-subheader {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--on-surface-variant);
+  padding: 4px 4px 0;
+}
+.list-subheader:empty { display: none; }
 
 .keep-offline-status {
-  font-size: 11px;
-  color: var(--text-3);
-  padding: 6px 16px;
-  border-bottom: 0.5px solid var(--border);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--on-surface-variant);
+  padding: 12px 16px 4px;
 }
 .keep-offline-status:empty { display: none; }
 
-.keep-item .email-item-subject { white-space: normal; }
-
-/* Listen mode's own button: on, it reads as the mode the tab is in rather than
-   one more filter, so it takes the accent rather than the toolbar's grey. */
-.keep-listen {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.keep-item .email-item-subject {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
 }
-.keep-listen svg { width: 14px; height: 14px; }
-.keep-listen.on {
-  background: var(--red);
-  border-color: var(--red);
-  color: #fff;
-}
-.keep-listen.on:active { background: #C5221F; }
 
 /* Swipe-left-to-mark-read on Keep rows (iOS-Mail style). The row slides left to
-   reveal a red "Mark read" action behind it. */
-.keep-row { position: relative; overflow: hidden; }
+   reveal a "Mark read" action behind it. */
+.keep-row { position: relative; overflow: hidden; background: var(--primary); }
 .keep-row .keep-item {
   position: relative;
-  background: var(--surface);
+  background-color: var(--surface);
   transition: transform 0.2s ease;
   will-change: transform;
   z-index: 1;
@@ -1273,47 +1575,99 @@ body {
   z-index: 0;
 }
 .keep-row-mark {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   border: none;
-  background: var(--red);
-  color: #fff;
-  font-family: var(--sans);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 0 22px;
+  background-color: var(--primary);
+  color: var(--on-primary);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 0 20px;
   cursor: pointer;
   white-space: nowrap;
 }
-.keep-row-mark:active { background: #C5221F; }
+.keep-row-mark svg { width: 20px; height: 20px; }
 
 .keep-offline {
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
   font-weight: 500;
-  color: var(--orange);
-  background: var(--orange-light);
-  padding: 8px 16px;
-  border-bottom: 0.5px solid var(--border);
+  color: var(--on-warning-container);
+  background: var(--warning-container);
+  padding: 10px 16px;
 }
+.keep-offline svg { width: 20px; height: 20px; }
 
 /* ── Settings ─────────────────────────────────────────────── */
+#settings-screen { flex-direction: column; overflow: hidden; }
+.settings-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 16px 16px;
+  display: flex;
+  flex-direction: column;
+}
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 -8px 4px;
+  min-height: 48px;
+  flex-shrink: 0;
+}
+.page-header h2 { font-size: 22px; line-height: 28px; font-weight: 400; color: var(--on-surface); }
+.settings-group-title {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--primary);
+  padding: 16px 4px 8px;
+  flex-shrink: 0;
+}
+
 .setting-row {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
   cursor: pointer;
 }
 /* Separate stacked settings so a row's description doesn't run into the next
    row's title. */
-.setting-row + .setting-row,
-.setting-row + .setting-slider {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
+.setting-row + .setting-row { border-top: 1px solid var(--outline-variant); }
+.setting-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.setting-title { font-size: 16px; line-height: 24px; font-weight: 400; color: var(--on-surface); }
+.setting-desc { font-size: 13px; line-height: 18px; color: var(--on-surface-variant); }
+.setting-desc strong { font-weight: 500; }
+
+/* A Material switch, drawn on the checkbox itself so it stays a checkbox. */
+.setting-row input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex-shrink: 0;
+  width: 52px;
+  height: 32px;
+  border-radius: 16px;
+  border: 2px solid var(--outline);
+  background: radial-gradient(circle, var(--outline) 7.5px, transparent 8px) no-repeat 0 0 / 28px 28px, var(--surface-highest);
+  cursor: pointer;
+  transition: background-position 0.2s cubic-bezier(0.2, 0, 0, 1), background-color 0.2s, border-color 0.2s;
 }
-.setting-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.setting-title { font-size: 13px; font-weight: 500; color: var(--text-1); }
-.setting-desc { font-size: 12px; color: var(--text-2); line-height: 1.5; }
-.setting-row input[type="checkbox"] { margin-top: 2px; flex-shrink: 0; width: 18px; height: 18px; accent-color: var(--red); }
-.app-version { margin-top: 12px; font-size: 11px; color: var(--text-3); }
+.setting-row input[type="checkbox"]:checked {
+  border-color: var(--primary);
+  background: radial-gradient(circle, var(--on-primary) 11.5px, transparent 12px) no-repeat 20px 0 / 28px 28px, var(--primary);
+}
+.setting-row input[type="checkbox"]:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* Slider and select rows put their control under the label, full width. */
+.setting-slider { flex-direction: column; align-items: stretch; gap: 10px; cursor: default; }
+.setting-slider input[type="range"] { width: 100%; height: 24px; accent-color: var(--primary); cursor: pointer; }
+.app-version { text-align: center; font-size: 12px; line-height: 16px; color: var(--outline); padding: 24px 0 8px; }
 
 /* ── Bulk Screen ──────────────────────────────────────────── */
 #bulk-screen {
@@ -1325,17 +1679,16 @@ body {
   flex: 1;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 12px 12px 0;
+  padding: 4px 16px 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 /* Rules card */
 .section-card {
   background: var(--surface);
-  border-radius: var(--radius);
-  border: 0.5px solid var(--border);
+  border-radius: var(--r-lg);
   overflow: hidden;
 }
 
@@ -1343,260 +1696,351 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 13px 16px;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px 12px 12px 20px;
   cursor: pointer;
-  border-bottom: 0.5px solid var(--border);
 }
 
-.section-card-header h3 { font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
-
-.pill {
-  font-size: 11px;
+.section-card-header h3 {
+  font-size: 16px;
+  line-height: 24px;
   font-weight: 500;
-  padding: 2px 9px;
-  border-radius: 20px;
-  background: var(--surface-3);
-  color: var(--text-2);
-}
-
-.pill.red { background: var(--red); color: white; }
-
-.chevron { font-size: 12px; color: var(--text-3); transition: transform 0.2s; }
-.collapsed .chevron { transform: rotate(-90deg); }
-.collapsed .section-card-body { display: none; }
-
-.section-card-body { padding: 14px 16px; }
-
-.suggest-list { display: flex; flex-direction: column; gap: 8px; }
-
-.suggest-row {
+  color: var(--on-surface);
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--surface-2);
-  border-radius: 10px;
-  padding: 10px 12px;
 }
+
+.pill {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  min-width: 24px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-align: center;
+  background: var(--surface-high);
+  color: var(--on-surface-variant);
+}
+.pill.red { background: var(--error-container); color: var(--on-error-container); }
+
+.chevron {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--on-surface-variant);
+  transform: rotate(180deg);
+  transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1);
+  flex-shrink: 0;
+}
+.chevron svg { width: 24px; height: 24px; }
+.collapsed .chevron { transform: rotate(0deg); }
+.collapsed .section-card-body { display: none; }
+
+.section-card-body { padding: 0 20px 20px; }
+.section-desc { font-size: 13px; line-height: 20px; color: var(--on-surface-variant); margin-bottom: 16px; }
+.section-desc strong { font-weight: 500; color: var(--on-surface); }
+
+.suggest-list { display: flex; flex-direction: column; gap: 8px; }
+
+/* Suggestion: what it is on the left, dismiss top-right, the actions under. */
+.suggest-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "meta dismiss" "actions actions";
+  align-items: start;
+  column-gap: 4px;
+  background: var(--row-bg);
+  border-radius: var(--r-md);
+  padding: 12px 4px 12px 16px;
+}
+.suggest-row .suggest-meta { grid-area: meta; padding-top: 2px; }
+.suggest-row .suggest-dismiss-btn { grid-area: dismiss; margin-top: -6px; }
+.suggest-row .suggest-actions { grid-area: actions; margin-top: 12px; }
 
 .suggest-meta { flex: 1; min-width: 0; }
 .suggest-name {
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 20px;
   font-weight: 500;
-  color: var(--text-1);
+  color: var(--on-surface);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .suggest-addr {
-  font-size: 11px;
-  color: var(--text-3);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--on-surface-variant);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.suggest-count { font-size: 11px; color: var(--orange); font-weight: 500; margin-top: 2px; }
-.suggest-pattern { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.suggest-count { font-size: 12px; line-height: 16px; color: var(--warning); font-weight: 500; margin-top: 6px; }
+.suggest-pattern { font-size: 12px; line-height: 16px; color: var(--on-surface-variant); margin-top: 2px; }
 .suggest-variants {
-  font-size: 11px;
-  color: var(--text-3);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--on-surface-variant);
   margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.suggest-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.suggest-block-btn {
-  height: 32px;
-  padding: 0 14px;
-  background: var(--orange);
-  color: #fff;
+.suggest-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
+.suggest-block-btn, .suggest-read-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px 0 12px;
   border: none;
-  border-radius: 8px;
-  font-family: var(--sans);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.suggest-block-btn:active { opacity: 0.85; }
-.suggest-read-btn {
-  height: 32px;
-  padding: 0 12px;
-  background: var(--surface-3);
-  color: var(--text-1);
-  border: none;
-  border-radius: 8px;
-  font-family: var(--sans);
-  font-size: 13px;
-  font-weight: 600;
+  border-radius: 18px;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
   cursor: pointer;
   white-space: nowrap;
 }
-.suggest-read-btn:active { opacity: 0.85; }
+.suggest-block-btn svg, .suggest-read-btn svg { width: 18px; height: 18px; }
+.suggest-block-btn { background-color: var(--error-container); color: var(--on-error-container); }
+.suggest-read-btn { background-color: var(--secondary-container); color: var(--on-secondary-container); }
+.suggest-read-btn.no-icon { padding: 0 20px; }
 .suggest-dismiss-btn {
-  background: none;
+  width: 40px; height: 40px;
   border: none;
-  color: var(--text-3);
-  font-size: 20px;
-  line-height: 1;
+  border-radius: 50%;
+  background-color: transparent;
+  color: var(--on-surface-variant);
+  display: flex; align-items: center; justify-content: center;
   cursor: pointer;
-  padding: 0 4px;
+  flex-shrink: 0;
 }
-.suggest-dismiss-btn:active { color: var(--text-1); }
+.suggest-dismiss-btn svg { width: 20px; height: 20px; }
 
-.suggest-empty { font-size: 12px; color: var(--text-3); padding: 4px 0; line-height: 1.6; }
+.suggest-empty { font-size: 13px; line-height: 20px; color: var(--on-surface-variant); padding: 4px 0; }
 
 /* Standing sender rules, grouped into their two categories */
-.rules-list { display: flex; flex-direction: column; gap: 16px; }
-.rule-group { display: flex; flex-direction: column; gap: 6px; }
+.rules-list { display: flex; flex-direction: column; gap: 20px; }
+.rule-group { display: flex; flex-direction: column; gap: 8px; }
 .rule-group-title {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-2);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--on-surface-variant);
+  padding: 0 4px;
 }
 .rule-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  background: var(--surface-2);
-  border-radius: 10px;
-  padding: 8px 12px;
+  gap: 8px;
+  background: var(--row-bg);
+  border-radius: var(--r-md);
+  padding: 8px 4px 8px 16px;
+  min-height: 56px;
 }
 
 /* The form that makes a body rule by hand, rather than from a suggestion */
-.rule-add { display: flex; flex-direction: column; gap: 8px; }
+.rule-add-group {
+  margin-bottom: 20px;
+  padding: 16px;
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--r-md);
+}
+.rule-add-group .rule-group-title { padding: 0; font-size: 14px; color: var(--on-surface); }
+.rule-add-group .section-desc { margin: 0 0 4px; }
+.rule-add { display: flex; flex-direction: column; gap: 10px; }
 .rule-add-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.rule-add-label { font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.rule-add-label { font-size: 13px; color: var(--on-surface-variant); white-space: nowrap; }
 .rule-input {
-  height: 36px;
-  border: 0.5px solid var(--border-mid);
-  border-radius: 8px;
-  background: var(--surface-2);
-  color: var(--text-1);
-  font-family: var(--sans);
-  font-size: 13px;
-  padding: 0 12px;
+  height: 44px;
+  border: 1px solid var(--outline);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--on-surface);
+  font-size: 14px;
+  padding: 0 14px;
   outline: none;
   min-width: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.rule-input:focus { border-color: var(--red); }
+.rule-input::placeholder { color: var(--on-surface-variant); opacity: 0.8; }
+.rule-input:focus { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
 .rule-input-phrase { width: 100%; }
-.rule-input-num { width: 78px; flex-shrink: 0; }
-.rule-add-row .sort-select { height: 36px; }
+.rule-input-num { width: 84px; flex-shrink: 0; }
+.rule-add-row .sort-select { height: 44px; border-color: var(--outline); color: var(--on-surface); font-weight: 400; }
 .rule-add-select { flex: 1; min-width: 0; }
-.rule-add-row .suggest-read-btn { height: 36px; }
+.rule-add-row .suggest-read-btn { height: 44px; border-radius: 22px; }
 
-/* Email list card */
+/* Email list card: selection and the action on top, sort and load beneath. */
 .list-toolbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  padding: 11px 16px;
-  border-bottom: 0.5px solid var(--border);
-  gap: 8px;
-  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--outline-variant);
+  gap: 12px;
 }
+.list-toolbar .toolbar-left { grid-column: 1; grid-row: 1; }
+.list-toolbar #mark-read-btn { grid-column: 2; grid-row: 1; justify-self: end; }
+.list-toolbar .toolbar-right { grid-column: 1 / -1; grid-row: 2; }
 
-.toolbar-left { display: flex; align-items: center; gap: 8px; }
-.toolbar-left label { font-size: 13px; color: var(--text-2); display: flex; align-items: center; gap: 5px; cursor: pointer; }
-.sel-count { font-size: 12px; color: var(--text-3); }
+.toolbar-left { display: flex; align-items: center; gap: 12px; }
+.toolbar-left label { font-size: 14px; font-weight: 500; color: var(--on-surface); display: flex; align-items: center; gap: 12px; cursor: pointer; }
+.sel-count { font-size: 13px; color: var(--on-surface-variant); }
 
-.toolbar-right { display: flex; gap: 6px; flex-wrap: wrap; }
+.toolbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* Material checkbox */
+.toolbar-left input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px; height: 18px;
+  margin: 0;
+  border: 2px solid var(--on-surface-variant);
+  border-radius: 2px;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.toolbar-left input[type="checkbox"]:checked {
+  border-color: var(--primary);
+  background: var(--check-mark) no-repeat center / 16px 16px, var(--primary);
+}
 
 .btn-sm {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 32px;
-  padding: 0 12px;
-  border-radius: 8px;
-  font-family: var(--sans);
-  font-size: 12px;
+  padding: 0 14px;
+  border-radius: 16px;
+  font-size: 13px;
   font-weight: 500;
+  letter-spacing: 0.1px;
+  white-space: nowrap;
   cursor: pointer;
-  border: 0.5px solid var(--border-mid);
-  background: var(--surface-2);
-  color: var(--text-1);
+  border: 1px solid var(--outline);
+  background-color: transparent;
+  color: var(--primary);
 }
-
-.btn-sm:active { background: var(--surface-3); }
-.btn-sm.danger { border-color: var(--red); color: var(--red); }
-.btn-sm.danger:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn-sm.danger:not(:disabled):active { background: var(--red-light); }
+/* The list's one committing action, filled. */
+.btn-sm.danger { border-color: var(--primary); background-color: var(--primary); color: var(--on-primary); }
+.btn-sm.danger:disabled { border-color: transparent; background-color: rgba(127, 127, 127, 0.16); color: var(--on-surface); opacity: 0.45; cursor: not-allowed; }
+.btn-sm:disabled { cursor: default; }
 
 .sort-select {
   height: 32px;
-  padding: 0 26px 0 10px;
-  border-radius: 8px;
-  font-family: var(--sans);
-  font-size: 12px;
+  padding: 0 32px 0 12px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  border: 0.5px solid var(--border-mid);
-  background-color: var(--surface-2);
-  color: var(--text-1);
+  border: 1px solid var(--outline-variant);
+  background: var(--select-arrow) no-repeat right 8px center / 18px 18px, transparent;
+  color: var(--on-surface-variant);
   outline: none;
   -webkit-appearance: none;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235F6368' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 8px center;
+  flex-shrink: 0;
 }
-.sort-select:focus { border-color: var(--red); }
+.sort-select:focus-visible { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.chip-row .sort-select { font-size: 14px; }
 
 .email-list-inner { max-height: 380px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
 .email-item {
+  position: relative;
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 16px;
-  border-bottom: 0.5px solid var(--border);
+  align-items: center;
+  gap: 16px;
+  min-height: 72px;
+  padding: 12px 16px;
   cursor: pointer;
-  transition: background 0.1s;
+  background-color: var(--surface);
+  transition: background-color 0.1s;
 }
+.email-item.selected { background-color: var(--secondary-container); }
 
-.email-item:last-child { border-bottom: none; }
-.email-item:hover, .email-item:active { background: var(--surface-2); }
-
-.email-item input[type="checkbox"] { margin-top: 3px; flex-shrink: 0; accent-color: var(--red); }
+/* Avatar that turns into a check when the row is selected, as in Gmail. */
+.item-avatar { position: relative; width: 40px; height: 40px; flex-shrink: 0; }
+.item-avatar .check-avatar {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--on-primary);
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+.item-avatar .check-avatar svg { width: 24px; height: 24px; }
+.email-item.selected .check-avatar { display: flex; }
+.email-item .sr-check { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
+.email-item .sr-check:focus-visible + .item-avatar { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 50%; }
 
 .email-item-meta { flex: 1; min-width: 0; }
-.email-item-sender { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.email-item-subject { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-.email-item-time { font-size: 11px; color: var(--text-3); flex-shrink: 0; margin-top: 2px; }
+.email-item-top { display: flex; align-items: baseline; gap: 8px; }
+.email-item-sender {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.email-item-subject {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--on-surface-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+.email-item-time { font-size: 12px; line-height: 16px; font-weight: 500; color: var(--on-surface-variant); flex-shrink: 0; }
 /* The word count, shown in the Keep list while it's sorted by length */
-.keep-item-words { margin-top: 3px; text-align: right; white-space: nowrap; }
+.keep-item-words { margin-top: 4px; font-size: 12px; line-height: 16px; color: var(--outline); white-space: nowrap; }
 
-.list-empty { padding: 2.5rem 1rem; text-align: center; color: var(--text-3); font-size: 13px; line-height: 1.8; }
+.list-empty { padding: 40px 24px; text-align: center; color: var(--on-surface-variant); font-size: 14px; line-height: 22px; }
 
 .status-strip {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  background: var(--surface-3);
-  border-top: 0.5px solid var(--border);
-  font-size: 12px;
-  color: var(--text-2);
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--surface-container);
+  border-top: 1px solid var(--outline-variant);
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--on-surface-variant);
 }
 
 /* ── Toast ────────────────────────────────────────────────── */
+/* A Material snackbar, just above the navigation bar. */
 #toast {
   position: fixed;
-  bottom: calc(var(--nav-h) + 12px);
+  bottom: calc(var(--nav-h) + 16px);
   left: 50%;
-  transform: translateX(-50%) translateY(20px);
-  background: var(--text-1);
-  color: var(--surface);
-  font-size: 13px;
-  font-weight: 500;
-  padding: 9px 18px;
-  border-radius: 20px;
+  transform: translateX(-50%) translateY(16px);
+  width: max-content;
+  max-width: min(448px, calc(100% - 32px));
+  background: var(--inverse-surface);
+  color: var(--inverse-on-surface);
+  font-size: 14px;
+  line-height: 20px;
+  padding: 14px 16px;
+  border-radius: var(--r-sm);
+  box-shadow: var(--elev-3);
   opacity: 0;
-  transition: opacity 0.2s, transform 0.2s;
+  transition: opacity 0.2s, transform 0.25s cubic-bezier(0.2, 0, 0, 1);
   pointer-events: none;
-  white-space: nowrap;
   z-index: 9999;
 }
 
@@ -1614,23 +2058,23 @@ body {
 
   <!-- AUTH SCREEN -->
   <div id="auth-screen" class="screen">
-    <div style="display:flex;flex-direction:column;justify-content:center;align-items:center;flex:1;padding:24px;overflow-y:auto;">
+    <div class="auth-wrap">
       <div class="auth-card">
         <div class="auth-logo">
-          <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round">
-            <rect x="2" y="4" width="20" height="16" rx="2"/>
-            <path d="M2 6l10 7 10-7"/>
-          </svg>
+          <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M4 16v18a5 5 0 0 0 5 5h30a5 5 0 0 0 5-5V16L24 29Z" fill="#4285F4"/><path d="M4 16 24 29 44 16V14a5 5 0 0 0-5-5H9a5 5 0 0 0-5 5Z" fill="#1967D2"/><circle cx="37" cy="35" r="9.5" fill="#34A853" stroke-width="3" style="stroke:var(--surface)"/><path d="M32.6 35 35.8 38.1 41.4 32.4" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </div>
         <h2>Inbox Cleaner</h2>
         <p class="subtitle">Swipe through unread emails or bulk-mark them as read. Your data stays in your browser.</p>
 
         <div class="input-group" id="client-id-group">
-          <label>Google OAuth Client ID</label>
+          <label for="client-id-input">Google OAuth Client ID</label>
           <input type="text" id="client-id-input" placeholder="xxxx.apps.googleusercontent.com" autocomplete="off" />
         </div>
 
-        <button class="btn-primary" id="signin-btn" onclick="signIn()" disabled>Sign in with Google</button>
+        <button class="gsi-btn" id="signin-btn" onclick="signIn()" disabled>
+          <svg class="gsi-logo" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+          <span>Sign in with Google</span>
+        </button>
 
         <button class="btn-secondary" id="offline-keep-btn" onclick="enterOfflineMode()" style="display:none;">View saved emails (offline)</button>
 
@@ -1651,45 +2095,46 @@ body {
   <!-- MAIN WRAPPER (header + screens + nav) -->
   <div id="main-wrapper" style="display:none;flex-direction:column;flex:1;min-height:0;overflow:hidden;">
 
-    <div class="app-header">
-      <div class="logo">
-        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round">
-          <rect x="2" y="4" width="20" height="16" rx="2"/>
-          <path d="M2 6l10 7 10-7"/>
-        </svg>
+    <header class="app-header">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 48 48"><path d="M4 16v18a5 5 0 0 0 5 5h30a5 5 0 0 0 5-5V16L24 29Z" fill="#4285F4"/><path d="M4 16 24 29 44 16V14a5 5 0 0 0-5-5H9a5 5 0 0 0-5 5Z" fill="#1967D2"/><circle cx="37" cy="35" r="9.5" fill="#34A853" stroke-width="3" style="stroke:var(--bg)"/><path d="M32.6 35 35.8 38.1 41.4 32.4" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </div>
       <h1>Inbox Cleaner</h1>
       <div class="header-right">
-        <div class="user-chip" onclick="toggleAccountMenu()">
-          <div class="avatar" id="user-initial">?</div>
+        <button class="icon-btn" id="settings-btn" onclick="toggleSettings()" aria-label="Settings" title="Settings">
+          <svg class="mi" viewBox="0 -960 960 960"><path d="M433-80q-27 0-46.5-18T363-142l-9-66q-13-5-24.5-12T307-235l-62 26q-25 11-50 2t-39-32l-47-82q-14-23-8-49t27-43l53-40q-1-7-1-13.5v-27q0-6.5 1-13.5l-53-40q-21-17-27-43t8-49l47-82q14-23 39-32t50 2l62 26q11-8 23-15t24-12l9-66q4-26 23.5-44t46.5-18h94q27 0 46.5 18t23.5 44l9 66q13 5 24.5 12t22.5 15l62-26q25-11 50-2t39 32l47 82q14 23 8 49t-27 43l-53 40q1 7 1 13.5v27q0 6.5-2 13.5l53 40q21 17 27 43t-8 49l-48 82q-14 23-39 32t-50-2l-60-26q-11 8-23 15t-24 12l-9 66q-4 26-23.5 44T527-80h-94Zm7-80h79l14-106q31-8 57.5-23.5T639-327l99 41 39-68-86-65q5-14 7-29.5t2-31.5q0-16-2-31.5t-7-29.5l86-65-39-68-99 42q-22-23-48.5-38.5T533-694l-13-106h-79l-14 106q-31 8-57.5 23.5T321-633l-99-41-39 68 86 64q-5 15-7 30t-2 32q0 16 2 31t7 30l-86 65 39 68 99-42q22 23 48.5 38.5T427-266l13 106Zm42-180q58 0 99-41t41-99q0-58-41-99t-99-41q-59 0-99.5 41T342-480q0 58 40.5 99t99.5 41Zm-2-140Z"/></svg>
+        </button>
+        <button class="user-chip" onclick="toggleAccountMenu()" aria-label="Accounts" title="Accounts">
+          <span class="avatar" id="user-initial">?</span>
           <span id="user-email-short">—</span>
-          <svg class="chip-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
-        </div>
+          <svg class="mi chip-caret" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg>
+        </button>
         <div class="account-menu" id="account-menu" style="display:none;"></div>
       </div>
-    </div>
+    </header>
 
     <!-- SWIPE SCREEN -->
     <div id="swipe-screen" class="screen active" style="display:flex;">
 
       <div class="swipe-toolbar">
         <span class="counter" id="swipe-counter">0 remaining</span>
-        <div class="swipe-mode-toggle">
-          <button class="mode-btn active" id="mode-triage" onclick="setSwipeMode('triage')">Triage</button>
-          <button class="mode-btn" id="mode-block" onclick="setSwipeMode('block')">Block</button>
+        <div class="swipe-mode-toggle" role="group" aria-label="Swipe mode">
+          <button class="mode-btn active" id="mode-triage" onclick="setSwipeMode('triage')"><svg class="mi mode-check" viewBox="0 -960 960 960"><path d="m382-354 339-339q12-12 28-12t28 12q12 12 12 28.5T777-636L410-268q-12 12-28 12t-28-12L182-440q-12-12-11.5-28.5T183-497q12-12 28.5-12t28.5 12l142 143Z"/></svg>Triage</button>
+          <button class="mode-btn" id="mode-block" onclick="setSwipeMode('block')"><svg class="mi mode-check" viewBox="0 -960 960 960"><path d="m382-354 339-339q12-12 28-12t28 12q12 12 12 28.5T777-636L410-268q-12 12-28 12t-28-12L182-440q-12-12-11.5-28.5T183-497q12-12 28.5-12t28.5 12l142 143Z"/></svg>Block</button>
         </div>
         <button class="fetch-btn" onclick="fetchEmails()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="14" height="14"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>
+          <svg class="mi" viewBox="0 -960 960 960"><path d="M480-160q-134 0-227-93t-93-227q0-134 93-227t227-93q69 0 132 28.5T720-690v-70q0-17 11.5-28.5T760-800q17 0 28.5 11.5T800-760v200q0 17-11.5 28.5T760-520H560q-17 0-28.5-11.5T520-560q0-17 11.5-28.5T560-600h128q-32-56-87.5-88T480-720q-100 0-170 70t-70 170q0 100 70 170t170 70q68 0 124.5-34.5T692-367q8-14 22.5-19.5t29.5-.5q16 5 23 21t-1 30q-41 80-117 128t-169 48Z"/></svg>
           Load
         </button>
       </div>
 
       <div class="block-banner" id="block-banner" style="display:none;">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <svg class="mi" viewBox="0 -960 960 960"><path d="M109-120q-11 0-20-5.5T75-140q-5-9-5.5-19.5T75-180l370-640q6-10 15.5-15t19.5-5q10 0 19.5 5t15.5 15l370 640q6 10 5.5 20.5T885-140q-5 9-14 14.5t-20 5.5H109Zm371-120q17 0 28.5-11.5T520-280q0-17-11.5-28.5T480-320q-17 0-28.5 11.5T440-280q0 17 11.5 28.5T480-240Zm0-120q17 0 28.5-11.5T520-400v-120q0-17-11.5-28.5T480-560q-17 0-28.5 11.5T440-520v120q0 17 11.5 28.5T480-360Z"/></svg>
         <span><strong>Block mode</strong> — swiping left sends this sender's unread mail to spam</span>
       </div>
 
       <div class="kept-bar" id="kept-bar" style="display:none;">
+        <svg class="mi" viewBox="0 -960 960 960"><path d="m480-240-168 72q-40 17-76-6.5T200-241v-519q0-33 23.5-56.5T280-840h400q33 0 56.5 23.5T760-760v519q0 43-36 66.5t-76 6.5l-168-72Zm0-88 200 86v-518H280v518l200-86Zm0-432H280h400-200Z"/></svg>
         <span class="kept-msg" id="kept-bar-msg"></span>
         <button onclick="reviewKept()">Review</button>
         <button onclick="clearKept()">Reset</button>
@@ -1697,32 +2142,29 @@ body {
 
       <div class="card-stack-area" id="card-stack-area" tabindex="-1">
         <div class="empty-swipe" id="swipe-empty">
-          <div class="empty-icon">📭</div>
-          <div id="swipe-empty-msg">Tap "Load emails" to start swiping</div>
+          <div class="empty-icon" aria-hidden="true">
+            <svg class="mi ei-inbox" viewBox="0 -960 960 960"><path d="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-120H640q-30 38-71.5 59T480-240q-47 0-88.5-21T320-320H200v120Zm280-120q32 0 59-16.5t44-43.5q6-9 15-14.5t20-5.5h142v-360H200v360h142q11 0 20 5.5t15 14.5q17 27 44 43.5t59 16.5ZM200-200h560-560Z"/></svg>
+            <svg class="mi ei-done" viewBox="0 -960 960 960"><path d="m382-354 339-339q12-12 28-12t28 12q12 12 12 28.5T777-636L410-268q-12 12-28 12t-28-12L182-440q-12-12-11.5-28.5T183-497q12-12 28.5-12t28.5 12l142 143Z"/></svg>
+          </div>
+          <div id="swipe-empty-msg">Tap Load to start swiping</div>
         </div>
       </div>
 
       <div class="swipe-actions" id="swipe-actions" style="display:none;">
         <button class="action-btn read-btn" id="left-action-btn" onclick="swipeCard('left')" title="Mark as read">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <path d="M18 6L6 18M6 6l12 12"/>
-          </svg>
+          <svg class="mi" viewBox="0 -960 960 960"><path d="m521-896 321 192q18 11 28 30t10 40v434q0 33-23.5 56.5T800-120H160q-33 0-56.5-23.5T80-200v-434q0-21 10-40t28-30l321-192q19-11 41-11t41 11Zm-41 442 312-186-312-186-312 186 312 186Zm-41 69L160-552v352h640v-352L521-385q-19 11-41 11t-41-11Zm82 185h279-640 361Z"/></svg><span>Mark read</span>
         </button>
-        <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
-          <button class="action-btn undo-btn" onclick="undoSwipe()" title="Undo">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>
-            </svg>
+        <div class="action-center">
+          <button class="action-btn undo-btn" onclick="undoSwipe()" title="Undo" aria-label="Undo">
+            <svg class="mi" viewBox="0 -960 960 960"><path d="M320-200q-17 0-28.5-11.5T280-240q0-17 11.5-28.5T320-280h244q63 0 109.5-40T720-420q0-60-46.5-100T564-560H312l76 76q11 11 11 28t-11 28q-11 11-28 11t-28-11L188-572q-6-6-8.5-13t-2.5-15q0-8 2.5-15t8.5-13l144-144q11-11 28-11t28 11q11 11 11 28t-11 28l-76 76h252q97 0 166.5 63T800-420q0 94-69.5 157T564-200H320Z"/></svg>
           </button>
           <button class="open-gmail-btn" id="open-gmail-btn" onclick="openInGmail()" style="display:none;">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            <svg class="mi" viewBox="0 -960 960 960"><path d="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h240q17 0 28.5 11.5T480-800q0 17-11.5 28.5T440-760H200v560h560v-240q0-17 11.5-28.5T800-480q17 0 28.5 11.5T840-440v240q0 33-23.5 56.5T760-120H200Zm560-584L416-360q-11 11-28 11t-28-11q-11-11-11-28t11-28l344-344H600q-17 0-28.5-11.5T560-800q0-17 11.5-28.5T600-840h200q17 0 28.5 11.5T840-800v200q0 17-11.5 28.5T800-560q-17 0-28.5-11.5T760-600v-104Z"/></svg>
             Open
           </button>
         </div>
         <button class="action-btn skip-btn" id="right-action-btn" onclick="swipeCard('right')" title="Keep unread">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <path d="M20 6L9 17l-5-5"/>
-          </svg>
+          <svg class="mi" viewBox="0 -960 960 960"><path d="m480-240-168 72q-40 17-76-6.5T200-241v-519q0-33 23.5-56.5T280-840h400q33 0 56.5 23.5T760-760v519q0 43-36 66.5t-76 6.5l-168-72Z"/></svg><span>Keep</span>
         </button>
       </div>
 
@@ -1735,32 +2177,31 @@ body {
     <!-- KEEP SCREEN -->
     <div id="keep-screen" class="screen" style="display:none;">
       <div class="keep-scroll" id="keep-scroll">
-        <p class="keep-intro">Emails you swiped <strong>Keep</strong>. Tap one to read — the <strong>Mark as read</strong> button is at the very bottom of each email, so it won't be tapped by accident.</p>
-        <div class="section-card">
-          <div class="keep-search-wrap">
+        <div class="keep-head">
+          <label class="search-bar">
+            <svg class="mi" viewBox="0 -960 960 960"><path d="M380-320q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l224 224q11 11 11 28t-11 28q-11 11-28 11t-28-11L532-372q-30 24-69 38t-83 14Zm0-80q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z"/></svg>
             <input type="search" id="keep-search" class="keep-search" placeholder="Search kept emails" autocomplete="off" oninput="setKeepSearch(this.value)" />
+          </label>
+          <div class="chip-row">
+            <button class="chip has-icon keep-listen" id="keep-listen" onclick="toggleKeepListen()" aria-pressed="false" title="Long reads only, cut-off previews and video notes skipped, played as you open them">
+              <svg class="mi" viewBox="0 -960 960 960"><path d="M280-120h-80q-33 0-56.5-23.5T120-200v-280q0-75 28.5-140.5t77-114q48.5-48.5 114-77T480-840q75 0 140.5 28.5t114 77q48.5 48.5 77 114T840-480v280q0 33-23.5 56.5T760-120h-80q-33 0-56.5-23.5T600-200v-160q0-33 23.5-56.5T680-440h80v-40q0-117-81.5-198.5T480-760q-117 0-198.5 81.5T200-480v40h80q33 0 56.5 23.5T360-360v160q0 33-23.5 56.5T280-120Zm0-240h-80v160h80v-160Zm400 0v160h80v-160h-80Zm-400 0h-80 80Zm400 0h80-80Z"/></svg>
+              Listen
+            </button>
+            <label class="keep-filter"><input type="checkbox" id="keep-offline-only" onchange="setKeepOfflineOnly(this.checked)"><span class="chip"><svg class="mi chip-check" viewBox="0 -960 960 960"><path d="m382-354 339-339q12-12 28-12t28 12q12 12 12 28.5T777-636L410-268q-12 12-28 12t-28-12L182-440q-12-12-11.5-28.5T183-497q12-12 28.5-12t28.5 12l142 143Z"/></svg>Offline only</span></label>
+            <select class="sort-select" id="keep-sort-select" onchange="setKeepSort(this.value)" aria-label="Sort kept emails">
+              <option value="top-reads">Top reads</option>
+              <option value="date-desc">Newest first</option>
+              <option value="date-asc">Oldest first</option>
+              <option value="words-asc">Shortest first</option>
+              <option value="words-desc">Longest first</option>
+              <option value="sender-az">Sender A–Z</option>
+              <option value="sender-za">Sender Z–A</option>
+            </select>
           </div>
-          <div class="list-toolbar">
-            <div class="toolbar-left">
-              <span class="sel-count" id="keep-count-label"></span>
-              <label class="keep-filter"><input type="checkbox" id="keep-offline-only" onchange="setKeepOfflineOnly(this.checked)"> Offline only</label>
-            </div>
-            <div class="toolbar-right">
-              <button class="btn-sm keep-listen" id="keep-listen" onclick="toggleKeepListen()" aria-pressed="false" title="Long reads only, cut-off previews and video notes skipped, played as you open them">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-3a8 8 0 0 1 16 0v3"/><path d="M4 14a2 2 0 0 1 2-2h1v6H6a2 2 0 0 1-2-2zM20 14a2 2 0 0 0-2-2h-1v6h1a2 2 0 0 0 2-2z"/></svg>
-                Listen
-              </button>
-              <select class="sort-select" id="keep-sort-select" onchange="setKeepSort(this.value)" aria-label="Sort kept emails">
-                <option value="top-reads">Top reads</option>
-                <option value="date-desc">Newest first</option>
-                <option value="date-asc">Oldest first</option>
-                <option value="words-asc">Shortest first</option>
-                <option value="words-desc">Longest first</option>
-                <option value="sender-az">Sender A–Z</option>
-                <option value="sender-za">Sender Z–A</option>
-              </select>
-            </div>
-          </div>
+        </div>
+        <p class="keep-intro">Emails you swiped <strong>Keep</strong>. Tap one to read — the <strong>Mark as read</strong> button is at the very bottom of each email, so it won't be tapped by accident.</p>
+        <div class="list-subheader" id="keep-count-label"></div>
+        <div class="section-card">
           <div class="keep-offline-status" id="keep-offline-status"></div>
           <div class="email-list-inner" id="keep-list-el" style="max-height:none;overflow:visible;">
             <div class="list-empty">No kept emails yet.</div>
@@ -1774,90 +2215,14 @@ body {
     <div id="bulk-screen" class="screen" style="display:none;">
       <div class="bulk-scroll" id="bulk-scroll">
 
-        <!-- Settings -->
-        <div class="section-card" id="settings-card">
-          <div class="section-card-header" onclick="toggleSection('settings-card')">
-            <h3>Settings</h3>
-            <span class="chevron">▾</span>
-          </div>
-          <div class="section-card-body">
-            <label class="setting-row">
-              <span class="setting-text">
-                <span class="setting-title">Mark kept emails as read</span>
-                <span class="setting-desc">Swiping Keep just applies the Keep label (no longer keeps them unread). They still appear in the Keep tab.</span>
-              </span>
-              <input type="checkbox" id="keep-marks-read" onchange="setKeepMarksRead(this.checked)">
-            </label>
-            <label class="setting-row">
-              <span class="setting-text">
-                <span class="setting-title">Sort swipe deck by sender</span>
-                <span class="setting-desc">Pre-sorts the swipe screen by sender instead of by date, so all of one sender's mail comes up together. The Bulk list keeps its own sort.</span>
-              </span>
-              <input type="checkbox" id="swipe-sort-sender" onchange="setSwipeSortBySender(this.checked)">
-            </label>
-            <label class="setting-row">
-              <span class="setting-text">
-                <span class="setting-title">Auto-scroll while reading</span>
-                <span class="setting-desc">Slowly scrolls an open email at your reading pace. Adjust speed with the slider in the reader or the <strong>←</strong> and <strong>→</strong> keys; tap the content (or the pause button) to stop. Drag the control anywhere in the reader and it stays there.</span>
-              </span>
-              <input type="checkbox" id="autoscroll-enabled" onchange="setAutoScrollEnabled(this.checked)">
-            </label>
-            <div class="setting-row setting-slider" id="autoscroll-speed-row" style="display:none;">
-              <span class="setting-text">
-                <span class="setting-title">Reading speed</span>
-                <span class="setting-desc"><span id="autoscroll-wpm-label">250</span> words per minute</span>
-              </span>
-              <input type="range" id="autoscroll-wpm" min="100" max="600" step="10" value="250" oninput="setAutoScrollWpm(this.value)">
-            </div>
-            <label class="setting-row">
-              <span class="setting-text">
-                <span class="setting-title">Read emails aloud</span>
-                <span class="setting-desc">Puts a headphones button in the reader. Uses a natural Google voice when the server key is set up, and the device's own voice otherwise. Playback keeps going with the screen locked.</span>
-              </span>
-              <input type="checkbox" id="tts-enabled" onchange="setTtsEnabled(this.checked)">
-            </label>
-            <div class="setting-row setting-slider" id="tts-voice-row" style="display:none;">
-              <span class="setting-text">
-                <span class="setting-title">Default voice</span>
-                <span class="setting-desc" id="tts-voice-desc">Loading voices…</span>
-              </span>
-              <select class="tts-voice-select" id="tts-voice" onchange="setTtsVoice(this.value)" aria-label="Reading voice"></select>
-            </div>
-            <div class="setting-row setting-slider" id="tts-rate-row" style="display:none;">
-              <span class="setting-text">
-                <span class="setting-title">Speaking speed</span>
-                <span class="setting-desc"><span id="tts-rate-label">1.0</span>&times; normal pace</span>
-              </span>
-              <input type="range" id="tts-rate" min="0.7" max="1.8" step="0.05" value="1" oninput="setTtsRate(this.value)">
-            </div>
-            <label class="setting-row" id="tts-through-row" style="display:none;">
-              <span class="setting-text">
-                <span class="setting-title">Play through the list</span>
-                <span class="setting-desc">At the end of an email, start the next one — in the order the Keep tab is showing, so its sort and search apply. After five it cues the next and waits, so a phone in a pocket can't read through the month's allowance.</span>
-              </span>
-              <input type="checkbox" id="tts-playthrough" onchange="setTtsPlayThrough(this.checked)">
-            </label>
-            <label class="setting-row" id="tts-auto-row" style="display:none;">
-              <span class="setting-text">
-                <span class="setting-title">Start reading when an email opens</span>
-                <span class="setting-desc">Begins speaking as soon as the body loads, instead of waiting for the headphones button.</span>
-              </span>
-              <input type="checkbox" id="tts-autostart" onchange="setTtsAutoStart(this.checked)">
-            </label>
-            <div class="tts-usage" id="tts-sender-voices" style="display:none;"></div>
-            <div class="tts-usage" id="tts-usage" style="display:none;"></div>
-            <div class="app-version" id="app-version"></div>
-          </div>
-        </div>
-
         <!-- Suggested blocks -->
         <div class="section-card" id="suggest-card">
           <div class="section-card-header" onclick="toggleSection('suggest-card')">
             <h3>Suggested blocks <span class="pill red" id="suggest-count">0</span></h3>
-            <span class="chevron">▾</span>
+            <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
           </div>
           <div class="section-card-body">
-            <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Senders you keep marking as read without ever opening. <strong>Block</strong> sends their mail to spam; <strong>Auto-read</strong> marks it read but leaves it in your inbox.</p>
+            <p class="section-desc">Senders you keep marking as read without ever opening. <strong>Block</strong> sends their mail to spam; <strong>Auto-read</strong> marks it read but leaves it in your inbox.</p>
             <div class="suggest-list" id="suggest-list-el"></div>
           </div>
         </div>
@@ -1866,10 +2231,10 @@ body {
         <div class="section-card" id="subject-card">
           <div class="section-card-header" onclick="toggleSection('subject-card')">
             <h3>Suggested subject rules <span class="pill" id="subject-count">0</span></h3>
-            <span class="chevron">▾</span>
+            <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
           </div>
           <div class="section-card-body">
-            <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Recurring subjects you never open, from senders whose other mail you do read. Subjects that vary a little each time are grouped, and the rule matches on the words they share. <strong>Auto-read</strong> marks future matching mail read and leaves it in your inbox — there's no block option here, because the sender isn't the problem.</p>
+            <p class="section-desc">Recurring subjects you never open, from senders whose other mail you do read. Subjects that vary a little each time are grouped, and the rule matches on the words they share. <strong>Auto-read</strong> marks future matching mail read and leaves it in your inbox — there's no block option here, because the sender isn't the problem.</p>
             <div class="suggest-list" id="subject-list-el"></div>
           </div>
         </div>
@@ -1878,10 +2243,10 @@ body {
         <div class="section-card" id="length-card">
           <div class="section-card-header" onclick="toggleSection('length-card')">
             <h3>Suggested short-mail rules <span class="pill" id="length-count">0</span></h3>
-            <span class="chevron">▾</span>
+            <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
           </div>
           <div class="section-card-body">
-            <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Senders whose mail is usually long but who sometimes send something far shorter — a “we’re live” note, a post cut off after two paragraphs, a one-line alert. <strong>Auto-read</strong> marks only those short ones read and leaves the rest of the sender’s mail exactly where it is. Lengths are measured from the emails already saved for offline reading, so nothing extra is fetched.</p>
+            <p class="section-desc">Senders whose mail is usually long but who sometimes send something far shorter — a “we’re live” note, a post cut off after two paragraphs, a one-line alert. <strong>Auto-read</strong> marks only those short ones read and leaves the rest of the sender’s mail exactly where it is. Lengths are measured from the emails already saved for offline reading, so nothing extra is fetched.</p>
             <div class="suggest-list" id="length-list-el"></div>
           </div>
         </div>
@@ -1890,13 +2255,13 @@ body {
         <div class="section-card" id="rules-card">
           <div class="section-card-header" onclick="toggleSection('rules-card')">
             <h3>Rules <span class="pill" id="rules-count">0</span></h3>
-            <span class="chevron">▾</span>
+            <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
           </div>
           <div class="section-card-body">
-            <p style="font-size:12px;color:var(--text-2);margin-bottom:10px;line-height:1.6;">Applied to new mail every time you load. Remove a rule with × — mail already actioned stays where it is.</p>
-            <div class="rule-group" style="margin-bottom:16px;">
+            <p class="section-desc">Applied to new mail every time you load. Remove a rule with × — mail already actioned stays where it is.</p>
+            <div class="rule-group rule-add-group">
               <div class="rule-group-title">Add a body rule</div>
-              <p style="font-size:12px;color:var(--text-2);margin:0 0 4px;line-height:1.6;">Matches on what the email says rather than who sent it. Give it a phrase, a word limit, or both — with both, an email has to satisfy the two. A word limit on its own catches every short email, replies from people included, so it's usually worth pairing with a phrase.</p>
+              <p class="section-desc">Matches on what the email says rather than who sent it. Give it a phrase, a word limit, or both — with both, an email has to satisfy the two. A word limit on its own catches every short email, replies from people included, so it's usually worth pairing with a phrase.</p>
               <div class="rule-add">
                 <input type="text" id="content-phrase-input" class="rule-input rule-input-phrase" placeholder="Phrase in the body, e.g. Keep reading with a 7-day free trial" autocomplete="off" aria-label="Phrase in the email body">
                 <div class="rule-add-row">
@@ -1910,7 +2275,7 @@ body {
                     <option value="read">Mark it read</option>
                     <option value="block">Move it to spam</option>
                   </select>
-                  <button class="suggest-read-btn" onclick="addContentRule()">Add rule</button>
+                  <button class="suggest-read-btn no-icon" onclick="addContentRule()">Add rule</button>
                 </div>
               </div>
             </div>
@@ -1934,8 +2299,8 @@ body {
                 <option value="sender-za">Sender Z–A</option>
               </select>
               <button class="btn-sm" onclick="fetchEmails()">Load (200)</button>
-              <button class="btn-sm danger" id="mark-read-btn" onclick="bulkMarkRead()" disabled>Mark read</button>
             </div>
+            <button class="btn-sm danger" id="mark-read-btn" onclick="bulkMarkRead()" disabled>Mark read</button>
           </div>
           <div class="email-list-inner" id="email-list-el">
             <div class="list-empty">Load your unread emails above.</div>
@@ -1950,30 +2315,120 @@ body {
       </div>
     </div>
 
+    <!-- SETTINGS SCREEN (opened from the gear in the header) -->
+    <div id="settings-screen" class="screen" style="display:none;">
+      <div class="settings-scroll" id="settings-scroll">
+        <div class="page-header">
+          <button class="icon-btn" onclick="closeSettings()" aria-label="Back">
+            <svg class="mi" viewBox="0 -960 960 960"><path d="m313-440 196 196q12 12 11.5 28T508-188q-12 11-28 11.5T452-188L188-452q-6-6-8.5-13t-2.5-15q0-8 2.5-15t8.5-13l264-264q11-11 27.5-11t28.5 11q12 12 12 28.5T508-715L313-520h447q17 0 28.5 11.5T800-480q0 17-11.5 28.5T760-440H313Z"/></svg>
+          </button>
+          <h2>Settings</h2>
+        </div>
+
+        <div class="settings-group-title">Swiping</div>
+        <div class="section-card" id="settings-card">
+          <label class="setting-row">
+            <span class="setting-text">
+              <span class="setting-title">Mark kept emails as read</span>
+              <span class="setting-desc">Swiping Keep just applies the Keep label (no longer keeps them unread). They still appear in the Keep tab.</span>
+            </span>
+            <input type="checkbox" id="keep-marks-read" onchange="setKeepMarksRead(this.checked)">
+          </label>
+          <label class="setting-row">
+            <span class="setting-text">
+              <span class="setting-title">Sort swipe deck by sender</span>
+              <span class="setting-desc">Pre-sorts the swipe screen by sender instead of by date, so all of one sender's mail comes up together. The Bulk list keeps its own sort.</span>
+            </span>
+            <input type="checkbox" id="swipe-sort-sender" onchange="setSwipeSortBySender(this.checked)">
+          </label>
+        </div>
+
+        <div class="settings-group-title">Reading</div>
+        <div class="section-card">
+          <label class="setting-row">
+            <span class="setting-text">
+              <span class="setting-title">Auto-scroll while reading</span>
+              <span class="setting-desc">Slowly scrolls an open email at your reading pace. Adjust speed with the slider in the reader or the <strong>←</strong> and <strong>→</strong> keys; tap the content (or the pause button) to stop. Drag the control anywhere in the reader and it stays there.</span>
+            </span>
+            <input type="checkbox" id="autoscroll-enabled" onchange="setAutoScrollEnabled(this.checked)">
+          </label>
+          <div class="setting-row setting-slider" id="autoscroll-speed-row" style="display:none;">
+            <span class="setting-text">
+              <span class="setting-title">Reading speed</span>
+              <span class="setting-desc"><span id="autoscroll-wpm-label">250</span> words per minute</span>
+            </span>
+            <input type="range" id="autoscroll-wpm" min="100" max="600" step="10" value="250" oninput="setAutoScrollWpm(this.value)">
+          </div>
+        </div>
+
+        <div class="settings-group-title">Read aloud</div>
+        <div class="section-card">
+          <label class="setting-row">
+            <span class="setting-text">
+              <span class="setting-title">Read emails aloud</span>
+              <span class="setting-desc">Puts a headphones button in the reader. Uses a natural Google voice when the server key is set up, and the device's own voice otherwise. Playback keeps going with the screen locked.</span>
+            </span>
+            <input type="checkbox" id="tts-enabled" onchange="setTtsEnabled(this.checked)">
+          </label>
+          <div class="setting-row setting-slider" id="tts-voice-row" style="display:none;">
+            <span class="setting-text">
+              <span class="setting-title">Default voice</span>
+              <span class="setting-desc" id="tts-voice-desc">Loading voices…</span>
+            </span>
+            <select class="tts-voice-select" id="tts-voice" onchange="setTtsVoice(this.value)" aria-label="Reading voice"></select>
+          </div>
+          <div class="setting-row setting-slider" id="tts-rate-row" style="display:none;">
+            <span class="setting-text">
+              <span class="setting-title">Speaking speed</span>
+              <span class="setting-desc"><span id="tts-rate-label">1.0</span>&times; normal pace</span>
+            </span>
+            <input type="range" id="tts-rate" min="0.7" max="1.8" step="0.05" value="1" oninput="setTtsRate(this.value)">
+          </div>
+          <label class="setting-row" id="tts-through-row" style="display:none;">
+            <span class="setting-text">
+              <span class="setting-title">Play through the list</span>
+              <span class="setting-desc">At the end of an email, start the next one — in the order the Keep tab is showing, so its sort and search apply. After five it cues the next and waits, so a phone in a pocket can't read through the month's allowance.</span>
+            </span>
+            <input type="checkbox" id="tts-playthrough" onchange="setTtsPlayThrough(this.checked)">
+          </label>
+          <label class="setting-row" id="tts-auto-row" style="display:none;">
+            <span class="setting-text">
+              <span class="setting-title">Start reading when an email opens</span>
+              <span class="setting-desc">Begins speaking as soon as the body loads, instead of waiting for the headphones button.</span>
+            </span>
+            <input type="checkbox" id="tts-autostart" onchange="setTtsAutoStart(this.checked)">
+          </label>
+          <div class="tts-usage" id="tts-sender-voices" style="display:none;"></div>
+          <div class="tts-usage" id="tts-usage" style="display:none;"></div>
+        </div>
+
+        <div class="app-version" id="app-version"></div>
+      </div>
+    </div>
+
     <!-- BOTTOM NAV -->
     <nav class="bottom-nav">
       <button class="nav-btn active" id="nav-swipe" onclick="switchTab('swipe')">
-        <div class="nav-indicator"></div>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="5" y="2" width="14" height="20" rx="2"/>
-          <path d="M9 12l2 2 4-4"/>
-        </svg>
-        Swipe
+        <span class="nav-icon">
+          <svg class="mi i-out" viewBox="0 -960 960 960"><path d="M480-860q-88 0-169 31t-147 89h86q13 0 21.5 8.5T280-710q0 13-8.5 21.5T250-680H120q-17 0-28.5-11.5T80-720v-130q0-13 8.5-21.5T110-880q13 0 21.5 8.5T140-850v51q72-59 159-90t181-31q94 0 181 31t159 90v-51q0-13 8.5-21.5T850-880q13 0 21.5 8.5T880-850v130q0 17-11.5 28.5T840-680H710q-13 0-21.5-8.5T680-710q0-13 8.5-21.5T710-740h86q-66-58-147-89t-169-31Zm-7 780q-24 0-46-9t-39-26L212-292q-11-11-11.5-27.5T211-348l3-3q16-16 37.5-21.5t42.5.5l66 19v-327q0-17 11.5-28.5T400-720q17 0 28.5 11.5T440-680v380q0 20-16 32t-35 7l-46-13 102 102q5 5 12.5 8.5T473-160h167q33 0 56.5-23.5T720-240v-160q0-17 11.5-28.5T760-440q17 0 28.5 11.5T800-400v160q0 66-47 113T640-80H473Zm47-480q17 0 28.5 11.5T560-520v120q0 17-11.5 28.5T520-360q-17 0-28.5-11.5T480-400v-120q0-17 11.5-28.5T520-560Zm120 40q17 0 28.5 11.5T680-480v80q0 17-11.5 28.5T640-360q-17 0-28.5-11.5T600-400v-80q0-17 11.5-28.5T640-520Zm-69 240Z"/></svg>
+          <svg class="mi i-fill" viewBox="0 -960 960 960"><path d="M480-860q-88 0-169 31t-147 89h86q13 0 21.5 8.5T280-710q0 13-8.5 21.5T250-680H120q-17 0-28.5-11.5T80-720v-130q0-13 8.5-21.5T110-880q13 0 21.5 8.5T140-850v51q72-59 159-90t181-31q94 0 181 31t159 90v-51q0-13 8.5-21.5T850-880q13 0 21.5 8.5T880-850v130q0 17-11.5 28.5T840-680H710q-13 0-21.5-8.5T680-710q0-13 8.5-21.5T710-740h86q-66-58-147-89t-169-31Zm-7 780q-24 0-46-9t-39-26L212-292q-11-11-11.5-27.5T211-348l3-3q16-16 37.5-21.5t42.5.5l66 19v-327q0-17 11.5-28.5T400-720q17 0 28.5 11.5T440-680v280h40v-120q0-17 11.5-28.5T520-560q17 0 28.5 11.5T560-520v120h40v-80q0-17 11.5-28.5T640-520q17 0 28.5 11.5T680-480v80h40q0-17 11.5-28.5T760-440q17 0 28.5 11.5T800-400v160q0 66-47 113T640-80H473Z"/></svg>
+        </span>
+        <span class="nav-label">Swipe</span>
       </button>
       <button class="nav-btn" id="nav-keep" onclick="switchTab('keep')">
-        <div class="nav-indicator"></div>
-        <span class="nav-badge" id="keep-badge" style="display:none;"></span>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-        </svg>
-        Keep
+        <span class="nav-icon">
+          <svg class="mi i-out" viewBox="0 -960 960 960"><path d="m480-240-168 72q-40 17-76-6.5T200-241v-519q0-33 23.5-56.5T280-840h400q33 0 56.5 23.5T760-760v519q0 43-36 66.5t-76 6.5l-168-72Zm0-88 200 86v-518H280v518l200-86Zm0-432H280h400-200Z"/></svg>
+          <svg class="mi i-fill" viewBox="0 -960 960 960"><path d="m480-240-168 72q-40 17-76-6.5T200-241v-519q0-33 23.5-56.5T280-840h400q33 0 56.5 23.5T760-760v519q0 43-36 66.5t-76 6.5l-168-72Z"/></svg>
+          <span class="nav-badge" id="keep-badge" style="display:none;"></span>
+        </span>
+        <span class="nav-label">Keep</span>
       </button>
       <button class="nav-btn" id="nav-bulk" onclick="switchTab('bulk')">
-        <div class="nav-indicator"></div>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
-          <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-        </svg>
-        Bulk
+        <span class="nav-icon">
+          <svg class="mi i-out" viewBox="0 -960 960 960"><path d="m508-512-58-57q-11-11-27.5-11T394-568q-11 11-11 28t11 28l86 86q12 12 28 12t28-12l170-170q12-12 11.5-28T706-652q-12-12-28.5-12.5T649-653L508-512ZM320-240q-33 0-56.5-23.5T240-320v-480q0-33 23.5-56.5T320-880h480q33 0 56.5 23.5T880-800v480q0 33-23.5 56.5T800-240H320Zm0-80h480v-480H320v480ZM160-80q-33 0-56.5-23.5T80-160v-520q0-17 11.5-28.5T120-720q17 0 28.5 11.5T160-680v520h520q17 0 28.5 11.5T720-120q0 17-11.5 28.5T680-80H160Zm160-720v480-480Z"/></svg>
+          <svg class="mi i-fill" viewBox="0 -960 960 960"><path d="m508-512-58-57q-11-11-27.5-11T394-568q-11 11-11 28t11 28l86 86q12 12 28 12t28-12l170-170q12-12 11.5-28T706-652q-12-12-28.5-12.5T649-653L508-512ZM320-240q-33 0-56.5-23.5T240-320v-480q0-33 23.5-56.5T320-880h480q33 0 56.5 23.5T880-800v480q0 33-23.5 56.5T800-240H320ZM160-80q-33 0-56.5-23.5T80-160v-520q0-17 11.5-28.5T120-720q17 0 28.5 11.5T160-680v520h520q17 0 28.5 11.5T720-120q0 17-11.5 28.5T680-80H160Z"/></svg>
+        </span>
+        <span class="nav-label">Bulk</span>
       </button>
     </nav>
 
@@ -1981,20 +2436,20 @@ body {
 
 </div>
 
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite"></div>
 
 <!-- Focused reader overlay -->
 <div class="reader-overlay" id="reader-overlay">
   <div class="reader-header">
     <button class="reader-close" onclick="closeReader()" aria-label="Close">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+      <svg class="mi" viewBox="0 -960 960 960"><path d="m313-440 196 196q12 12 11.5 28T508-188q-12 11-28 11.5T452-188L188-452q-6-6-8.5-13t-2.5-15q0-8 2.5-15t8.5-13l264-264q11-11 27.5-11t28.5 11q12 12 12 28.5T508-715L313-520h447q17 0 28.5 11.5T800-480q0 17-11.5 28.5T760-440H313Z"/></svg>
     </button>
     <div class="reader-header-info">
       <div class="reader-subject" id="reader-subject"></div>
       <div class="reader-sender" id="reader-sender"></div>
     </div>
     <button class="reader-listen" id="reader-listen" onclick="toggleReadAloud()" aria-label="Read aloud">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-3a8 8 0 0 1 16 0v3"/><path d="M4 14a2 2 0 0 1 2-2h1v6H6a2 2 0 0 1-2-2zM20 14a2 2 0 0 0-2-2h-1v6h1a2 2 0 0 0 2-2z"/></svg>
+      <svg class="mi" viewBox="0 -960 960 960"><path d="M280-120h-80q-33 0-56.5-23.5T120-200v-280q0-75 28.5-140.5t77-114q48.5-48.5 114-77T480-840q75 0 140.5 28.5t114 77q48.5 48.5 77 114T840-480v280q0 33-23.5 56.5T760-120h-80q-33 0-56.5-23.5T600-200v-160q0-33 23.5-56.5T680-440h80v-40q0-117-81.5-198.5T480-760q-117 0-198.5 81.5T200-480v40h80q33 0 56.5 23.5T360-360v160q0 33-23.5 56.5T280-120Zm0-240h-80v160h80v-160Zm400 0v160h80v-160h-80Zm-400 0h-80 80Zm400 0h80-80Z"/></svg>
     </button>
   </div>
   <div class="reader-body" id="reader-body"></div>
@@ -2006,9 +2461,7 @@ body {
   </div>
   <div class="reader-tts" id="reader-tts">
     <button class="rtts-resync" id="rtts-resync" onclick="ttsResync()">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 4v12"/><path d="M7 13l5 5 5-5"/>
-      </svg>Back to the voice
+      <svg class="mi" viewBox="0 -960 960 960"><path d="M440-313v-447q0-17 11.5-28.5T480-800q17 0 28.5 11.5T520-760v447l196-196q12-12 28-11.5t28 12.5q11 12 11.5 28T772-452L508-188q-6 6-13 8.5t-15 2.5q-8 0-15-2.5t-13-8.5L188-452q-11-11-11-27.5t11-28.5q12-12 28.5-12t28.5 12l195 195Z"/></svg>Back to the voice
     </button>
     <div class="rtts-line" id="rtts-line"></div>
     <div class="rtts-track" id="rtts-track" role="slider" tabindex="0"
@@ -2033,7 +2486,7 @@ body {
       <button class="rtts-rate rtts-voicebtn" id="rtts-voice" onclick="toggleVoicePicker()" aria-label="Change voice"></button>
       <span class="rtts-note" id="rtts-note"></span>
       <button class="rtts-btn" onclick="stopReadAloud()" aria-label="Stop reading">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        <svg class="mi" viewBox="0 -960 960 960"><path d="M480-424 284-228q-11 11-28 11t-28-11q-11-11-11-28t11-28l196-196-196-196q-11-11-11-28t11-28q11-11 28-11t28 11l196 196 196-196q11-11 28-11t28 11q11 11 11 28t-11 28L536-480l196 196q11 11 11 28t-11 28q-11 11-28 11t-28-11L480-424Z"/></svg>
       </button>
     </div>
   </div>
@@ -2069,7 +2522,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v140'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v141'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2285,11 +2738,39 @@ const KEEP_LABEL_NAME = 'Keep';
 let keepLabelId = null;
 
 // ── Colour palette for avatars ─────────────────────────────
-const AVATAR_COLORS = ['#EA4335','#1A73E8','#34A853','#FBBC04','#9334E6','#E52592','#1E8E3E','#D93025'];
+// Google's letter-avatar tones: dark enough to carry a white initial.
+const AVATAR_COLORS = ['#1A73E8','#D93025','#188038','#E37400','#9334E6','#E52592','#129EAF','#B06000'];
 function avatarColor(str) {
   let h = 0;
   for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) & 0xFFFFFFFF;
   return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
+}
+
+// The round letter avatar for a raw "Name <addr>" sender.
+function senderAvatarHTML(raw) {
+  const { name, addr } = parseSender(raw || '');
+  const label = name || addr || '?';
+  return `<div class="sender-avatar" style="background:${avatarColor(addr || label)}">${esc(nameInitials(label))}</div>`;
+}
+
+// ── Icons ──────────────────────────────────────────────────
+// Material Symbols (Rounded, 24px) for the markup the script builds. Paths
+// are Google's, from github.com/google/material-design-icons (Apache 2.0).
+const ICON_PATHS = {
+  close: 'M480-424 284-228q-11 11-28 11t-28-11q-11-11-11-28t11-28l196-196-196-196q-11-11-11-28t11-28q11-11 28-11t28 11l196 196 196-196q11-11 28-11t28 11q11 11 11 28t-11 28L536-480l196 196q11 11 11 28t-11 28q-11 11-28 11t-28-11L480-424Z',
+  check: 'm382-354 339-339q12-12 28-12t28 12q12 12 12 28.5T777-636L410-268q-12 12-28 12t-28-12L182-440q-12-12-11.5-28.5T183-497q12-12 28.5-12t28.5 12l142 143Z',
+  drafts: 'm521-896 321 192q18 11 28 30t10 40v434q0 33-23.5 56.5T800-120H160q-33 0-56.5-23.5T80-200v-434q0-21 10-40t28-30l321-192q19-11 41-11t41 11Zm-41 442 312-186-312-186-312 186 312 186Zm-41 69L160-552v352h640v-352L521-385q-19 11-41 11t-41-11Zm82 185h279-640 361Z',
+  bookmark: 'm480-240-168 72q-40 17-76-6.5T200-241v-519q0-33 23.5-56.5T280-840h400q33 0 56.5 23.5T760-760v519q0 43-36 66.5t-76 6.5l-168-72Z',
+  block: 'M480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q54 0 104-17.5t92-50.5L228-676q-33 42-50.5 92T160-480q0 134 93 227t227 93Zm252-124q33-42 50.5-92T800-480q0-134-93-227t-227-93q-54 0-104 17.5T284-732l448 448Z',
+  markRead: 'm160-720 320 200 320-200H160Zm0 560q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h640q33 0 56.5 23.5T880-720v200q0 17-11.5 28.5T840-480q-17 0-28.5-11.5T800-520v-120L501-453q-3 2-21 6-5 0-10.5-1.5T459-453L160-640v400h220q17 0 28.5 11.5T420-200q0 17-11.5 28.5T380-160H160Zm320-240Zm0-120Zm0 75Zm158 253 198-198q11-11 28-11t28 11q11 11 11 28t-11 28L666-108q-12 12-28 12t-28-12L496-222q-11-11-11-28t11-28q11-11 28-11t28 11l86 86Z',
+  personAdd: 'M720-520h-80q-17 0-28.5-11.5T600-560q0-17 11.5-28.5T640-600h80v-80q0-17 11.5-28.5T760-720q17 0 28.5 11.5T800-680v80h80q17 0 28.5 11.5T920-560q0 17-11.5 28.5T880-520h-80v80q0 17-11.5 28.5T760-400q-17 0-28.5-11.5T720-440v-80Zm-360 40q-66 0-113-47t-47-113q0-66 47-113t113-47q66 0 113 47t47 113q0 66-47 113t-113 47ZM40-240v-32q0-34 17.5-62.5T104-378q62-31 126-46.5T360-440q66 0 130 15.5T616-378q29 15 46.5 43.5T680-272v32q0 33-23.5 56.5T600-160H120q-33 0-56.5-23.5T40-240Zm80 0h480v-32q0-11-5.5-20T580-306q-54-27-109-40.5T360-360q-56 0-111 13.5T140-306q-9 5-14.5 14t-5.5 20v32Zm240-320q33 0 56.5-23.5T440-640q0-33-23.5-56.5T360-720q-33 0-56.5 23.5T280-640q0 33 23.5 56.5T360-560Zm0-80Zm0 400Z',
+  logout: 'M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h240q17 0 28.5 11.5T480-800q0 17-11.5 28.5T440-760H200v560h240q17 0 28.5 11.5T480-160q0 17-11.5 28.5T440-120H200Zm487-320H400q-17 0-28.5-11.5T360-480q0-17 11.5-28.5T400-520h287l-75-75q-11-11-11-27t11-28q11-12 28-12.5t29 11.5l143 143q12 12 12 28t-12 28L669-309q-12 12-28.5 11.5T612-310q-11-12-10.5-28.5T613-366l74-74Z',
+  cloudOff: 'M260-160q-92 0-156-64T40-380q0-77 47.5-137T210-594q3-8 6-15.5t6-16.5L84-764q-11-11-11-28t11-28q11-11 28-11t28 11l680 680q11 11 11.5 27.5T820-84q-11 11-27.5 11.5T764-83l-78-77H260Zm0-80h346L284-562q-2 11-3 21t-1 21h-20q-58 0-99 41t-41 99q0 58 41 99t99 41Zm185-161Zm419 191-58-56q17-14 25.5-32.5T840-340q0-42-29-71t-71-29h-60v-80q0-83-58.5-141.5T480-720q-27 0-52 6.5T380-693l-58-58q35-24 74.5-36.5T480-800q117 0 198.5 81.5T760-520q69 8 114.5 59.5T920-340q0 39-15 72.5T864-210ZM593-479Z',
+  play: 'M320-273v-414q0-17 12-28.5t28-11.5q5 0 10.5 1.5T381-721l326 207q9 6 13.5 15t4.5 19q0 10-4.5 19T707-446L381-239q-5 3-10.5 4.5T360-233q-16 0-28-11.5T320-273Z',
+  pause: 'M640-200q-33 0-56.5-23.5T560-280v-400q0-33 23.5-56.5T640-760q33 0 56.5 23.5T720-680v400q0 33-23.5 56.5T640-200Zm-320 0q-33 0-56.5-23.5T240-280v-400q0-33 23.5-56.5T320-760q33 0 56.5 23.5T400-680v400q0 33-23.5 56.5T320-200Z'
+};
+function icon(name, cls) {
+  return `<svg class="mi${cls ? ' ' + cls : ''}" viewBox="0 -960 960 960" aria-hidden="true"><path d="${ICON_PATHS[name]}"/></svg>`;
 }
 
 // ── Persistence ────────────────────────────────────────────
@@ -2769,9 +3250,9 @@ function renderSubjectSuggestions() {
         <div class="suggest-count">Marked read ${s.dismiss}× without opening${s.fuzzy ? ` across ${s.variants} variants` : ''}</div>
         <div class="suggest-pattern">${matcher}</div>
       </div>
+      <button class="suggest-dismiss-btn" title="Stop suggesting this subject" aria-label="Stop suggesting this subject" onclick="dismissSubjectSuggestion(${i})">${icon('close')}</button>
       <div class="suggest-actions">
-        <button class="suggest-read-btn" title="Mark future matching mail read, leaving it in the inbox" onclick="addSubjectRule(${i})">Auto-read</button>
-        <button class="suggest-dismiss-btn" title="Stop suggesting this subject" onclick="dismissSubjectSuggestion(${i})">×</button>
+        <button class="suggest-read-btn" title="Mark future matching mail read, leaving it in the inbox" onclick="addSubjectRule(${i})">${icon('markRead')}Auto-read</button>
       </div>
     </div>
   `;
@@ -2851,10 +3332,10 @@ function renderBlockSuggestions() {
         <div class="suggest-addr">${addr}</div>
         <div class="suggest-count">${reason}</div>
       </div>
+      <button class="suggest-dismiss-btn" title="Not spam — stop suggesting" aria-label="Not spam — stop suggesting" onclick="dismissSuggestion('${addr}')">${icon('close')}</button>
       <div class="suggest-actions">
-        <button class="suggest-block-btn" title="Send their mail to spam" onclick="blockSuggestion('${addr}')">Block</button>
-        <button class="suggest-read-btn" title="Mark their mail read but leave it in the inbox" onclick="autoReadSuggestion('${addr}')">Auto-read</button>
-        <button class="suggest-dismiss-btn" title="Not spam — stop suggesting" onclick="dismissSuggestion('${addr}')">×</button>
+        <button class="suggest-block-btn" title="Send their mail to spam" onclick="blockSuggestion('${addr}')">${icon('block')}Block</button>
+        <button class="suggest-read-btn" title="Mark their mail read but leave it in the inbox" onclick="autoReadSuggestion('${addr}')">${icon('markRead')}Auto-read</button>
       </div>
     </div>
   `;
@@ -2948,9 +3429,9 @@ function renderLengthSuggestions() {
         <div class="suggest-count">${s.shorts} of their last ${s.samples} ran ${s.maxShort.toLocaleString()} words or less</div>
         <div class="suggest-pattern">Usually about ${s.typical.toLocaleString()} words \u00b7 rule would cover their mail under ${s.cap.toLocaleString()}</div>
       </div>
+      <button class="suggest-dismiss-btn" title="Stop suggesting this sender" aria-label="Stop suggesting this sender" onclick="dismissLengthSuggestion(${i})">${icon('close')}</button>
       <div class="suggest-actions">
-        <button class="suggest-read-btn" title="Mark their short mail read, leaving the rest of it alone" onclick="addLengthRule(${i})">Auto-read</button>
-        <button class="suggest-dismiss-btn" title="Stop suggesting this sender" onclick="dismissLengthSuggestion(${i})">\u00d7</button>
+        <button class="suggest-read-btn" title="Mark their short mail read, leaving the rest of it alone" onclick="addLengthRule(${i})">${icon('markRead')}Auto-read</button>
       </div>
     </div>`).join('');
 }
@@ -3291,7 +3772,7 @@ function renderSenderRules() {
             <div class="suggest-name">${esc(r.name || r.addr)}</div>
             <div class="suggest-addr">${esc(r.addr)}</div>
           </div>
-          <button class="suggest-dismiss-btn" title="Remove this rule" onclick="removeSenderRule('${esc(r.addr)}')">×</button>
+          <button class="suggest-dismiss-btn" title="Remove this rule" aria-label="Remove this rule" onclick="removeSenderRule('${esc(r.addr)}')">${icon('close')}</button>
         </div>`).join('')
       : `<div class="suggest-empty">${g.empty}</div>`;
     return `
@@ -3311,7 +3792,7 @@ function renderSenderRules() {
             ? `subjects containing ${(r.core || []).map(t => `“${esc(t)}”`).join(' + ')}`
             : `matches “${esc(r.pattern)}”`}</div>
         </div>
-        <button class="suggest-dismiss-btn" title="Remove this rule" onclick="removeSubjectRuleAt(${i})">×</button>
+        <button class="suggest-dismiss-btn" title="Remove this rule" aria-label="Remove this rule" onclick="removeSubjectRuleAt(${i})">${icon('close')}</button>
       </div>`).join('')
     : '<div class="suggest-empty">No subject rules yet.</div>';
 
@@ -3324,7 +3805,7 @@ function renderSenderRules() {
           <div class="suggest-name">${contentRuleTitle(r)}</div>
           <div class="suggest-addr">${contentRuleDetail(r)}</div>
         </div>
-        <button class="suggest-dismiss-btn" title="Remove this rule" onclick="removeContentRule('${esc(r.id)}')">×</button>
+        <button class="suggest-dismiss-btn" title="Remove this rule" aria-label="Remove this rule" onclick="removeContentRule('${esc(r.id)}')">${icon('close')}</button>
       </div>`).join('')
     : '<div class="suggest-empty">No body rules yet. Add one above.</div>';
 
@@ -4203,8 +4684,16 @@ function updateAccountChip(email) {
   email = email || activeEmail || '';
   const initEl = document.getElementById('user-initial');
   const shortEl = document.getElementById('user-email-short');
-  if (initEl) initEl.textContent = email ? email.charAt(0).toUpperCase() : '?';
-  if (shortEl) shortEl.textContent = email ? (email.length > 20 ? email.split('@')[0] : email) : '—';
+  if (initEl) {
+    initEl.textContent = email ? email.charAt(0).toUpperCase() : '?';
+    initEl.style.background = email ? avatarColor(email) : '';
+  }
+  if (shortEl) {
+    shortEl.textContent = email ? (email.length > 20 ? email.split('@')[0] : email) : '—';
+    // A real account is showing again, so the chip is no longer the offline badge.
+    const chip = shortEl.closest('.user-chip');
+    if (chip) chip.classList.remove('offline');
+  }
 }
 
 // ── Account switcher menu ──────────────────────────────────
@@ -4241,16 +4730,17 @@ function renderAccountMenu() {
     const c = accountCounts(a.email);
     return `
     <button class="acct-row${a.email === activeEmail ? ' active' : ''}" onclick="switchAccount('${esc(a.email)}')">
-      <span class="acct-check">${a.email === activeEmail ? '✓' : ''}</span>
+      <span class="acct-avatar" style="background:${avatarColor(a.email)}">${esc(a.email.charAt(0).toUpperCase())}</span>
       <span class="acct-text">
         <span class="acct-email">${esc(a.email)}</span>
         <span class="acct-counts">${c.unread} unread · ${c.kept} kept</span>
       </span>
+      <span class="acct-check">${a.email === activeEmail ? icon('check') : ''}</span>
     </button>`;
   }).join('');
-  m.innerHTML = rows +
-    '<button class="acct-row acct-action" onclick="addAccount()">＋ Add account</button>' +
-    (activeEmail ? '<button class="acct-row acct-action" onclick="signOutActive()">Sign out ' + esc(shortEmail(activeEmail)) + '</button>' : '');
+  m.innerHTML = rows + (rows ? '<div class="acct-divider"></div>' : '') +
+    '<button class="acct-row acct-action" onclick="addAccount()">' + icon('personAdd') + 'Add another account</button>' +
+    (activeEmail ? '<button class="acct-row acct-action" onclick="signOutActive()">' + icon('logout') + 'Sign out ' + esc(shortEmail(activeEmail)) + '</button>' : '');
 }
 
 function shortEmail(e) { return e && e.length > 22 ? e.split('@')[0] : (e || ''); }
@@ -4347,7 +4837,11 @@ function showApp() {
 function enterOfflineMode() {
   offlineMode = true;
   const chip = document.getElementById('user-email-short');
-  if (chip) chip.textContent = 'Offline';
+  if (chip) {
+    chip.textContent = 'Offline';
+    const btn = chip.closest('.user-chip');
+    if (btn) btn.classList.add('offline');
+  }
   // Rebuild the swipe deck from the saved snapshot so it can be swiped offline
   // (bodies load from the IndexedDB cache). Kept emails are excluded from the
   // deck and shown in the Keep tab as usual.
@@ -4396,11 +4890,31 @@ function switchTab(tab) {
   document.getElementById('swipe-screen').style.display = tab === 'swipe' ? 'flex' : 'none';
   document.getElementById('keep-screen').style.display = tab === 'keep' ? 'flex' : 'none';
   document.getElementById('bulk-screen').style.display = tab === 'bulk' ? 'flex' : 'none';
+  document.getElementById('settings-screen').style.display = tab === 'settings' ? 'flex' : 'none';
   document.getElementById('nav-swipe').classList.toggle('active', tab === 'swipe');
   document.getElementById('nav-keep').classList.toggle('active', tab === 'keep');
   document.getElementById('nav-bulk').classList.toggle('active', tab === 'bulk');
+  document.getElementById('settings-btn').classList.toggle('active', tab === 'settings');
   if (tab === 'keep') renderKeepList();
   if (tab === 'swipe') focusSwipeDeck();
+}
+
+// Settings is a page of its own, reached from the gear in the header; Back
+// returns to whichever tab it was opened from.
+let settingsReturnTab = 'swipe';
+function openSettings() {
+  closeAccountMenu();
+  if (activeTab === 'settings') return;
+  settingsReturnTab = activeTab;
+  switchTab('settings');
+  const s = document.getElementById('settings-scroll');
+  if (s) s.scrollTop = 0;
+}
+function closeSettings() {
+  if (activeTab === 'settings') switchTab(settingsReturnTab || 'swipe');
+}
+function toggleSettings() {
+  if (activeTab === 'settings') closeSettings(); else openSettings();
 }
 
 // ── Fetch emails ───────────────────────────────────────────
@@ -4736,7 +5250,9 @@ function renderSwipeStack() {
     hint.style.display = 'none';
     currentEmail = null;
     updateOpenGmailBtn(null);
-    if (emails.length > 0) empty.querySelector('div:last-child').textContent = "You're all done! 🎉";
+    // Everything loaded has been dealt with: the illustration turns to a check.
+    empty.classList.toggle('done', emails.length > 0);
+    if (emails.length > 0) document.getElementById('swipe-empty-msg').textContent = "You're all done!";
     // Keep Undo reachable after the last card — show the actions row with only
     // the Undo button when there's something to undo.
     if (swipeHistory.length) {
@@ -4783,10 +5299,10 @@ function buildCard(email, isFront) {
 
   card.innerHTML = `
     <div class="swipe-overlay read-overlay" id="ro-${email.id}">
-      <div class="overlay-label">Read</div>
+      <div class="overlay-label">${icon('drafts', 'ol-read')}${icon('block', 'ol-block')}<span class="ol-read">Mark read</span><span class="ol-block">Block</span></div>
     </div>
     <div class="swipe-overlay unread-overlay" id="uo-${email.id}">
-      <div class="overlay-label">Keep</div>
+      <div class="overlay-label">${icon('bookmark')}<span>Keep</span></div>
     </div>
     <div class="card-header">
       <div class="card-sender-row">
@@ -5275,25 +5791,32 @@ async function renderKeepList() {
   }
 
   const offlineBanner = (navigator.onLine === false)
-    ? '<div class="keep-offline">Offline — showing saved copies.</div>'
+    ? '<div class="keep-offline">' + icon('cloudOff') + 'Offline — showing saved copies.</div>'
     : '';
   // Sorted by length, the order is only legible if the list says how long each
   // email is — and says which ones it couldn't measure.
   const showWords = isKeepWordSort(keepSortMode);
-  el.innerHTML = offlineBanner + items.map(e => `
+  el.innerHTML = offlineBanner + items.map(e => {
+    const { name, addr } = parseSender(e.sender || '');
+    return `
     <div class="keep-row" data-id="${e.id}">
-      <div class="keep-row-action"><button class="keep-row-mark" onclick="markKeptRead('${e.id}')">Mark read</button></div>
+      <div class="keep-row-action"><button class="keep-row-mark" onclick="markKeptRead('${e.id}')">${icon('drafts')}Mark read</button></div>
       <div class="email-item keep-item" onclick="openKept('${e.id}')">
+        ${senderAvatarHTML(e.sender)}
         <div class="email-item-meta">
-          <div class="email-item-sender">${esc(e.sender)}</div>
+          <div class="email-item-top">
+            <div class="email-item-sender" title="${esc(e.sender)}">${esc(name || addr)}</div>
+            <div class="email-item-time">${formatDate(e.date)}</div>
+          </div>
           <div class="email-item-subject">${esc(e.subject)}</div>
+          ${showWords
+            ? `<div class="keep-item-words">${e.words ? e.words.toLocaleString() + ' words' : 'not measured yet'}</div>`
+            : ''}
         </div>
-        <div class="email-item-time">${formatDate(e.date)}${showWords
-          ? `<div class="keep-item-words">${e.words ? e.words.toLocaleString() + ' words' : 'not measured yet'}</div>`
-          : ''}</div>
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 // Marks a kept email as read without opening it (used by the Keep-row swipe and
@@ -6241,9 +6764,7 @@ function updateAutoScrollToggle() {
   // Suspended (temporary manual override) still counts as "playing" — it will
   // resume — so the icon doesn't flicker while the user scrolls.
   const playing = !!(asState && asState.running);
-  btn.innerHTML = playing
-    ? '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>'
-    : '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+  btn.innerHTML = playing ? icon('pause') : icon('play');
   btn.setAttribute('aria-label', playing ? 'Pause auto-scroll' : 'Play auto-scroll');
 }
 
@@ -6292,18 +6813,18 @@ function setSwipeMode(mode) {
   if (mode === 'triage') {
     leftBtn.className = 'action-btn read-btn';
     leftBtn.title = 'Mark as read';
-    leftBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
+    leftBtn.innerHTML = icon('drafts') + '<span>Mark read</span>';
     rightBtn.className = 'action-btn skip-btn';
     rightBtn.title = keepMarksRead ? 'Keep' : 'Keep unread';
-    rightBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg>`;
+    rightBtn.innerHTML = icon('bookmark') + '<span>Keep</span>';
     setSwipeHint(keepMarksRead ? '← mark as read · keep →' : '← mark as read · keep unread →');
   } else {
     leftBtn.className = 'action-btn block-btn';
     leftBtn.title = 'Block sender';
-    leftBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`;
+    leftBtn.innerHTML = icon('block') + '<span>Block</span>';
     rightBtn.className = 'action-btn skip-btn';
     rightBtn.title = keepMarksRead ? 'Keep' : 'Keep unread';
-    rightBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg>`;
+    rightBtn.innerHTML = icon('bookmark') + '<span>Keep</span>';
     setSwipeHint(keepMarksRead ? '← block sender · keep →' : '← block sender · keep unread →');
   }
 }
@@ -6421,7 +6942,8 @@ async function openReader(email, opts = {}) {
 
   // Populate header immediately
   subjectEl.textContent = email.subject || '(no subject)';
-  senderEl.textContent = email.sender || '';
+  const from = parseSender(email.sender || '');
+  senderEl.textContent = from.name && from.addr ? from.name + ' · ' + from.addr : (email.sender || '');
 
   // Show overlay with a loading state
   removeReaderFooter();
@@ -6754,6 +7276,7 @@ window.addEventListener('keydown', e => {
     else autoScrollSpeedKey(e); // ← / → set the reading pace
     return;
   }
+  if (activeTab === 'settings' && e.key === 'Escape') { closeSettings(); return; }
   if (activeTab !== 'swipe') return;
   // Never steal a keystroke from a text field (Keep search, client-ID input).
   const t = e.target;
@@ -9697,9 +10220,7 @@ function ttsUpdateUI() {
   const s = ttsSession;
   const btn = document.getElementById('rtts-toggle');
   if (btn) {
-    btn.innerHTML = (s && s.playing)
-      ? '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>'
-      : '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+    btn.innerHTML = (s && s.playing) ? icon('pause') : icon('play');
     btn.setAttribute('aria-label', (s && s.playing) ? 'Pause' : 'Play');
   }
   if (s) s.clockAt = 0;      // let the next paint recompute what's left
@@ -10182,14 +10703,18 @@ function renderEmailList() {
   }
   el.innerHTML = sortedEmails().map(e => {
     const checked = selectedIds.has(e.id);
+    const { name, addr } = parseSender(e.sender || '');
     return `
-      <div class="email-item" onclick="toggleEmailCheck('${e.id}', event)">
-        <input type="checkbox" ${checked ? 'checked' : ''} onclick="event.stopPropagation();toggleEmailCheck('${e.id}',event)">
+      <div class="email-item${checked ? ' selected' : ''}" onclick="toggleEmailCheck('${e.id}', event)">
+        <input type="checkbox" class="sr-check" aria-label="Select" ${checked ? 'checked' : ''} onclick="event.stopPropagation();toggleEmailCheck('${e.id}',event)">
+        <div class="item-avatar">${senderAvatarHTML(e.sender)}<div class="check-avatar">${icon('check')}</div></div>
         <div class="email-item-meta">
-          <div class="email-item-sender">${esc(e.sender)}</div>
+          <div class="email-item-top">
+            <div class="email-item-sender" title="${esc(e.sender)}">${esc(name || addr)}</div>
+            <div class="email-item-time">${formatDate(e.date)}</div>
+          </div>
           <div class="email-item-subject">${esc(e.subject)}</div>
         </div>
-        <div class="email-item-time">${formatDate(e.date)}</div>
       </div>
     `;
   }).join('');
@@ -10266,6 +10791,11 @@ function setStatus(loading, msg = '') {
   // status messages regardless of which tab they're on.
   const swipeEmptyMsg = document.getElementById('swipe-empty-msg');
   if (swipeEmptyMsg && msg) swipeEmptyMsg.textContent = msg;
+  // A load in progress isn't "all done", whatever the last deck was.
+  if (loading) {
+    const empty = document.getElementById('swipe-empty');
+    if (empty) empty.classList.remove('done');
+  }
 }
 
 // ── Section collapse ───────────────────────────────────────
@@ -10301,7 +10831,7 @@ function formatDate(dateStr) {
   try {
     const d = new Date(dateStr);
     const now = new Date();
-    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
   } catch(e) { return ''; }
 }
