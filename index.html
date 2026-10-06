@@ -2685,6 +2685,7 @@ let keepMarksRead = false;
 // Gmail (offline, or before the first load).
 let keptUnreadIds = null;
 let keptReadBusy = false;        // a catch-up is counting or writing
+let keptReadMarks = 0;           // catch-ups that have written, to spot stale listings
 // Optional auto-scroll while reading. Speed is a reading pace in words/minute;
 // each email's scroll speed is derived from its length so it finishes when a
 // reader at that pace would. asState holds the running animation.
@@ -3855,6 +3856,7 @@ function saveKept() {
 // Once an email is read (or blocked) there's no reason to remember it as kept.
 // Also drops the Gmail label so the un-keep propagates to other devices.
 function forgetKept(id) {
+  if (keptUnreadIds) keptUnreadIds.delete(id);
   if (keptIds.delete(id)) {
     saveKept();
     idbDelete(id).catch(() => {});
@@ -4216,6 +4218,7 @@ function removeOps(pred) {
 // Removes a kept email from all local state (list + offline cache).
 function dropKeptLocally(id) {
   keptIds.delete(id);
+  if (keptUnreadIds) keptUnreadIds.delete(id);
   saveKept();
   idbDelete(id).catch(() => {});
 }
@@ -4889,7 +4892,7 @@ function enterOfflineMode() {
   // deck and shown in the Keep tab as usual.
   emails = loadDeckSnapshot().map(e => ({
     id: e.id, sender: e.sender, subject: e.subject, date: e.date,
-    important: !!e.important, bodyText: null, bodyLoaded: false
+    important: !!e.important, keptRead: !!e.keptRead, bodyText: null, bodyLoaded: false
   }));
   swipeQueue = emails.filter(e => !keptIds.has(e.id));
   sortQueue();
@@ -5046,7 +5049,12 @@ async function fetchEmails() {
     // before we decide what to hide from the deck.
     try { await syncKeptFromLabel(); } catch(_) {}
     // The exact kept-but-unread count, for the kept bar and the catch-up.
-    try { keptUnreadIds = new Set((await listKeptUnreadIds()).ids); } catch(_) { keptUnreadIds = null; }
+    {
+      const marks = keptReadMarks;   // a catch-up landing meanwhile makes this listing stale
+      let listed = null;
+      try { listed = new Set((await listKeptUnreadIds()).ids); } catch(_) {}
+      if (marks === keptReadMarks) keptUnreadIds = listed;
+    }
 
     const MAX_TOTAL = 200;
     const { messages, importantIds } = await listUnreadMessages(MAX_TOTAL);
@@ -5260,7 +5268,7 @@ let deckSnapTimer = null;
 function saveDeckSnapshot() {
   try {
     localStorage.setItem(nsKey('ic_deck'), JSON.stringify(
-      emails.map(e => ({ id: e.id, sender: e.sender, subject: e.subject, date: e.date, important: !!e.important }))
+      emails.map(e => ({ id: e.id, sender: e.sender, subject: e.subject, date: e.date, important: !!e.important, keptRead: !!e.keptRead }))
     ));
   } catch(e) {}
 }
@@ -5728,37 +5736,56 @@ function updateKeptBar() {
 // warning comes on its next load. Nothing is queued blind.
 
 function keptUnreadCount() {
-  return keptUnreadIds ? [...keptUnreadIds].filter(id => keptIds.has(id)).length : 0;
+  return keptUnreadIds ? keptUnreadIds.size : 0;
 }
 
 // Whether this account's earlier keeps have been dealt with (marked read, or
-// the warning declined) since the setting went on.
+// the warning declined) since the setting last went on. Each turn-on starts a
+// new generation, so every account is owed its catch-up again, not just the
+// one it was turned on from.
+function keptReadGen() {
+  try { return localStorage.getItem('ic_kept_read_gen') || '1'; } catch(e) { return '1'; }
+}
+function newKeptReadGen() {
+  try { localStorage.setItem('ic_kept_read_gen', String(Date.now())); } catch(e) {}
+}
 function keptReadCaughtUp() {
-  try { return localStorage.getItem(nsKey('ic_kept_read_done')) === '1'; } catch(e) { return false; }
+  try { return localStorage.getItem(nsKey('ic_kept_read_done')) === keptReadGen(); } catch(e) { return false; }
 }
 function setKeptReadCaughtUp(done) {
-  try { localStorage.setItem(nsKey('ic_kept_read_done'), done ? '1' : '0'); } catch(e) {}
+  try { localStorage.setItem(nsKey('ic_kept_read_done'), done ? keptReadGen() : ''); } catch(e) {}
+}
+
+// Waits out an outbox flush already under way, which may be sending a keep
+// the catch-up has counted. Bounded, in case a flush hangs.
+async function waitForOutbox() {
+  for (let i = 0; flushingOps && i < 100; i++) await new Promise(r => setTimeout(r, 100));
 }
 
 // Marks every kept email still unread as read, after a warning saying how
 // many; none, no warning. confirmText(n) words the warning for where it's
-// asked from. Returns 'done', 'declined', or 'deferred' (offline, Gmail
-// unreachable, or the account changed underneath), or 'busy' if one is
-// already running.
-async function catchUpKeptRead(confirmText) {
+// asked from; wanted() is checked again just before asking, since the setting
+// can change while Gmail is being counted. Returns 'done' or 'declined', or
+// why nothing happened: 'busy' (one is running), 'offline', 'unreachable'
+// (the count failed), 'failed' (the write failed; already said), 'switched'
+// (the account changed underneath) or 'unwanted'.
+async function catchUpKeptRead(confirmText, wanted) {
   if (keptReadBusy) return 'busy';
   keptReadBusy = true;
+  const cb = document.getElementById('keep-marks-read');
+  if (cb) cb.disabled = true;     // no toggling while it counts and writes
   const acct = activeEmail;
   try {
-    if (!onlineReady()) return 'deferred';
+    if (!onlineReady()) return 'offline';
     let listing;
-    try { listing = await listKeptUnreadIds(); } catch(e) { return 'deferred'; }
-    if (activeEmail !== acct) return 'deferred';
+    try { listing = await listKeptUnreadIds(); } catch(e) { return 'unreachable'; }
+    if (activeEmail !== acct) return 'switched';
+    if (wanted && !wanted()) return 'unwanted';
     // Keeps still waiting in the outbox aren't labelled yet; they land read
     // by flipping their queued op instead.
     const pendingIds = pendingOps.filter(o => o.type === 'keep' && !o.read).map(o => o.id);
     const all = new Set([...listing.ids, ...pendingIds]);
-    keptUnreadIds = new Set(listing.ids);
+    keptUnreadIds = new Set([...listing.ids, ...pendingIds]);
     if (!all.size) {
       setKeptReadCaughtUp(true);
       updateKeptBar();
@@ -5767,12 +5794,24 @@ async function catchUpKeptRead(confirmText) {
     if (!confirm(confirmText(all.size))) { updateKeptBar(); return 'declined'; }
     if (listing.ids.length && !await markKeptReadRemote(listing.ids)) {
       if (activeEmail === acct) toast('Couldn\u2019t reach Gmail \u2014 kept emails are still unread');
-      return 'deferred';
+      return 'failed';
     }
-    if (activeEmail !== acct) return 'deferred';
+    if (activeEmail !== acct) return 'switched';
+    keptReadMarks++;
+    // Flip the counted keeps still queued. One a flush sent meanwhile went out
+    // unread, but it carries the label now, so it's marked read directly.
+    await waitForOutbox();
+    const queued = new Set();
     let touched = false;
-    pendingOps.forEach(o => { if (o.type === 'keep' && all.has(o.id) && !o.read) { o.read = true; touched = true; } });
+    pendingOps.forEach(o => {
+      if (o.type !== 'keep' || !all.has(o.id)) return;
+      queued.add(o.id);
+      if (!o.read) { o.read = true; touched = true; }
+    });
     if (touched) savePendingOps();
+    const sentUnread = pendingIds.filter(id => !queued.has(id));
+    if (sentUnread.length) await markKeptReadRemote(sentUnread);
+    if (activeEmail !== acct) return 'switched';
     all.forEach(id => keptUnreadIds.delete(id));
     // Read now: they stay in Keep, and leave the deck if Review had put them there.
     emails.forEach(e => { if (all.has(e.id)) e.keptRead = true; });
@@ -5786,6 +5825,7 @@ async function catchUpKeptRead(confirmText) {
     return 'done';
   } finally {
     keptReadBusy = false;
+    if (cb) cb.disabled = false;
   }
 }
 
@@ -5797,15 +5837,19 @@ const keptCount = n => `${n} kept ${n === 1 ? 'email' : 'emails'}`;
 async function maybeCatchUpKeptRead() {
   if (!keepMarksRead || keptReadCaughtUp()) return;
   const r = await catchUpKeptRead(n =>
-    `"Mark kept emails as read" is on.\n\nMark the ${keptCount(n)} that ${n === 1 ? 'is' : 'are'} still unread as read? ${keptStay(n)}`);
+    `"Mark kept emails as read" is on.\n\nMark the ${keptCount(n)} that ${n === 1 ? 'is' : 'are'} still unread as read? ${keptStay(n)}`,
+    () => keepMarksRead);
   // Asked once; declining is an answer. The bar's Mark read stays available.
   if (r === 'declined') setKeptReadCaughtUp(true);
 }
 
 // The bar's Mark read button.
 async function markKeptBarRead() {
-  const r = await catchUpKeptRead(n => `Mark ${keptCount(n)} as read? ${keptStay(n)}`);
-  if (r === 'deferred' && !onlineReady()) toast('You\u2019re offline \u2014 try again once you\u2019re back online');
+  const r = await catchUpKeptRead(n => `Mark ${keptCount(n)} as read? ${keptStay(n)}`, () => keepMarksRead);
+  if (r === 'declined') setKeptReadCaughtUp(true);   // the same answer the load prompt would get
+  else if (r === 'busy') toast('Already checking kept emails\u2026');
+  else if (r === 'offline') toast('You\u2019re offline \u2014 try again once you\u2019re back online');
+  else if (r === 'unreachable') toast('Couldn\u2019t reach Gmail \u2014 try again');
 }
 
 // Bring previously-kept emails back into the deck for this session (without
@@ -6180,23 +6224,22 @@ function loadKeepMarksRead() {
 
 // Turning it on applies to what's already kept, too: every kept email still
 // unread is marked read (and stays kept), after a warning saying how many.
-// Declining the warning leaves the setting off. Offline, it turns on and the
-// warning waits for the next load, when the count can be Gmail's.
+// Declining the warning leaves the setting off. If Gmail can't be counted
+// (offline), it turns on and the warning waits for the next load. Each
+// turn-on owes every account its catch-up again.
 async function setKeepMarksRead(on) {
   const cb = document.getElementById('keep-marks-read');
   if (on && !keepMarksRead) {
-    if (cb) cb.disabled = true;   // counting asks Gmail; don't let it be toggled meanwhile
-    let r;
-    try {
-      r = await catchUpKeptRead(n =>
-        `Turn on "Mark kept emails as read"?\n\nThis also marks the ${keptCount(n)} that ${n === 1 ? 'is' : 'are'} still unread as read. ${keptStay(n)}`);
-    } finally {
-      if (cb) cb.disabled = false;
+    newKeptReadGen();
+    const r = await catchUpKeptRead(n =>
+      `Turn on "Mark kept emails as read"?\n\nThis also marks the ${keptCount(n)} that ${n === 1 ? 'is' : 'are'} still unread as read. ${keptStay(n)}`);
+    if (r === 'declined' || r === 'busy') {
+      if (cb) cb.checked = false;
+      if (r === 'busy') toast('Already checking kept emails \u2014 try again in a moment');
+      return;
     }
-    if (r === 'declined') { if (cb) cb.checked = false; return; }
-    if (r === 'deferred') {
-      setKeptReadCaughtUp(false);
-      if (!onlineReady()) toast('On \u2014 emails you\u2019ve already kept are handled once you\u2019re back online');
+    if (r === 'offline' || r === 'unreachable' || r === 'failed') {
+      toast('On \u2014 you\u2019ll be asked about emails you\u2019ve already kept on your next load');
     }
   }
   keepMarksRead = !!on;
