@@ -1823,6 +1823,12 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
 }
 .suggest-dismiss-btn svg { width: 20px; height: 20px; }
 
+.cleanup-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.cleanup-status { font-size: 12px; line-height: 16px; color: var(--on-surface-variant); margin-bottom: 12px; }
+.cleanup-status:empty { display: none; }
+.cleanup-more { align-self: center; margin-top: 4px; }
+.suggest-block-btn:disabled, .suggest-read-btn:disabled { opacity: 0.45; cursor: default; }
+
 .suggest-empty { font-size: 13px; line-height: 20px; color: var(--on-surface-variant); padding: 4px 0; }
 
 /* Standing sender rules, grouped into their two categories */
@@ -2255,6 +2261,26 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
           </div>
         </div>
 
+        <!-- Whole-mailbox clean-up, grouped by sender -->
+        <div class="section-card" id="cleanup-card">
+          <div class="section-card-header" onclick="toggleSection('cleanup-card')">
+            <h3>Clean up by sender <span class="pill" id="cleanup-count">0</span></h3>
+            <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
+          </div>
+          <div class="section-card-body">
+            <p class="section-desc">Everyone who has filled your mailbox, read or not, going back as far as you scan. <strong>Archive all</strong> clears a sender out of your inbox; <strong>Trash all</strong> moves every email from them to Trash, where Gmail keeps it 30 days. Starred and kept emails are never touched.</p>
+            <div class="cleanup-toolbar">
+              <button class="btn-sm" id="cleanup-scan-btn" onclick="scanSenders()">Scan mailbox</button>
+              <select class="sort-select" id="cleanup-sort" onchange="setSenderScanSort(this.value)" aria-label="Sort senders">
+                <option value="count">Most emails</option>
+                <option value="size">Most space</option>
+              </select>
+            </div>
+            <div class="cleanup-status" id="cleanup-status"></div>
+            <div class="suggest-list" id="cleanup-list-el"></div>
+          </div>
+        </div>
+
         <!-- Standing sender rules, in two categories -->
         <div class="section-card" id="rules-card">
           <div class="section-card-header" onclick="toggleSection('rules-card')">
@@ -2344,6 +2370,13 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
               <span class="setting-desc">Pre-sorts the swipe screen by sender instead of by date, so all of one sender's mail comes up together. The Bulk list keeps its own sort.</span>
             </span>
             <input type="checkbox" id="swipe-sort-sender" onchange="setSwipeSortBySender(this.checked)">
+          </label>
+          <label class="setting-row">
+            <span class="setting-text">
+              <span class="setting-title">Unsubscribe when blocking</span>
+              <span class="setting-desc">Blocking a sender also takes you off their mailing list, the way Gmail’s Unsubscribe link does — only for senders Gmail has verified, so real spam never learns your address works. When a sender only offers a web page, a button for it appears under Rules.</span>
+            </span>
+            <input type="checkbox" id="unsub-on-block" onchange="setUnsubOnBlock(this.checked)">
           </label>
         </div>
 
@@ -2526,7 +2559,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v143'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v144'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2613,6 +2646,21 @@ let contentRules = [];
 let senderLengths = {};
 // Senders whose short mail was offered as a rule and waved off.
 let lengthIgnore = {};
+// Blocking a sender also unsubscribes from their list, when the mail says how
+// and Gmail vouches for who sent it. App-wide setting, on unless turned off.
+let unsubOnBlock = true;
+// Headers asked for alongside From/Subject/Date so an unsubscribe can be done
+// from the metadata already being fetched.
+const UNSUB_HEADERS = ['List-Unsubscribe', 'List-Unsubscribe-Post', 'Authentication-Results'];
+// Mailbox scan for Clean up by sender: { senders: {addr: stats}, scanned,
+// next (Gmail page token), done, at }. Per account; null until first scanned.
+let senderScan = null;
+let senderScanning = false;
+let senderScanSort = 'count';
+let senderScanShown = 0;
+let senderCleaning = null;        // address whose mail is being moved right now
+const SCAN_BATCH = 1000;          // messages read per tap of Scan
+const SCAN_SHOW = 25;             // senders listed before "Show more"
 // How many no-open "mark read" actions before a never-engaged sender is
 // suggested.
 const BLOCK_SUGGEST_THRESHOLD = 3;
@@ -2776,6 +2824,9 @@ const ICON_PATHS = {
   personAdd: 'M720-520h-80q-17 0-28.5-11.5T600-560q0-17 11.5-28.5T640-600h80v-80q0-17 11.5-28.5T760-720q17 0 28.5 11.5T800-680v80h80q17 0 28.5 11.5T920-560q0 17-11.5 28.5T880-520h-80v80q0 17-11.5 28.5T760-400q-17 0-28.5-11.5T720-440v-80Zm-360 40q-66 0-113-47t-47-113q0-66 47-113t113-47q66 0 113 47t47 113q0 66-47 113t-113 47ZM40-240v-32q0-34 17.5-62.5T104-378q62-31 126-46.5T360-440q66 0 130 15.5T616-378q29 15 46.5 43.5T680-272v32q0 33-23.5 56.5T600-160H120q-33 0-56.5-23.5T40-240Zm80 0h480v-32q0-11-5.5-20T580-306q-54-27-109-40.5T360-360q-56 0-111 13.5T140-306q-9 5-14.5 14t-5.5 20v32Zm240-320q33 0 56.5-23.5T440-640q0-33-23.5-56.5T360-720q-33 0-56.5 23.5T280-640q0 33 23.5 56.5T360-560Zm0-80Zm0 400Z',
   logout: 'M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h240q17 0 28.5 11.5T480-800q0 17-11.5 28.5T440-760H200v560h240q17 0 28.5 11.5T480-160q0 17-11.5 28.5T440-120H200Zm487-320H400q-17 0-28.5-11.5T360-480q0-17 11.5-28.5T400-520h287l-75-75q-11-11-11-27t11-28q11-12 28-12.5t29 11.5l143 143q12 12 12 28t-12 28L669-309q-12 12-28.5 11.5T612-310q-11-12-10.5-28.5T613-366l74-74Z',
   cloudOff: 'M260-160q-92 0-156-64T40-380q0-77 47.5-137T210-594q3-8 6-15.5t6-16.5L84-764q-11-11-11-28t11-28q11-11 28-11t28 11l680 680q11 11 11.5 27.5T820-84q-11 11-27.5 11.5T764-83l-78-77H260Zm0-80h346L284-562q-2 11-3 21t-1 21h-20q-58 0-99 41t-41 99q0 58 41 99t99 41Zm185-161Zm419 191-58-56q17-14 25.5-32.5T840-340q0-42-29-71t-71-29h-60v-80q0-83-58.5-141.5T480-720q-27 0-52 6.5T380-693l-58-58q35-24 74.5-36.5T480-800q117 0 198.5 81.5T760-520q69 8 114.5 59.5T920-340q0 39-15 72.5T864-210ZM593-479Z',
+  trash: 'M280-120q-33 0-56.5-23.5T200-200v-520q-17 0-28.5-11.5T160-760q0-17 11.5-28.5T200-800h160q0-17 11.5-28.5T400-840h160q17 0 28.5 11.5T600-800h160q17 0 28.5 11.5T800-760q0 17-11.5 28.5T760-720v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM400-280q17 0 28.5-11.5T440-320v-280q0-17-11.5-28.5T400-640q-17 0-28.5 11.5T360-600v280q0 17 11.5 28.5T400-280Zm160 0q17 0 28.5-11.5T600-320v-280q0-17-11.5-28.5T560-640q-17 0-28.5 11.5T520-600v280q0 17 11.5 28.5T560-280ZM280-720v520-520Z',
+  archive: 'M480-560q-17 0-28.5 11.5T440-520v128l-36-36q-11-11-28-11t-28 11q-11 11-11 28t11 28l104 104q12 12 28 12t28-12l104-104q11-11 11-28t-11-28q-11-11-28-11t-28 11l-36 36v-128q0-17-11.5-28.5T480-560Zm-280-80v440h560v-440H200Zm0 520q-33 0-56.5-23.5T120-200v-499q0-14 4.5-27t13.5-24l50-61q11-14 27.5-21.5T250-840h460q18 0 34.5 7.5T772-811l50 61q9 11 13.5 24t4.5 27v499q0 33-23.5 56.5T760-120H200Zm16-600h528l-34-40H250l-34 40Zm264 300Z',
+  unsubscribe: 'M160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h640q33 0 56.5 23.5T880-720v160q0 17-11.5 28.5T840-520q-17 0-28.5-11.5T800-560v-80L501-453q-5 3-10.5 4.5T480-447q-5 0-10.5-1.5T459-453L160-640v400h280q17 0 28.5 11.5T480-200q0 17-11.5 28.5T440-160H160Zm320-360 320-200H160l320 200ZM160-240v-280 3-123 10-58q0-11 0 0v-32 32-.5 58.5-10 400ZM760-40q-83 0-141.5-58.5T560-240q0-83 58.5-141.5T760-440q83 0 141.5 58.5T960-240q0 83-58.5 141.5T760-40ZM660-220h200q8 0 14-6t6-14q0-8-6-14t-14-6H660q-8 0-14 6t-6 14q0 8 6 14t14 6Z',
   play: 'M320-273v-414q0-17 12-28.5t28-11.5q5 0 10.5 1.5T381-721l326 207q9 6 13.5 15t4.5 19q0 10-4.5 19T707-446L381-239q-5 3-10.5 4.5T360-233q-16 0-28-11.5T320-273Z',
   pause: 'M640-200q-33 0-56.5-23.5T560-280v-400q0-33 23.5-56.5T640-760q33 0 56.5 23.5T720-680v400q0 33-23.5 56.5T640-200Zm-320 0q-33 0-56.5-23.5T240-280v-400q0-33 23.5-56.5T320-760q33 0 56.5 23.5T400-680v400q0 33-23.5 56.5T320-200Z'
 };
@@ -3722,10 +3773,12 @@ async function setSenderRule(addr, action) {
   renderEmailList();
   renderSwipeStack();
 
-  const ok = action === 'block' ? await blockSenderRemote(addr) : await autoReadSenderRemote(addr);
-  const label = action === 'block' ? 'Blocking' : 'Auto-reading';
-  if (ok) toast(`${label} ${addr}`);
-  else { enqueueOp({ type: action === 'block' ? 'block' : 'autoread', addr }); toast(`${label} ${addr} — will sync`); }
+  const [ok, unsub] = action === 'block'
+    ? await Promise.all([blockSenderRemote(addr), unsubscribeOnBlock(addr)])
+    : [await autoReadSenderRemote(addr), 'off'];
+  const label = (action === 'block' ? 'Blocked ' : 'Auto-reading ') + addr + unsubToastSuffix(unsub);
+  if (ok) toast(label);
+  else { enqueueOp({ type: action === 'block' ? 'block' : 'autoread', addr }); toast(`${label} — will sync`); }
 }
 
 function blockSuggestion(addr) { return setSenderRule(addr, 'block'); }
@@ -3780,8 +3833,9 @@ function renderSenderRules() {
         <div class="rule-row">
           <div class="suggest-meta">
             <div class="suggest-name">${esc(r.name || r.addr)}</div>
-            <div class="suggest-addr">${esc(r.addr)}</div>
+            <div class="suggest-addr">${esc(r.addr)}${r.unsub && r.unsub.done ? ' · unsubscribed' : ''}</div>
           </div>
+          ${r.unsub && r.unsub.web && !r.unsub.done ? `<button class="btn-sm" data-addr="${esc(r.addr)}" onclick="openUnsubscribePage(this.dataset.addr)" title="Opens the sender’s unsubscribe page">Unsubscribe</button>` : ''}
           <button class="suggest-dismiss-btn" title="Remove this rule" aria-label="Remove this rule" onclick="removeSenderRule('${esc(r.addr)}')">${icon('close')}</button>
         </div>`).join('')
       : `<div class="suggest-empty">${g.empty}</div>`;
@@ -3841,6 +3895,461 @@ function dismissSuggestion(addr) {
   saveBlockIgnore();
   renderBlockSuggestions();
   toast('Won\'t suggest that sender again');
+}
+
+// ── Unsubscribe ────────────────────────────────────────────
+// Reads a message's List-Unsubscribe headers into what can be done with them:
+//   oneClick — an https URL taking the RFC 8058 one-click POST, done silently
+//   web      — an https page the person has to visit themselves
+// Mailto-only lists are left alone: unsubscribing that way means sending
+// email from the account, which this app doesn't do.
+// `trusted` is Gmail's own DKIM verdict for the From domain. Unsubscribing
+// tells a sender the address is live, so an unverified sender (real spam,
+// most likely) is only ever blocked, never contacted — the same line Gmail
+// draws before it shows its own Unsubscribe link.
+function parseUnsubscribe(headers, from) {
+  const all = (name) => (headers || []).filter(x => x.name.toLowerCase() === name).map(x => x.value || '');
+  const list = all('list-unsubscribe').join(',');
+  if (!list) return null;
+  const uris = (list.match(/<[^>]+>/g) || []).map(u => u.slice(1, -1).trim());
+  const web = uris.find(u => /^https:\/\//i.test(u)) || null;
+  if (!web) return null;
+  const oneClick = web && all('list-unsubscribe-post').some(v => /List-Unsubscribe=One-Click/i.test(v)) ? web : null;
+  return { oneClick, web, trusted: dkimVouchesFor(all('authentication-results'), from) };
+}
+
+// True when Gmail's own Authentication-Results (authserv-id mx.google.com;
+// a sender can forge others lower down) has a passing DKIM signature from
+// the From domain or one directly above or below it.
+function dkimVouchesFor(results, from) {
+  const addr = parseSender(from || '').addr.toLowerCase();
+  const fromDomain = addr.split('@')[1];
+  if (!fromDomain) return false;
+  const ours = results.filter(r => /^\s*mx\.google\.com\s*;/i.test(r));
+  for (const r of ours) {
+    const re = /dkim=pass[^;]*?header\.[di]=@?([a-z0-9.-]+)/gi;
+    let m;
+    while ((m = re.exec(r))) {
+      const d = m[1].toLowerCase();
+      if (d === fromDomain || fromDomain.endsWith('.' + d) || d.endsWith('.' + fromDomain)) return true;
+    }
+  }
+  return false;
+}
+
+// Carries out an unsubscribe. Returns 'done', 'manual' (only a web page was
+// offered; the person has to open it), 'none' (nothing usable, or a sender
+// Gmail can't vouch for) or 'failed' (try again when back online).
+async function sendUnsubscribe(info) {
+  if (!info || !info.trusted) return 'none';
+  try {
+    if (info.oneClick) {
+      // A cross-origin form POST needs no CORS permission to be sent; the
+      // reply is opaque, but a one-click endpoint has nothing to say anyway.
+      await fetch(info.oneClick, {
+        method: 'POST', mode: 'no-cors', credentials: 'omit', referrerPolicy: 'no-referrer',
+        body: new URLSearchParams({ 'List-Unsubscribe': 'One-Click' })
+      });
+      return 'done';
+    }
+  } catch(e) {
+    if (navigator.onLine === false) return 'failed';
+    // Online and still refused: the endpoint is dead. Fall back to the page.
+  }
+  return info.web ? 'manual' : 'none';
+}
+
+// The newest message from a sender, for its unsubscribe headers — used when a
+// block starts from the Bulk tab, where no message is in hand. Spam and Trash
+// are included because the block itself may already have moved it there.
+async function findUnsubscribe(addr) {
+  const res = await gapi.client.gmail.users.messages.list({ userId: 'me', q: `from:${addr}`, maxResults: 1, includeSpamTrash: true });
+  const stub = (res.result.messages || [])[0];
+  if (!stub) return null;
+  const msg = await gapi.client.gmail.users.messages.get({
+    userId: 'me', id: stub.id, format: 'metadata', metadataHeaders: ['From', ...UNSUB_HEADERS]
+  });
+  const headers = msg.result.payload.headers || [];
+  const from = (headers.find(x => x.name.toLowerCase() === 'from') || {}).value || '';
+  return parseUnsubscribe(headers, from);
+}
+
+// Unsubscribes now and records the outcome on the sender's rule (and scan
+// row). Never queues — the outbox calls this too. Returns sendUnsubscribe's
+// result.
+async function unsubscribeNow(addr, info) {
+  let result;
+  try {
+    if (!info) info = await findUnsubscribe(addr);
+    result = await sendUnsubscribe(info);
+  } catch(e) { result = 'failed'; }
+  if (result === 'done' || result === 'manual') noteUnsubscribe(addr, result === 'done' ? { done: Date.now() } : { web: info.web });
+  return result;
+}
+
+// Unsubscribe as part of blocking: does nothing when the setting is off, and
+// queues the attempt for later when offline or when it fails for want of a
+// connection.
+async function unsubscribeOnBlock(addr, info) {
+  if (!unsubOnBlock || !addr) return 'off';
+  const key = addr.toLowerCase();
+  const result = onlineReady() ? await unsubscribeNow(key, info) : 'failed';
+  if (result === 'failed') { enqueueOp({ type: 'unsubscribe', addr: key, info: info || null }); return 'queued'; }
+  return result;
+}
+
+function noteUnsubscribe(addr, state) {
+  const key = addr.toLowerCase();
+  if (senderRules[key]) { senderRules[key].unsub = state; saveSenderRules(); renderSenderRules(); }
+  const s = senderScan && senderScan.senders[key];
+  if (s) { s.unsubState = state; saveSenderScan(); renderSenderScan(); }
+}
+
+// Opens a sender's unsubscribe page — the case no request can finish alone.
+function openUnsubscribePage(addr) {
+  const key = (addr || '').toLowerCase();
+  const rule = senderRules[key];
+  const s = senderScan && senderScan.senders[key];
+  const url = (rule && rule.unsub && rule.unsub.web) || (s && s.unsub && s.unsub.web);
+  if (!url || !/^https:\/\//i.test(url)) return;
+  window.open(url, '_blank', 'noopener,noreferrer');
+  noteUnsubscribe(key, { done: Date.now(), page: true });
+}
+
+// What a toast says about the unsubscribe half of a block.
+function unsubToastSuffix(result) {
+  if (result === 'done') return ' and unsubscribed';
+  if (result === 'manual') return ' — finish unsubscribing under Rules';
+  return '';
+}
+
+function loadUnsubOnBlock() {
+  try { unsubOnBlock = localStorage.getItem('ic_unsub_on_block') !== '0'; }
+  catch(e) { unsubOnBlock = true; }
+  const cb = document.getElementById('unsub-on-block');
+  if (cb) cb.checked = unsubOnBlock;
+}
+
+function setUnsubOnBlock(on) {
+  unsubOnBlock = !!on;
+  try { localStorage.setItem('ic_unsub_on_block', unsubOnBlock ? '1' : '0'); } catch(e) {}
+}
+
+// ── Sender cleanup ─────────────────────────────────────────
+// Rules only touch new mail. This reads the mailbox itself — newest first, a
+// thousand messages per tap — and totals it by sender, so years of one
+// sender's back mail can be archived or trashed at once. Only headers are
+// fetched. The totals cover what's been scanned; the actions themselves ask
+// Gmail for every matching message, so nothing older is missed.
+
+function loadSenderScan() {
+  try { senderScan = JSON.parse(localStorage.getItem(nsKey('ic_sender_scan')) || 'null'); }
+  catch(e) { senderScan = null; }
+  senderScanShown = SCAN_SHOW;
+  renderSenderScan();
+}
+
+function saveSenderScan() {
+  try { localStorage.setItem(nsKey('ic_sender_scan'), JSON.stringify(senderScan)); } catch(e) {}
+}
+
+// Retries a Gmail call that hit the per-user rate limit, backing off.
+async function gmailRetry(fn) {
+  for (let wait = 1000; ; wait *= 2) {
+    try { return await fn(); }
+    catch(e) {
+      const code = e && (e.status || (e.result && e.result.error && e.result.error.code));
+      const limited = code === 429 || (code === 403 && /rate ?limit/i.test(JSON.stringify((e && e.result) || '')));
+      if (!limited || wait > 16000) throw e;
+      await new Promise(r => setTimeout(r, wait));
+    }
+  }
+}
+
+function tallyScanned(msg, into) {
+  const headers = (msg.payload && msg.payload.headers) || [];
+  const from = (headers.find(x => x.name.toLowerCase() === 'from') || {}).value || '';
+  const { name, addr } = parseSender(from);
+  if (!addr || !addr.includes('@')) return;
+  const key = addr.toLowerCase();
+  const s = into[key] || (into[key] = { addr: key, name: '', count: 0, bytes: 0, unread: 0, inbox: 0, latest: 0 });
+  const labels = msg.labelIds || [];
+  const t = Number(msg.internalDate) || 0;
+  s.count++;
+  s.bytes += msg.sizeEstimate || 0;
+  if (labels.includes('UNREAD')) s.unread++;
+  if (labels.includes('INBOX')) s.inbox++;
+  if (t >= s.latest) { s.latest = t; if (name) s.name = name; }
+  const u = parseUnsubscribe(headers, from);
+  if (u && t >= (s.unsubAt || 0)) { s.unsub = u; s.unsubAt = t; }
+}
+
+// Folds one page's totals into the scan. Pages are merged whole, so a scan
+// cut off midway resumes at the page it was on without counting anything twice.
+function mergeScanPage(page) {
+  const all = senderScan.senders;
+  Object.values(page).forEach(p => {
+    const s = all[p.addr];
+    if (!s) { all[p.addr] = p; return; }
+    s.count += p.count; s.bytes += p.bytes; s.unread += p.unread; s.inbox += p.inbox;
+    if (p.latest >= s.latest) { s.latest = p.latest; if (p.name) s.name = p.name; }
+    if (p.unsub && (p.unsubAt || 0) >= (s.unsubAt || 0)) { s.unsub = p.unsub; s.unsubAt = p.unsubAt; }
+  });
+}
+
+async function scanSenders(restart) {
+  if (senderScanning) return;
+  if (!onlineReady()) { toast('Scanning needs a connection'); return; }
+  if (restart || !senderScan) senderScan = { senders: {}, scanned: 0, next: null, done: false, at: 0 };
+  if (senderScan.done) return;
+  senderScanning = true;
+  renderSenderScan();
+  let read = 0;
+  try {
+    while (read < SCAN_BATCH) {
+      const res = await gmailRetry(() => gapi.client.gmail.users.messages.list({
+        userId: 'me', q: '-in:sent -in:drafts -in:chats', maxResults: 500,
+        pageToken: senderScan.next || undefined
+      }));
+      const stubs = res.result.messages || [];
+      const page = {};
+      for (let i = 0; i < stubs.length; i += 10) {
+        const got = await Promise.all(stubs.slice(i, i + 10).map(m => gmailRetry(() => gapi.client.gmail.users.messages.get({
+          userId: 'me', id: m.id, format: 'metadata', metadataHeaders: ['From', ...UNSUB_HEADERS],
+          fields: 'id,labelIds,sizeEstimate,internalDate,payload/headers'
+        }))));
+        got.forEach(r => tallyScanned(r.result, page));
+        setScanStatus(`Scanning… ${(senderScan.scanned + i + got.length).toLocaleString()} emails read`);
+      }
+      mergeScanPage(page);
+      senderScan.scanned += stubs.length;
+      read += stubs.length;
+      senderScan.next = res.result.nextPageToken || null;
+      if (!senderScan.next) { senderScan.done = true; break; }
+    }
+  } catch(e) {
+    toast('Scan stopped — ' + describeFetchError(e));
+  } finally {
+    senderScan.at = Date.now();
+    saveSenderScan();
+    senderScanning = false;
+    renderSenderScan();
+  }
+}
+
+function setScanStatus(text) {
+  const el = document.getElementById('cleanup-status');
+  if (el) el.textContent = text;
+}
+
+function setSenderScanSort(mode) {
+  senderScanSort = mode === 'size' ? 'size' : 'count';
+  senderScanShown = SCAN_SHOW;
+  renderSenderScan();
+}
+
+function showMoreScanned() {
+  senderScanShown += SCAN_SHOW;
+  renderSenderScan();
+}
+
+function formatBytes(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + ' GB';
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + ' MB';
+  return Math.max(1, Math.round(n / 1e3)) + ' KB';
+}
+
+// Whether the row should offer Unsubscribe: there's something usable, Gmail
+// vouches for the sender, and it hasn't been done already.
+function canUnsubscribe(s) {
+  if (!s.unsub || !s.unsub.trusted) return false;
+  if (s.unsubState && s.unsubState.done) return false;
+  const rule = senderRules[s.addr];
+  return !(rule && rule.unsub && rule.unsub.done);
+}
+
+function renderSenderScan() {
+  const el = document.getElementById('cleanup-list-el');
+  if (!el) return;
+  const scanBtn = document.getElementById('cleanup-scan-btn');
+  const sortSel = document.getElementById('cleanup-sort');
+  const countEl = document.getElementById('cleanup-count');
+  const senders = senderScan ? Object.values(senderScan.senders) : [];
+  if (countEl) countEl.textContent = senders.length;
+  if (sortSel) { sortSel.value = senderScanSort; sortSel.disabled = !senders.length; }
+  if (scanBtn) {
+    scanBtn.disabled = senderScanning || !!(senderScan && senderScan.done);
+    scanBtn.textContent = senderScanning ? 'Scanning…'
+      : !senderScan ? 'Scan mailbox'
+      : senderScan.done ? 'All scanned'
+      : `Scan ${SCAN_BATCH.toLocaleString()} more`;
+  }
+  if (!senderScanning) {
+    setScanStatus(!senderScan ? ''
+      : senderScan.done
+        ? `Every email scanned — ${senderScan.scanned.toLocaleString()} from ${senders.length.toLocaleString()} senders.`
+        : `Your ${senderScan.scanned.toLocaleString()} most recent emails scanned, from ${senders.length.toLocaleString()} senders. Totals grow as you scan further back.`);
+  }
+  if (!senders.length) {
+    el.innerHTML = `<div class="suggest-empty">${senderScanning ? 'Reading your mailbox…' : 'Scan to see who fills your mailbox — by number of emails or by space used.'}</div>`;
+    return;
+  }
+  const by = senderScanSort === 'size' ? (a, b) => b.bytes - a.bytes : (a, b) => b.count - a.count || b.bytes - a.bytes;
+  const rows = senders.sort(by).slice(0, senderScanShown);
+  el.innerHTML = rows.map(s => {
+    const busy = senderCleaning === s.addr;
+    const addr = esc(s.addr);
+    const facts = [
+      `${s.count.toLocaleString()} email${s.count === 1 ? '' : 's'}`,
+      formatBytes(s.bytes),
+      s.inbox ? `${s.inbox.toLocaleString()} in inbox` : 'none in inbox'
+    ];
+    if (s.unsubState && s.unsubState.done) facts.push('unsubscribed');
+    return `
+    <div class="suggest-row">
+      <div class="suggest-meta">
+        <div class="suggest-name">${esc(s.name || s.addr)}</div>
+        <div class="suggest-addr">${addr}</div>
+        <div class="suggest-pattern">${facts.join(' · ')}</div>
+      </div>
+      <div class="suggest-actions">
+        ${canUnsubscribe(s) ? `<button class="suggest-read-btn" data-addr="${addr}" onclick="unsubscribeFromScan(this.dataset.addr)"${busy ? ' disabled' : ''}>${icon('unsubscribe')}Unsubscribe</button>` : ''}
+        ${s.inbox ? `<button class="suggest-read-btn" data-addr="${addr}" onclick="cleanSender(this.dataset.addr, 'archive')"${busy ? ' disabled' : ''}>${icon('archive')}Archive all</button>` : ''}
+        <button class="suggest-block-btn" data-addr="${addr}" onclick="cleanSender(this.dataset.addr, 'trash')"${busy ? ' disabled' : ''}>${icon('trash')}${busy ? 'Working…' : 'Trash all'}</button>
+      </div>
+    </div>`;
+  }).join('') + (senders.length > rows.length
+    ? `<button class="btn-sm cleanup-more" onclick="showMoreScanned()">Show more (${(senders.length - rows.length).toLocaleString()} left)</button>`
+    : '');
+}
+
+// The Unsubscribe button on a scan row: an explicit request, so it runs
+// regardless of the block setting. Only a web page left → open it.
+async function unsubscribeFromScan(addr) {
+  const s = senderScan && senderScan.senders[(addr || '').toLowerCase()];
+  if (!s || !s.unsub) return;
+  if (!s.unsub.oneClick) {
+    openUnsubscribePage(s.addr);
+    return;
+  }
+  if (!onlineReady()) {
+    enqueueOp({ type: 'unsubscribe', addr: s.addr, info: s.unsub });
+    toast(`Unsubscribing from ${s.addr} — will sync`);
+    return;
+  }
+  const result = await unsubscribeNow(s.addr, s.unsub);
+  if (result === 'done') toast(`Unsubscribed from ${s.addr}`);
+  else if (result === 'manual') openUnsubscribePage(s.addr);
+  else if (result === 'failed') { enqueueOp({ type: 'unsubscribe', addr: s.addr, info: s.unsub }); toast(`Unsubscribing from ${s.addr} — will sync`); }
+  else toast('That sender didn’t leave a way to unsubscribe');
+}
+
+// Every message from a sender the action applies to. Starred and kept mail
+// are always left out, and archiving only needs what's still in the inbox.
+async function listSenderIds(addr, action) {
+  let q = `from:${addr} -is:starred -label:"${KEEP_LABEL_NAME}"`;
+  if (action === 'archive') q += ' in:inbox';
+  const ids = [];
+  let pageToken;
+  do {
+    const res = await gmailRetry(() => gapi.client.gmail.users.messages.list({ userId: 'me', q, maxResults: 500, pageToken }));
+    (res.result.messages || []).forEach(m => ids.push(m.id));
+    pageToken = res.result.nextPageToken;
+  } while (pageToken);
+  return ids;
+}
+
+// Moves the messages, a thousand per request. Trash is a label like any other
+// to batchModify; should Gmail refuse that, each message is trashed singly.
+async function applySenderClean(ids, action) {
+  const resource = action === 'trash' ? { addLabelIds: ['TRASH'], removeLabelIds: ['INBOX'] } : { removeLabelIds: ['INBOX'] };
+  try {
+    for (let i = 0; i < ids.length; i += 1000) {
+      const chunk = ids.slice(i, i + 1000);
+      try {
+        await gmailRetry(() => gapi.client.gmail.users.messages.batchModify({ userId: 'me', resource: { ids: chunk, ...resource } }));
+      } catch(e) {
+        if (action !== 'trash' || (e && e.status) !== 400) throw e;
+        for (let j = 0; j < chunk.length; j += 10) {
+          await Promise.all(chunk.slice(j, j + 10).map(id => gmailRetry(() => gapi.client.gmail.users.messages.trash({ userId: 'me', id }))));
+        }
+      }
+      setScanStatus(`${action === 'trash' ? 'Trashing' : 'Archiving'}… ${Math.min(i + 1000, ids.length).toLocaleString()} of ${ids.length.toLocaleString()}`);
+    }
+    return true;
+  } catch(e) { return false; }
+}
+
+// The outbox's half: the same clean-up, without asking (it was confirmed
+// when queued).
+async function cleanSenderRemote(addr, action) {
+  if (!onlineReady()) return false;
+  try { return await applySenderClean(await listSenderIds(addr, action), action); }
+  catch(e) { return false; }
+}
+
+// Reflects a clean-up locally: the scan row and any loaded mail.
+function markSenderCleaned(key, action) {
+  const s = senderScan && senderScan.senders[key];
+  if (s) {
+    if (action === 'trash') delete senderScan.senders[key];
+    else s.inbox = 0;
+    saveSenderScan();
+  }
+  const ids = emails.filter(e => parseSender(e.sender).addr.toLowerCase() === key && !keptIds.has(e.id)).map(e => e.id);
+  if (ids.length) {
+    const gone = new Set(ids);
+    emails = emails.filter(e => !gone.has(e.id));
+    swipeQueue = swipeQueue.filter(e => !gone.has(e.id));
+    ids.forEach(id => selectedIds.delete(id));
+    renderEmailList();
+    renderSwipeStack();
+    updateSwipeCounter();
+  }
+  renderSenderScan();
+}
+
+async function cleanSender(addr, action) {
+  if (!addr || senderCleaning) return;
+  const key = addr.toLowerCase();
+  const verb = action === 'trash' ? 'Move' : 'Archive';
+  const where = action === 'trash' ? ' to Trash' : '';
+  const after = action === 'trash'
+    ? 'Starred and kept emails are left alone. Gmail empties Trash after 30 days, so they can be recovered until then.'
+    : 'They leave your inbox but stay in All Mail and search. Starred and kept emails are left alone.';
+  if (!onlineReady()) {
+    if (!confirm(`${verb} every email from ${key}${where} when you’re back online?\n\n${after}`)) return;
+    enqueueOp({ type: 'sender-clean', addr: key, key: action });
+    markSenderCleaned(key, action);
+    toast('Will clean up when back online');
+    return;
+  }
+  senderCleaning = key;
+  renderSenderScan();
+  try {
+    let ids;
+    try { ids = await listSenderIds(key, action); }
+    catch(e) { toast('Couldn’t reach Gmail — ' + describeFetchError(e)); return; }
+    if (!ids.length) {
+      toast(action === 'trash' ? `Nothing left to trash from ${key}` : `Nothing from ${key} in your inbox`);
+      markSenderCleaned(key, action);
+      return;
+    }
+    const n = ids.length.toLocaleString();
+    if (!confirm(`${verb} ${n} email${ids.length === 1 ? '' : 's'} from ${key}${where}?\n\n${after}`)) return;
+    const ok = await applySenderClean(ids, action);
+    if (ok) {
+      markSenderCleaned(key, action);
+      toast(`${action === 'trash' ? 'Trashed' : 'Archived'} ${n} from ${key}`);
+    } else {
+      enqueueOp({ type: 'sender-clean', addr: key, key: action });
+      markSenderCleaned(key, action);
+      toast(`Cleaning up ${key} — will finish when Gmail is reachable`);
+    }
+  } finally {
+    senderCleaning = null;
+    renderSenderScan();
+  }
 }
 
 // ── Kept-unread tracking ───────────────────────────────────
@@ -4390,6 +4899,8 @@ async function flushOutbox() {
       else if (op.type === 'autoread-subject') ok = await autoReadSubjectRemote(op.rule || { addr: op.addr, pattern: op.pattern });
       else if (op.type === 'content-rule') ok = (await applyContentRuleRemote(op.rule)).ok;
       else if (op.type === 'tts-alert') ok = await insertTtsAlert(op);
+      else if (op.type === 'unsubscribe') ok = (await unsubscribeNow(op.addr, op.info)) !== 'failed';
+      else if (op.type === 'sender-clean') ok = await cleanSenderRemote(op.addr, op.key);
       else ok = true; // unknown op — drop it
       if (!ok) remaining.push(op);
     }
@@ -4490,6 +5001,7 @@ function loadAccountData() {
   loadSubjectData();
   loadContentRules();
   loadSenderLengths();
+  loadSenderScan();
   contentRuleMisses = new Map();   // message ids belong to the account we just left
   renderBlockSuggestions();
   renderSubjectSuggestions();
@@ -4992,7 +5504,7 @@ async function fetchMessagesMetadata(stubs, importantIds, onProgress) {
     const chunkResults = await Promise.all(
       chunk.map(m => gapi.client.gmail.users.messages.get({
         userId: 'me', id: m.id, format: 'metadata',
-        metadataHeaders: ['From', 'Subject', 'Date']
+        metadataHeaders: ['From', 'Subject', 'Date', ...UNSUB_HEADERS]
       }))
     );
     results.push(...chunkResults);
@@ -5008,6 +5520,7 @@ async function fetchMessagesMetadata(stubs, importantIds, onProgress) {
       subject: h['Subject'] || '(no subject)',
       date: h['Date'] || '',
       important: importantIds.has(r.result.id),
+      unsub: parseUnsubscribe(r.result.payload.headers, h['From']),
       bodyText: null,
       bodyLoaded: false
     };
@@ -5640,9 +6153,9 @@ async function doBlock(email) {
   saveBlockIgnore();
   renderSenderRules();
   renderBlockSuggestions();
-  const ok = await blockSenderRemote(addr);
-  if (ok) toast(`Blocked ${addr}`);
-  else { enqueueOp({ type: 'block', addr }); toast(`Blocked ${addr} — will sync`); }
+  const [ok, unsub] = await Promise.all([blockSenderRemote(addr), unsubscribeOnBlock(addr, email.unsub)]);
+  if (ok) toast(`Blocked ${addr}${unsubToastSuffix(unsub)}`);
+  else { enqueueOp({ type: 'block', addr }); toast(`Blocked ${addr}${unsubToastSuffix(unsub)} — will sync`); }
 }
 
 async function undoSwipe() {
@@ -11104,6 +11617,7 @@ loadKeepSort();
 loadKeepOfflineOnly();
 loadKeepMarksRead();
 loadSwipeSortBySender();
+loadUnsubOnBlock();
 loadAutoScroll();
 loadTts();
 loadKeepListen();   // after loadTts: the mode needs to know if the voice is on
