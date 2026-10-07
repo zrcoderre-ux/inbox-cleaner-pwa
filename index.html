@@ -3900,8 +3900,9 @@ function dismissSuggestion(addr) {
 // ── Unsubscribe ────────────────────────────────────────────
 // Reads a message's List-Unsubscribe headers into what can be done with them:
 //   oneClick — an https URL taking the RFC 8058 one-click POST, done silently
-//   mailto   — an address that unsubscribes whoever writes to it
 //   web      — an https page the person has to visit themselves
+// Mailto-only lists are left alone: unsubscribing that way means sending
+// email from the account, which this app doesn't do.
 // `trusted` is Gmail's own DKIM verdict for the From domain. Unsubscribing
 // tells a sender the address is live, so an unverified sender (real spam,
 // most likely) is only ever blocked, never contacted — the same line Gmail
@@ -3912,10 +3913,9 @@ function parseUnsubscribe(headers, from) {
   if (!list) return null;
   const uris = (list.match(/<[^>]+>/g) || []).map(u => u.slice(1, -1).trim());
   const web = uris.find(u => /^https:\/\//i.test(u)) || null;
-  const mailto = uris.find(u => /^mailto:/i.test(u)) || null;
-  if (!web && !mailto) return null;
+  if (!web) return null;
   const oneClick = web && all('list-unsubscribe-post').some(v => /List-Unsubscribe=One-Click/i.test(v)) ? web : null;
-  return { oneClick, web, mailto, trusted: dkimVouchesFor(all('authentication-results'), from) };
+  return { oneClick, web, trusted: dkimVouchesFor(all('authentication-results'), from) };
 }
 
 // True when Gmail's own Authentication-Results (authserv-id mx.google.com;
@@ -3937,42 +3937,6 @@ function dkimVouchesFor(results, from) {
   return false;
 }
 
-function parseMailto(uri) {
-  try {
-    const m = uri.match(/^mailto:([^?]+)(?:\?(.*))?$/i);
-    if (!m) return null;
-    const to = decodeURIComponent(m[1]).trim();
-    if (!/^[^\s@,<>"]+@[^\s@,<>"]+\.[^\s@,<>"]+$/.test(to)) return null;
-    const q = new URLSearchParams(m[2] || '');
-    // No line breaks in a header: they'd let the link write its own headers.
-    const subject = (q.get('subject') || '').replace(/[\r\n]+/g, ' ').trim() || 'unsubscribe';
-    return { to, subject, body: q.get('body') || 'unsubscribe' };
-  } catch(e) { return null; }
-}
-
-function utf8b64(str) {
-  let bin = '';
-  new TextEncoder().encode(str).forEach(b => { bin += String.fromCharCode(b); });
-  return btoa(bin);
-}
-
-// Sends the unsubscribe email a mailto link asks for, from the signed-in
-// account — what Gmail's own Unsubscribe does. It lands in Sent.
-async function sendUnsubscribeMail(m) {
-  const subject = /^[\x20-\x7e]*$/.test(m.subject) ? m.subject : '=?UTF-8?B?' + utf8b64(m.subject) + '?=';
-  const msg = [
-    'To: ' + m.to,
-    'Subject: ' + subject,
-    'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset=UTF-8',
-    'Content-Transfer-Encoding: base64',
-    '',
-    utf8b64(m.body)
-  ].join('\r\n');
-  const raw = utf8b64(msg).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  await gapi.client.gmail.users.messages.send({ userId: 'me', resource: { raw } });
-}
-
 // Carries out an unsubscribe. Returns 'done', 'manual' (only a web page was
 // offered; the person has to open it), 'none' (nothing usable, or a sender
 // Gmail can't vouch for) or 'failed' (try again when back online).
@@ -3988,8 +3952,6 @@ async function sendUnsubscribe(info) {
       });
       return 'done';
     }
-    const mail = info.mailto && parseMailto(info.mailto);
-    if (mail) { await sendUnsubscribeMail(mail); return 'done'; }
   } catch(e) {
     if (navigator.onLine === false) return 'failed';
     // Online and still refused: the endpoint is dead. Fall back to the page.
@@ -4266,7 +4228,7 @@ function renderSenderScan() {
 async function unsubscribeFromScan(addr) {
   const s = senderScan && senderScan.senders[(addr || '').toLowerCase()];
   if (!s || !s.unsub) return;
-  if (!s.unsub.oneClick && !(s.unsub.mailto && parseMailto(s.unsub.mailto))) {
+  if (!s.unsub.oneClick) {
     openUnsubscribePage(s.addr);
     return;
   }
