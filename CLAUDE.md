@@ -57,6 +57,12 @@ The app is a single-file PWA. There is no build step — edit and ship.
   Symbols: inline `<svg class="mi">` in markup, `icon(name)` in script.
 - Settings follow a `loadX()` / `setX(value)` pair; call `loadX()` from the
   init block at the bottom of the script.
+- The layout is a phone column below 840px wide (framed from 600px). From
+  840px a navigation rail replaces the bottom bar and each tab gets its own
+  column width; Bulk splits into two columns from 1024px. All the wide-screen
+  overrides live in the `/* ── Wide screens ── */` block at the end of the
+  stylesheet. Phones must not change when that block does. An email's text is
+  capped at `--read-w` at every size.
 
 ## Verifying a change
 
@@ -76,4 +82,5 @@ document.getElementById('main-wrapper').style.display = 'flex';
 switchTab('bulk');
 ```
 
-Check both colour schemes — the CSS has a `prefers-color-scheme: dark` block.
+Check both colour schemes — the CSS has a `prefers-color-scheme: dark` block —
+and both layouts: a phone width (e.g. 390px) and a desktop one (e.g. 1440px).
