@@ -184,22 +184,22 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
    leaves a control looking stuck. */
 @media (hover: hover) {
   .icon-btn:hover, .user-chip:hover, .nav-btn:hover .nav-icon, .mode-btn:hover,
-  .fetch-btn:hover, .kept-bar button:hover, .open-gmail-btn:hover,
+  .fetch-btn:hover, .kept-bar button:hover, .open-reader-btn:hover,
   .action-btn:hover, .chip:hover, .sort-select:hover, .btn-sm:not(:disabled):hover,
   .suggest-block-btn:hover, .suggest-read-btn:hover,
   .suggest-dismiss-btn:hover, .section-card-header:hover, .email-item:hover,
-  .acct-row:hover, .reader-close:hover, .reader-listen:hover, .reader-mark-read:hover,
+  .acct-row:hover, .reader-close:hover, .reader-listen:hover, .reader-gmail:hover, .reader-mark-read:hover,
   .btn-secondary:hover, .gsi-btn:not(:disabled):hover,
   .keep-row-mark:hover, .setting-row:not(.setting-slider):hover, .tts-linkbtn:hover {
     background-image: linear-gradient(var(--hover-layer), var(--hover-layer));
   }
 }
 .icon-btn:active, .user-chip:active, .nav-btn:active .nav-icon, .mode-btn:active,
-.fetch-btn:active, .kept-bar button:active, .open-gmail-btn:active,
+.fetch-btn:active, .kept-bar button:active, .open-reader-btn:active,
 .action-btn:active, .chip:active, .btn-sm:not(:disabled):active,
 .suggest-block-btn:active, .suggest-read-btn:active,
 .suggest-dismiss-btn:active, .section-card-header:active, .email-item:active,
-.acct-row:active, .reader-close:active, .reader-listen:active, .reader-mark-read:active,
+.acct-row:active, .reader-close:active, .reader-listen:active, .reader-gmail:active, .reader-mark-read:active,
 .btn-secondary:active, .gsi-btn:not(:disabled):active,
 .keep-row-mark:active, .setting-row:not(.setting-slider):active {
   background-image: linear-gradient(var(--press-layer), var(--press-layer));
@@ -886,7 +886,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
 }
 .action-btn.undo-btn svg { width: 22px; height: 22px; }
 
-.open-gmail-btn {
+.open-reader-btn {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -902,7 +902,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
   text-decoration: none;
   white-space: nowrap;
 }
-.open-gmail-btn svg { width: 16px; height: 16px; }
+.open-reader-btn svg { width: 16px; height: 16px; }
 
 .action-hint {
   font-size: 12px;
@@ -1008,7 +1008,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
   border-bottom: 1px solid var(--outline-variant);
   background: var(--surface);
 }
-.reader-close, .reader-listen {
+.reader-close, .reader-listen, .reader-gmail {
   width: 48px;
   height: 48px;
   border-radius: 50%;
@@ -1021,7 +1021,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
   flex-shrink: 0;
   color: var(--on-surface-variant);
 }
-.reader-close svg, .reader-listen svg { width: 24px; height: 24px; }
+.reader-close svg, .reader-listen svg, .reader-gmail svg { width: 24px; height: 24px; }
 /* Read-aloud lives opposite the close button, so the header keeps its shape. */
 .reader-listen { display: none; }
 .reader-listen.available { display: flex; }
@@ -2168,8 +2168,8 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
           <button class="action-btn undo-btn" onclick="undoSwipe()" title="Undo" aria-label="Undo">
             <svg class="mi" viewBox="0 -960 960 960"><path d="M320-200q-17 0-28.5-11.5T280-240q0-17 11.5-28.5T320-280h244q63 0 109.5-40T720-420q0-60-46.5-100T564-560H312l76 76q11 11 11 28t-11 28q-11 11-28 11t-28-11L188-572q-6-6-8.5-13t-2.5-15q0-8 2.5-15t8.5-13l144-144q11-11 28-11t28 11q11 11 11 28t-11 28l-76 76h252q97 0 166.5 63T800-420q0 94-69.5 157T564-200H320Z"/></svg>
           </button>
-          <button class="open-gmail-btn" id="open-gmail-btn" onclick="openInGmail()" style="display:none;">
-            <svg class="mi" viewBox="0 -960 960 960"><path d="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h240q17 0 28.5 11.5T480-800q0 17-11.5 28.5T440-760H200v560h560v-240q0-17 11.5-28.5T800-480q17 0 28.5 11.5T840-440v240q0 33-23.5 56.5T760-120H200Zm560-584L416-360q-11 11-28 11t-28-11q-11-11-11-28t11-28l344-344H600q-17 0-28.5-11.5T560-800q0-17 11.5-28.5T600-840h200q17 0 28.5 11.5T840-800v200q0 17-11.5 28.5T800-560q-17 0-28.5-11.5T760-600v-104Z"/></svg>
+          <button class="open-reader-btn" id="open-reader-btn" onclick="openCurrentInReader()" style="display:none;">
+            <svg class="mi" viewBox="0 -960 960 960"><path d="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm0-560v560-560Zm120 480h200q17 0 28.5-11.5T560-320q0-17-11.5-28.5T520-360H320q-17 0-28.5 11.5T280-320q0 17 11.5 28.5T320-280Zm0-160h320q17 0 28.5-11.5T680-480q0-17-11.5-28.5T640-520H320q-17 0-28.5 11.5T280-480q0 17 11.5 28.5T320-440Zm0-160h320q17 0 28.5-11.5T680-640q0-17-11.5-28.5T640-680H320q-17 0-28.5 11.5T280-640q0 17 11.5 28.5T320-600Z"/></svg>
             Open
           </button>
         </div>
@@ -2485,6 +2485,9 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
       <div class="reader-subject" id="reader-subject"></div>
       <div class="reader-sender" id="reader-sender"></div>
     </div>
+    <a class="reader-gmail" id="reader-gmail" target="_blank" rel="noopener noreferrer" title="Open in Gmail" aria-label="Open in Gmail">
+      <svg class="mi" viewBox="0 -960 960 960"><path d="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h240q17 0 28.5 11.5T480-800q0 17-11.5 28.5T440-760H200v560h560v-240q0-17 11.5-28.5T800-480q17 0 28.5 11.5T840-440v240q0 33-23.5 56.5T760-120H200Zm560-584L416-360q-11 11-28 11t-28-11q-11-11-11-28t11-28l344-344H600q-17 0-28.5-11.5T560-800q0-17 11.5-28.5T600-840h200q17 0 28.5 11.5T840-800v200q0 17-11.5 28.5T800-560q-17 0-28.5-11.5T760-600v-104Z"/></svg>
+    </a>
     <button class="reader-listen" id="reader-listen" onclick="toggleReadAloud()" aria-label="Read aloud">
       <svg class="mi" viewBox="0 -960 960 960"><path d="M280-120h-80q-33 0-56.5-23.5T120-200v-280q0-75 28.5-140.5t77-114q48.5-48.5 114-77T480-840q75 0 140.5 28.5t114 77q48.5 48.5 77 114T840-480v280q0 33-23.5 56.5T760-120h-80q-33 0-56.5-23.5T600-200v-160q0-33 23.5-56.5T680-440h80v-40q0-117-81.5-198.5T480-760q-117 0-198.5 81.5T200-480v40h80q33 0 56.5 23.5T360-360v160q0 33-23.5 56.5T280-120Zm0-240h-80v160h80v-160Zm400 0v160h80v-160h-80Zm-400 0h-80 80Zm400 0h80-80Z"/></svg>
     </button>
@@ -2559,7 +2562,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v144'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v145'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5816,7 +5819,7 @@ function renderSwipeStack() {
     empty.style.display = '';
     hint.style.display = 'none';
     currentEmail = null;
-    updateOpenGmailBtn(null);
+    updateOpenReaderBtn(null);
     // Everything loaded has been dealt with: the illustration turns to a check.
     empty.classList.toggle('done', emails.length > 0);
     if (emails.length > 0) document.getElementById('swipe-empty-msg').textContent = "You're all done!";
@@ -5846,7 +5849,7 @@ function renderSwipeStack() {
     area.appendChild(card);
     if (isFront) {
       currentEmail = email;
-      updateOpenGmailBtn(email);
+      updateOpenReaderBtn(email);
       focusSwipeDeck();
       attachDrag(card, email);
       loadCardBody(card, email);
@@ -7571,8 +7574,8 @@ function setSwipeMode(mode) {
   }
 }
 
-function updateOpenGmailBtn(email) {
-  const btn = document.getElementById('open-gmail-btn');
+function updateOpenReaderBtn(email) {
+  const btn = document.getElementById('open-reader-btn');
   if (!btn) return;
   btn.style.display = email ? 'flex' : 'none';
 }
@@ -7649,7 +7652,15 @@ async function ensureReaderBody(email) {
 // Opens the focused reader from the swipe deck. Shows the Mark-as-read button
 // at the very bottom of the email, so after reading it through you can mark it
 // read without swiping back to the deck.
-function openInGmail() {
+// The email's address in Gmail on the web: #all/ finds it wherever it's
+// filed, and authuser picks the right account when several are signed in.
+// On a phone with the Gmail app, the link may hand off to the app.
+function gmailUrl(email) {
+  const who = activeEmail ? '?authuser=' + encodeURIComponent(activeEmail) : '';
+  return 'https://mail.google.com/mail/' + who + '#all/' + encodeURIComponent(email.id);
+}
+
+function openCurrentInReader() {
   if (!currentEmail) return;
   ttsUnlockForOpen(false);
   openReader(currentEmail, { markRead: true });
@@ -7687,6 +7698,7 @@ async function openReader(email, opts = {}) {
   subjectEl.textContent = email.subject || '(no subject)';
   const from = parseSender(email.sender || '');
   senderEl.textContent = from.name && from.addr ? from.name + ' · ' + from.addr : (email.sender || '');
+  document.getElementById('reader-gmail').href = gmailUrl(email);
 
   // Show overlay with a loading state
   removeReaderFooter();
@@ -8030,7 +8042,7 @@ window.addEventListener('keydown', e => {
   if (e.key === 'ArrowLeft' || e.key === 'Left') { e.preventDefault(); swipeCard('left'); }
   else if (e.key === 'ArrowRight' || e.key === 'Right') { e.preventDefault(); swipeCard('right'); }
   else if (e.key === 'ArrowUp' || e.key === 'Up' || k === 'z' || k === 'u') { e.preventDefault(); undoSwipe(); }
-  else if (e.key === 'Enter' || k === 'o') { e.preventDefault(); openInGmail(); }
+  else if (e.key === 'Enter' || k === 'o') { e.preventDefault(); openCurrentInReader(); }
 });
 
 // ── Read aloud (text-to-speech) ────────────────────────────
