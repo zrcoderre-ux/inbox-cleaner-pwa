@@ -183,7 +183,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
 /* Hover only where there is a pointer that hovers, so a tap on a phone never
    leaves a control looking stuck. */
 @media (hover: hover) {
-  .icon-btn:hover, .user-chip:hover, .nav-btn:hover .nav-icon, .mode-btn:hover,
+  .icon-btn:hover, .gmail-btn:hover, .user-chip:hover, .nav-btn:hover .nav-icon, .mode-btn:hover,
   .fetch-btn:hover, .kept-bar button:hover, .open-reader-btn:hover,
   .action-btn:hover, .chip:hover, .sort-select:hover, .btn-sm:not(:disabled):hover,
   .suggest-block-btn:hover, .suggest-read-btn:hover,
@@ -194,7 +194,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
     background-image: linear-gradient(var(--hover-layer), var(--hover-layer));
   }
 }
-.icon-btn:active, .user-chip:active, .nav-btn:active .nav-icon, .mode-btn:active,
+.icon-btn:active, .gmail-btn:active, .user-chip:active, .nav-btn:active .nav-icon, .mode-btn:active,
 .fetch-btn:active, .kept-bar button:active, .open-reader-btn:active,
 .action-btn:active, .chip:active, .btn-sm:not(:disabled):active,
 .suggest-block-btn:active, .suggest-read-btn:active,
@@ -241,6 +241,29 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
 .icon-btn.active { background-color: var(--secondary-container); color: var(--on-secondary-container); }
 
 /* ── Header ───────────────────────────────────────────────── */
+/* Hands off to Gmail itself: the app on a phone, a tab on a computer. */
+.gmail-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 32px;
+  padding: 0 10px 0 14px;
+  margin-right: 4px;
+  border: none;
+  border-radius: 16px;
+  background-color: var(--secondary-container);
+  color: var(--on-secondary-container);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.gmail-btn svg { width: 18px; height: 18px; }
+/* The title only shows where it fits whole; the logo carries the name
+   elsewhere — narrow phones, and wider screens where the chip shows the address. */
+@media (max-width: 399px), (min-width: 440px) {
+  .app-header h1 { display: none; }
+}
 .app-header {
   height: var(--header-h);
   background: var(--bg);
@@ -2110,6 +2133,10 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
       </div>
       <h1>Inbox Cleaner</h1>
       <div class="header-right">
+        <button class="gmail-btn" onclick="openGmail()" aria-label="Open Gmail" title="Open Gmail — to write an email, or anything else this app doesn’t do">
+          Gmail
+          <svg class="mi" viewBox="0 -960 960 960"><path d="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h240q17 0 28.5 11.5T480-800q0 17-11.5 28.5T440-760H200v560h560v-240q0-17 11.5-28.5T800-480q17 0 28.5 11.5T840-440v240q0 33-23.5 56.5T760-120H200Zm560-584L416-360q-11 11-28 11t-28-11q-11-11-11-28t11-28l344-344H600q-17 0-28.5-11.5T560-800q0-17 11.5-28.5T600-840h200q17 0 28.5 11.5T840-800v200q0 17-11.5 28.5T800-560q-17 0-28.5-11.5T760-600v-104Z"/></svg>
+        </button>
         <button class="icon-btn" id="settings-btn" onclick="toggleSettings()" aria-label="Settings" title="Settings">
           <svg class="mi" viewBox="0 -960 960 960"><path d="M433-80q-27 0-46.5-18T363-142l-9-66q-13-5-24.5-12T307-235l-62 26q-25 11-50 2t-39-32l-47-82q-14-23-8-49t27-43l53-40q-1-7-1-13.5v-27q0-6.5 1-13.5l-53-40q-21-17-27-43t8-49l47-82q14-23 39-32t50 2l62 26q11-8 23-15t24-12l9-66q4-26 23.5-44t46.5-18h94q27 0 46.5 18t23.5 44l9 66q13 5 24.5 12t22.5 15l62-26q25-11 50-2t39 32l47 82q14 23 8 49t-27 43l-53 40q1 7 1 13.5v27q0 6.5-2 13.5l53 40q21 17 27 43t-8 49l-48 82q-14 23-39 32t-50-2l-60-26q-11 8-23 15t-24 12l-9 66q-4 26-23.5 44T527-80h-94Zm7-80h79l14-106q31-8 57.5-23.5T639-327l99 41 39-68-86-65q5-14 7-29.5t2-31.5q0-16-2-31.5t-7-29.5l86-65-39-68-99 42q-22-23-48.5-38.5T533-694l-13-106h-79l-14 106q-31 8-57.5 23.5T321-633l-99-41-39 68 86 64q-5 15-7 30t-2 32q0 16 2 31t7 30l-86 65 39 68 99-42q22 23 48.5 38.5T427-266l13 106Zm42-180q58 0 99-41t41-99q0-58-41-99t-99-41q-59 0-99.5 41T342-480q0 58 40.5 99t99.5 41Zm-2-140Z"/></svg>
         </button>
@@ -2562,7 +2589,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v145'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v146'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -7658,6 +7685,38 @@ async function ensureReaderBody(email) {
 function gmailUrl(email) {
   const who = activeEmail ? '?authuser=' + encodeURIComponent(activeEmail) : '';
   return 'https://mail.google.com/mail/' + who + '#all/' + encodeURIComponent(email.id);
+}
+
+// Gmail's inbox on the web, in the active account.
+function gmailHomeUrl() {
+  return 'https://mail.google.com/mail/' + (activeEmail ? '?authuser=' + encodeURIComponent(activeEmail) : '');
+}
+
+function isIOS() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);   // iPadOS asks for the desktop site
+}
+
+// The header's Gmail button: opens the Gmail app on a phone, for writing an
+// email or anything else this app leaves to Gmail; on a computer, a new tab.
+// Neither app link can pick an account or a message — it opens wherever the
+// app was last left. Without the app installed, the web version opens instead.
+function openGmail() {
+  const web = gmailHomeUrl();
+  if (/Android/i.test(navigator.userAgent)) {
+    // Chrome launches the app by package and goes to the fallback without it.
+    location.href = 'intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;' +
+      'package=com.google.android.gm;S.browser_fallback_url=' + encodeURIComponent(web) + ';end';
+    return;
+  }
+  if (isIOS()) {
+    // iOS has no fallback of its own: if the page is still showing a moment
+    // later, nothing took the link, so the app isn't installed.
+    location.href = 'googlegmail://';
+    setTimeout(() => { if (document.visibilityState === 'visible') window.open(web, '_blank', 'noopener'); }, 1500);
+    return;
+  }
+  window.open(web, '_blank', 'noopener');
 }
 
 function openCurrentInReader() {
