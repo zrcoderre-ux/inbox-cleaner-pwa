@@ -86,6 +86,8 @@
   --r-xl: 28px;
   --nav-h: 72px;
   --header-h: 64px;
+  --rail-w: 80px;         /* the navigation rail that replaces the bottom bar on a wide screen */
+  --read-w: 600px;        /* widest an email's text runs: ~75 characters a line */
   --sans: 'Google Sans', 'Google Sans Text', Roboto, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
   --mono: 'Google Sans Mono', 'Roboto Mono', ui-monospace, Menlo, monospace;
 
@@ -260,8 +262,9 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
 }
 .gmail-btn svg { width: 18px; height: 18px; }
 /* The title only shows where it fits whole; the logo carries the name
-   elsewhere — narrow phones, and wider screens where the chip shows the address. */
-@media (max-width: 399px), (min-width: 440px) {
+   elsewhere — narrow phones, and the phone-width column once the chip shows the
+   address. A wide screen has room for all of it. */
+@media (max-width: 399px), (min-width: 440px) and (max-width: 839px) {
   .app-header h1 { display: none; }
 }
 .app-header {
@@ -1089,7 +1092,9 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
   width: 100%;
   height: 100%;
   overflow-y: auto;
-  padding: 20px 20px 40px;
+  /* Wider than the reading width, the margins take up the rest, so the text
+     stays a column while the whole pane still scrolls. */
+  padding: 20px max(20px, calc((100% - var(--read-w)) / 2)) 40px;
   font-size: 16px;
   line-height: 26px;
   color: var(--on-surface);
@@ -1102,7 +1107,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
    user has scrolled to the bottom; flex-shrink keeps it out of the scroll. */
 .reader-footer {
   flex-shrink: 0;
-  padding: 14px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+  padding: 14px max(16px, calc((100% - var(--read-w)) / 2)) calc(18px + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--outline-variant);
   background: var(--surface);
 }
@@ -1114,7 +1119,10 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
   margin-bottom: 10px;
 }
 .reader-mark-read {
+  display: block;
   width: 100%;
+  max-width: 400px;   /* phone-width at most, even when the column is wider */
+  margin: 0 auto;
   height: 48px;
   border: none;
   border-radius: 24px;
@@ -1457,7 +1465,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
    otherwise let flexbox clip the list (capping visible rows) instead of
    letting .keep-scroll scroll through all of them. */
 .keep-scroll > .section-card,
-.bulk-scroll > .section-card,
+.bulk-col > .section-card,
 .settings-scroll > .section-card { flex-shrink: 0; }
 
 /* Search and filters stay put while the list scrolls under them. */
@@ -1710,6 +1718,16 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
   flex-direction: column;
   gap: 12px;
 }
+/* The two columns only exist on a wide screen (see Wide screens). Here they
+   step aside, and `order` puts the cards back in their one-column order. */
+.bulk-col { display: contents; }
+#suggest-card { order: 1; }
+#subject-card { order: 2; }
+#length-card { order: 3; }
+#cleanup-card { order: 4; }
+#rules-card { order: 5; }
+#list-card { order: 6; }
+.bulk-end { order: 7; }
 
 /* Rules card */
 .section-card {
@@ -2080,6 +2098,60 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+
+/* ── Wide screens ─────────────────────────────────────────── */
+/* From Material's "expanded" width the app stops being a phone in a frame: the
+   header spans the window, the bottom bar becomes a rail down the left, and
+   each tab gets a column sized for what it holds. Below 840px nothing here
+   applies. */
+@media (min-width: 840px) {
+  html, body { background: var(--bg); }
+  #app { max-width: none; border-left: none; border-right: none; }
+  /* Centres the logo over the rail. */
+  .app-header { padding-left: calc((var(--rail-w) - 32px) / 2); }
+
+  .bottom-nav {
+    position: fixed;
+    top: var(--header-h);
+    bottom: 0;
+    left: 0;
+    width: var(--rail-w);
+    height: auto;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 0 16px;
+    background: var(--bg);
+    z-index: 10;
+  }
+  .nav-btn { flex: none; width: 100%; padding: 4px 0; }
+  #main-wrapper > .screen { margin-left: var(--rail-w); }
+  #toast { bottom: 24px; }
+
+  /* Swipe: the card grows a little and the controls line up with it. The
+     stack area itself stays full width, so a flung card leaves the screen
+     rather than vanishing at the edge of a column. */
+  .swipe-card { max-width: 560px; }
+  .swipe-toolbar, .swipe-actions, .action-hint { padding-left: max(16px, calc((100% - 560px) / 2)); padding-right: max(16px, calc((100% - 560px) / 2)); }
+  .kept-bar, .block-banner { margin-left: max(16px, calc((100% - 560px) / 2)); margin-right: max(16px, calc((100% - 560px) / 2)); }
+
+  /* Lists and settings read best at a moderate width, centred. */
+  .keep-scroll, .settings-scroll, .bulk-scroll { padding-left: max(16px, calc((100% - 720px) / 2)); padding-right: max(16px, calc((100% - 720px) / 2)); }
+}
+
+/* Room for Bulk's two columns, each as wide as the phone column. */
+@media (min-width: 1024px) {
+  .bulk-scroll {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 12px 16px;
+    padding-left: max(16px, calc((100% - 1200px) / 2));
+    padding-right: max(16px, calc((100% - 1200px) / 2));
+  }
+  .bulk-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .bulk-end { grid-column: 1 / -1; }
+}
 </style>
 </head>
 <body>
@@ -2252,123 +2324,133 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
     <div id="bulk-screen" class="screen" style="display:none;">
       <div class="bulk-scroll" id="bulk-scroll">
 
-        <!-- Suggested blocks -->
-        <div class="section-card" id="suggest-card">
-          <div class="section-card-header" onclick="toggleSection('suggest-card')">
-            <h3>Suggested blocks <span class="pill red" id="suggest-count">0</span></h3>
-            <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
-          </div>
-          <div class="section-card-body">
-            <p class="section-desc">Senders you keep marking as read without ever opening. <strong>Block</strong> sends their mail to spam; <strong>Auto-read</strong> marks it read but leaves it in your inbox.</p>
-            <div class="suggest-list" id="suggest-list-el"></div>
-          </div>
-        </div>
+        <!-- On a wide screen the cards sit in two columns: what to automate
+             (suggestions and the rules they become) beside what to clear now.
+             On a phone the columns dissolve and the cards keep one column, in
+             the order set by their `order` in the CSS. -->
+        <div class="bulk-col">
 
-        <!-- Suggested subject rules -->
-        <div class="section-card" id="subject-card">
-          <div class="section-card-header" onclick="toggleSection('subject-card')">
-            <h3>Suggested subject rules <span class="pill" id="subject-count">0</span></h3>
-            <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
-          </div>
-          <div class="section-card-body">
-            <p class="section-desc">Recurring subjects you never open, from senders whose other mail you do read. Subjects that vary a little each time are grouped, and the rule matches on the words they share. <strong>Auto-read</strong> marks future matching mail read and leaves it in your inbox — there's no block option here, because the sender isn't the problem.</p>
-            <div class="suggest-list" id="subject-list-el"></div>
-          </div>
-        </div>
-
-        <!-- Suggested rules for a sender's unusually short mail -->
-        <div class="section-card" id="length-card">
-          <div class="section-card-header" onclick="toggleSection('length-card')">
-            <h3>Suggested short-mail rules <span class="pill" id="length-count">0</span></h3>
-            <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
-          </div>
-          <div class="section-card-body">
-            <p class="section-desc">Senders whose mail is usually long but who sometimes send something far shorter — a “we’re live” note, a post cut off after two paragraphs, a one-line alert. <strong>Auto-read</strong> marks only those short ones read and leaves the rest of the sender’s mail exactly where it is. Lengths are measured from the emails already saved for offline reading, so nothing extra is fetched.</p>
-            <div class="suggest-list" id="length-list-el"></div>
-          </div>
-        </div>
-
-        <!-- Whole-mailbox clean-up, grouped by sender -->
-        <div class="section-card" id="cleanup-card">
-          <div class="section-card-header" onclick="toggleSection('cleanup-card')">
-            <h3>Clean up by sender <span class="pill" id="cleanup-count">0</span></h3>
-            <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
-          </div>
-          <div class="section-card-body">
-            <p class="section-desc">Everyone who has filled your mailbox, read or not, going back as far as you scan. <strong>Archive all</strong> clears a sender out of your inbox; <strong>Trash all</strong> moves every email from them to Trash, where Gmail keeps it 30 days. Starred and kept emails are never touched.</p>
-            <div class="cleanup-toolbar">
-              <button class="btn-sm" id="cleanup-scan-btn" onclick="scanSenders()">Scan mailbox</button>
-              <select class="sort-select" id="cleanup-sort" onchange="setSenderScanSort(this.value)" aria-label="Sort senders">
-                <option value="count">Most emails</option>
-                <option value="size">Most space</option>
-              </select>
+          <!-- Suggested blocks -->
+          <div class="section-card" id="suggest-card">
+            <div class="section-card-header" onclick="toggleSection('suggest-card')">
+              <h3>Suggested blocks <span class="pill red" id="suggest-count">0</span></h3>
+              <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
             </div>
-            <div class="cleanup-status" id="cleanup-status"></div>
-            <div class="suggest-list" id="cleanup-list-el"></div>
+            <div class="section-card-body">
+              <p class="section-desc">Senders you keep marking as read without ever opening. <strong>Block</strong> sends their mail to spam; <strong>Auto-read</strong> marks it read but leaves it in your inbox.</p>
+              <div class="suggest-list" id="suggest-list-el"></div>
+            </div>
           </div>
-        </div>
 
-        <!-- Standing sender rules, in two categories -->
-        <div class="section-card" id="rules-card">
-          <div class="section-card-header" onclick="toggleSection('rules-card')">
-            <h3>Rules <span class="pill" id="rules-count">0</span></h3>
-            <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
+          <!-- Suggested subject rules -->
+          <div class="section-card" id="subject-card">
+            <div class="section-card-header" onclick="toggleSection('subject-card')">
+              <h3>Suggested subject rules <span class="pill" id="subject-count">0</span></h3>
+              <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
+            </div>
+            <div class="section-card-body">
+              <p class="section-desc">Recurring subjects you never open, from senders whose other mail you do read. Subjects that vary a little each time are grouped, and the rule matches on the words they share. <strong>Auto-read</strong> marks future matching mail read and leaves it in your inbox — there's no block option here, because the sender isn't the problem.</p>
+              <div class="suggest-list" id="subject-list-el"></div>
+            </div>
           </div>
-          <div class="section-card-body">
-            <p class="section-desc">Applied to new mail every time you load. Remove a rule with × — mail already actioned stays where it is.</p>
-            <div class="rule-group rule-add-group">
-              <div class="rule-group-title">Add a body rule</div>
-              <p class="section-desc">Matches on what the email says rather than who sent it. Give it a phrase, a word limit, or both — with both, an email has to satisfy the two. A word limit on its own catches every short email, replies from people included, so it's usually worth pairing with a phrase.</p>
-              <div class="rule-add">
-                <input type="text" id="content-phrase-input" class="rule-input rule-input-phrase" placeholder="Phrase in the body, e.g. Keep reading with a 7-day free trial" autocomplete="off" aria-label="Phrase in the email body">
-                <div class="rule-add-row">
-                  <label class="rule-add-label" for="content-words-input">Only when it runs under</label>
-                  <input type="number" id="content-words-input" class="rule-input rule-input-num" min="1" max="5000" step="1" placeholder="any" aria-label="Word limit">
-                  <span class="rule-add-label">words</span>
-                </div>
-                <div class="rule-add-row">
-                  <label class="rule-add-label" for="content-action-select">Then</label>
-                  <select id="content-action-select" class="sort-select rule-add-select" aria-label="What the rule does">
-                    <option value="read">Mark it read</option>
-                    <option value="block">Move it to spam</option>
-                  </select>
-                  <button class="suggest-read-btn no-icon" onclick="addContentRule()">Add rule</button>
+
+          <!-- Suggested rules for a sender's unusually short mail -->
+          <div class="section-card" id="length-card">
+            <div class="section-card-header" onclick="toggleSection('length-card')">
+              <h3>Suggested short-mail rules <span class="pill" id="length-count">0</span></h3>
+              <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
+            </div>
+            <div class="section-card-body">
+              <p class="section-desc">Senders whose mail is usually long but who sometimes send something far shorter — a “we’re live” note, a post cut off after two paragraphs, a one-line alert. <strong>Auto-read</strong> marks only those short ones read and leaves the rest of the sender’s mail exactly where it is. Lengths are measured from the emails already saved for offline reading, so nothing extra is fetched.</p>
+              <div class="suggest-list" id="length-list-el"></div>
+            </div>
+          </div>
+
+          <!-- Standing sender rules, in two categories -->
+          <div class="section-card" id="rules-card">
+            <div class="section-card-header" onclick="toggleSection('rules-card')">
+              <h3>Rules <span class="pill" id="rules-count">0</span></h3>
+              <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
+            </div>
+            <div class="section-card-body">
+              <p class="section-desc">Applied to new mail every time you load. Remove a rule with × — mail already actioned stays where it is.</p>
+              <div class="rule-group rule-add-group">
+                <div class="rule-group-title">Add a body rule</div>
+                <p class="section-desc">Matches on what the email says rather than who sent it. Give it a phrase, a word limit, or both — with both, an email has to satisfy the two. A word limit on its own catches every short email, replies from people included, so it's usually worth pairing with a phrase.</p>
+                <div class="rule-add">
+                  <input type="text" id="content-phrase-input" class="rule-input rule-input-phrase" placeholder="Phrase in the body, e.g. Keep reading with a 7-day free trial" autocomplete="off" aria-label="Phrase in the email body">
+                  <div class="rule-add-row">
+                    <label class="rule-add-label" for="content-words-input">Only when it runs under</label>
+                    <input type="number" id="content-words-input" class="rule-input rule-input-num" min="1" max="5000" step="1" placeholder="any" aria-label="Word limit">
+                    <span class="rule-add-label">words</span>
+                  </div>
+                  <div class="rule-add-row">
+                    <label class="rule-add-label" for="content-action-select">Then</label>
+                    <select id="content-action-select" class="sort-select rule-add-select" aria-label="What the rule does">
+                      <option value="read">Mark it read</option>
+                      <option value="block">Move it to spam</option>
+                    </select>
+                    <button class="suggest-read-btn no-icon" onclick="addContentRule()">Add rule</button>
+                  </div>
                 </div>
               </div>
+              <div class="rules-list" id="rules-list-el"></div>
             </div>
-            <div class="rules-list" id="rules-list-el"></div>
           </div>
         </div>
 
-        <!-- Email list -->
-        <div class="section-card" id="list-card">
-          <div class="list-toolbar">
-            <div class="toolbar-left">
-              <label><input type="checkbox" id="sel-all-cb" onchange="toggleSelectAll(this.checked)"> All</label>
-              <span class="sel-count" id="sel-count-label">0 selected</span>
+        <div class="bulk-col">
+
+          <!-- Whole-mailbox clean-up, grouped by sender -->
+          <div class="section-card" id="cleanup-card">
+            <div class="section-card-header" onclick="toggleSection('cleanup-card')">
+              <h3>Clean up by sender <span class="pill" id="cleanup-count">0</span></h3>
+              <span class="chevron"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-362q-8 0-15-2.5t-13-8.5L268-557q-11-11-11-28t11-28q11-11 28-11t28 11l156 156 156-156q11-11 28-11t28 11q11 11 11 28t-11 28L508-373q-6 6-13 8.5t-15 2.5Z"/></svg></span>
             </div>
-            <div class="toolbar-right">
-              <select class="sort-select" id="sort-select" onchange="setSortMode(this.value)" aria-label="Sort emails">
-                <option value="priority">Priority</option>
-                <option value="date-desc">Newest first</option>
-                <option value="date-asc">Oldest first</option>
-                <option value="sender-az">Sender A–Z</option>
-                <option value="sender-za">Sender Z–A</option>
-              </select>
-              <button class="btn-sm" onclick="fetchEmails()">Load (200)</button>
+            <div class="section-card-body">
+              <p class="section-desc">Everyone who has filled your mailbox, read or not, going back as far as you scan. <strong>Archive all</strong> clears a sender out of your inbox; <strong>Trash all</strong> moves every email from them to Trash, where Gmail keeps it 30 days. Starred and kept emails are never touched.</p>
+              <div class="cleanup-toolbar">
+                <button class="btn-sm" id="cleanup-scan-btn" onclick="scanSenders()">Scan mailbox</button>
+                <select class="sort-select" id="cleanup-sort" onchange="setSenderScanSort(this.value)" aria-label="Sort senders">
+                  <option value="count">Most emails</option>
+                  <option value="size">Most space</option>
+                </select>
+              </div>
+              <div class="cleanup-status" id="cleanup-status"></div>
+              <div class="suggest-list" id="cleanup-list-el"></div>
             </div>
-            <button class="btn-sm danger" id="mark-read-btn" onclick="bulkMarkRead()" disabled>Mark read</button>
           </div>
-          <div class="email-list-inner" id="email-list-el">
-            <div class="list-empty">Load your unread emails above.</div>
-          </div>
-          <div class="status-strip" id="status-strip" style="display:none;">
-            <div class="mini-spinner" id="strip-spinner" style="display:none;"></div>
-            <span id="strip-msg"></span>
+
+          <!-- Email list -->
+          <div class="section-card" id="list-card">
+            <div class="list-toolbar">
+              <div class="toolbar-left">
+                <label><input type="checkbox" id="sel-all-cb" onchange="toggleSelectAll(this.checked)"> All</label>
+                <span class="sel-count" id="sel-count-label">0 selected</span>
+              </div>
+              <div class="toolbar-right">
+                <select class="sort-select" id="sort-select" onchange="setSortMode(this.value)" aria-label="Sort emails">
+                  <option value="priority">Priority</option>
+                  <option value="date-desc">Newest first</option>
+                  <option value="date-asc">Oldest first</option>
+                  <option value="sender-az">Sender A–Z</option>
+                  <option value="sender-za">Sender Z–A</option>
+                </select>
+                <button class="btn-sm" onclick="fetchEmails()">Load (200)</button>
+              </div>
+              <button class="btn-sm danger" id="mark-read-btn" onclick="bulkMarkRead()" disabled>Mark read</button>
+            </div>
+            <div class="email-list-inner" id="email-list-el">
+              <div class="list-empty">Load your unread emails above.</div>
+            </div>
+            <div class="status-strip" id="status-strip" style="display:none;">
+              <div class="mini-spinner" id="strip-spinner" style="display:none;"></div>
+              <span id="strip-msg"></span>
+            </div>
           </div>
         </div>
 
-        <div style="height:12px;flex-shrink:0;"></div>
+        <div class="bulk-end" style="height:12px;flex-shrink:0;"></div>
       </div>
     </div>
 
@@ -2589,7 +2671,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v146'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v147'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -7784,11 +7866,15 @@ async function openReader(email, opts = {}) {
   // content scrolls natively (no height measurement), and the Mark-as-read
   // footer is revealed once the user reaches the bottom of the email.
   if (email.bodyHtml) {
+    // The frame can't see the page's CSS variables, so the reading width is
+    // handed in; the body's 18px margins sit inside it, as on a phone.
+    const readW = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--read-w')) || 600;
     const wrapped = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <base target="_blank">
 <style>
   html,body{height:100%;}
+  html{max-width:${readW + 36}px;margin:0 auto;}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:15px;line-height:1.55;color:#202124;margin:18px;word-wrap:break-word;-webkit-overflow-scrolling:touch;}
   img{max-width:100%;height:auto;}
   a{color:#1a73e8;}
