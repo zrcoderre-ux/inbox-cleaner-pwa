@@ -2671,7 +2671,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v149'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v150'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -11795,6 +11795,34 @@ function esc(str) {
     .replace(/"/g,'&quot;');
 }
 
+// ── Back gesture ───────────────────────────────────────────
+// Signing in is a full-page trip to Google and back, so Google's sign-in
+// pages stay behind the app in its history. In a browser tab that's harmless,
+// but installed to the home screen there's no address bar, and a back swipe —
+// easy to make by accident while closing a link opened from an email — went
+// to them. So when the installed app has anything behind it, it keeps an
+// entry of its own on top and puts it back whenever a back swipe takes it
+// away: the swipe just lands in the app again. With nothing behind (a fresh
+// launch) there's nothing to guard, and Android's back still leaves the app.
+const IS_INSTALLED = !!((window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone);
+let backGuardArmed = false;
+
+// Armed on the first tap or key rather than at load: a browser may skip a
+// history entry added without the person doing anything, and a sign-in
+// redirect has to have read and tidied its ?code= (or #access_token) first,
+// or the guard entry would carry it.
+function armBackGuard() {
+  if (backGuardArmed || !IS_INSTALLED || history.length < 2) return;
+  if (new URLSearchParams(location.search).has('code') || /access_token=/.test(location.hash)) return;
+  backGuardArmed = true;
+  history.pushState({ icBackGuard: true }, '');
+}
+
+function onBackSwipe(e) {
+  if (!backGuardArmed || (e.state && e.state.icBackGuard)) return;
+  history.pushState({ icBackGuard: true }, '');
+}
+
 // ── Service Worker ─────────────────────────────────────────
 // Register only; we deliberately do NOT auto-reload on controllerchange, which
 // can cause reload loops. Network-first already serves fresh code on next open.
@@ -11810,6 +11838,11 @@ loadKeepOfflineOnly();
 loadKeepMarksRead();
 loadSwipeSortBySender();
 loadUnsubOnBlock();
+if (IS_INSTALLED) {
+  document.addEventListener('pointerdown', armBackGuard, true);
+  document.addEventListener('keydown', armBackGuard, true);
+  window.addEventListener('popstate', onBackSwipe);
+}
 loadAutoScroll();
 loadTts();
 loadKeepListen();   // after loadTts: the mode needs to know if the voice is on
