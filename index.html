@@ -1701,6 +1701,13 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
 /* Slider and select rows put their control under the label, full width. */
 .setting-slider { flex-direction: column; align-items: stretch; gap: 10px; cursor: default; }
 .setting-slider input[type="range"] { width: 100%; height: 24px; accent-color: var(--primary); cursor: pointer; }
+/* Temporary: the candidate "Open in Gmail" links. */
+.link-test { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+.link-test p { font-size: 13px; line-height: 18px; color: var(--on-surface-variant); }
+.link-test p strong { font-weight: 500; color: var(--on-surface); }
+.link-test-row { display: flex; align-items: center; gap: 12px; }
+.link-test-row .btn-sm { flex-shrink: 0; min-width: 44px; text-decoration: none; }
+.link-test-row span { font-size: 13px; line-height: 18px; color: var(--on-surface); }
 .app-version { text-align: center; font-size: 12px; line-height: 16px; color: var(--outline); padding: 24px 0 8px; }
 
 /* ── Bulk Screen ──────────────────────────────────────────── */
@@ -2548,6 +2555,10 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
           <div class="tts-usage" id="tts-usage" style="display:none;"></div>
         </div>
 
+        <!-- Temporary: finds which "Open in Gmail" link Gmail honours. -->
+        <div class="settings-group-title">Gmail link test</div>
+        <div class="section-card link-test" id="gmail-link-test"></div>
+
         <div class="app-version" id="app-version"></div>
       </div>
     </div>
@@ -2671,7 +2682,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v147'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v148'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -5575,6 +5586,7 @@ function openSettings() {
   closeAccountMenu();
   if (activeTab === 'settings') return;
   settingsReturnTab = activeTab;
+  renderGmailLinkTest();
   switchTab('settings');
   const s = document.getElementById('settings-scroll');
   if (s) s.scrollTop = 0;
@@ -7769,6 +7781,62 @@ function gmailUrl(email) {
   return 'https://mail.google.com/mail/' + who + '#all/' + encodeURIComponent(email.id);
 }
 
+// ── Temporary: which "Open in Gmail" link works ───────────
+// Gmail documents no way to link to a message from the API's IDs: a link
+// built from them only opens the email in a Gmail tab that's already loaded,
+// and a phone's browser gets a different Gmail altogether. Settings offers
+// the candidate links for the last email opened, to be tried on a real
+// device; whichever opens the email replaces gmailUrl, and this goes.
+
+// Fills in the email's thread ID and its Message-ID header (the ID every
+// mail client shares), fetching them once if the email didn't come with them.
+async function ensureGmailIds(email) {
+  if (!email.threadId && email.raw && email.raw.threadId) email.threadId = email.raw.threadId;
+  if (email.threadId && email.rfcId !== undefined) return email;
+  if (!onlineReady()) return email;
+  try {
+    const res = await gapi.client.gmail.users.messages.get({
+      userId: 'me', id: email.id, format: 'metadata', metadataHeaders: ['Message-ID'], fields: 'threadId,payload/headers'
+    });
+    email.threadId = res.result.threadId || email.threadId;
+    const h = ((res.result.payload && res.result.payload.headers) || []).find(x => x.name.toLowerCase() === 'message-id');
+    email.rfcId = h ? h.value.trim().replace(/^<|>$/g, '') : '';
+  } catch(e) {}
+  return email;
+}
+
+async function rememberForLinkTest(email) {
+  await ensureGmailIds(email);
+  const rec = { id: email.id, threadId: email.threadId || '', rfcId: email.rfcId || '', subject: email.subject || '' };
+  try { localStorage.setItem('ic_gmail_link_test', JSON.stringify(rec)); } catch(e) {}
+  renderGmailLinkTest();
+}
+
+function gmailLinkCandidates(rec) {
+  const who = activeEmail ? '?authuser=' + encodeURIComponent(activeEmail) : '';
+  const search = rec.rfcId ? encodeURIComponent('rfc822msgid:' + rec.rfcId) : '';
+  const links = [['A', 'The link the button uses now', 'https://mail.google.com/mail/' + who + '#all/' + encodeURIComponent(rec.id)]];
+  if (search) links.push(['B', 'Gmail searches for this one email', 'https://mail.google.com/mail/' + who + '#search/' + search]);
+  if (rec.threadId) links.push(['C', 'Phone version of Gmail: the conversation', 'https://mail.google.com/mail/mu/mp/' + who + '#cv/Inbox/' + encodeURIComponent(rec.threadId)]);
+  if (search) links.push(['D', 'Phone version of Gmail: searches for it', 'https://mail.google.com/mail/mu/mp/' + who + '#tl/search/' + search]);
+  return links;
+}
+
+function renderGmailLinkTest() {
+  const el = document.getElementById('gmail-link-test');
+  if (!el) return;
+  let rec = null;
+  try { rec = JSON.parse(localStorage.getItem('ic_gmail_link_test') || 'null'); } catch(e) {}
+  if (!rec || !rec.id) {
+    el.innerHTML = '<p>Open any email in the reader, then come back here.</p>';
+    return;
+  }
+  el.innerHTML = `<p>Tap each link, see whether Gmail opens <strong>${esc(rec.subject || '(no subject)')}</strong>, then come back and try the next. Note which letters opened the email itself.</p>` +
+    gmailLinkCandidates(rec).map(([letter, what, url]) =>
+      `<div class="link-test-row"><a class="btn-sm" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${letter}</a><span>${what}</span></div>`
+    ).join('');
+}
+
 // Gmail's inbox on the web, in the active account.
 function gmailHomeUrl() {
   return 'https://mail.google.com/mail/' + (activeEmail ? '?authuser=' + encodeURIComponent(activeEmail) : '');
@@ -7818,6 +7886,7 @@ async function openReader(email, opts = {}) {
   renderSubjectSuggestions();
   renderLengthSuggestions();
   readerEmail = email;
+  rememberForLinkTest(email);
   if (readerRO) { readerRO.disconnect(); readerRO = null; }
   // Stop speaking a previously-open email — unless this is the next one,
   // opened by playing on, which keeps the sound going until it speaks.
@@ -11775,6 +11844,7 @@ loadKeepOfflineOnly();
 loadKeepMarksRead();
 loadSwipeSortBySender();
 loadUnsubOnBlock();
+renderGmailLinkTest();
 loadAutoScroll();
 loadTts();
 loadKeepListen();   // after loadTts: the mode needs to know if the voice is on
