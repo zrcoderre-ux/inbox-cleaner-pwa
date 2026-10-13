@@ -2671,7 +2671,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v150'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v151'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -7848,7 +7848,9 @@ async function openReader(email, opts = {}) {
   renderBlockSuggestions();
   renderSubjectSuggestions();
   renderLengthSuggestions();
+  const wasOpen = !!readerEmail;
   readerEmail = email;
+  if (!wasOpen) readerOpenedForHistory();
   if (readerRO) { readerRO.disconnect(); readerRO = null; }
   // Stop speaking a previously-open email — unless this is the next one,
   // opened by playing on, which keeps the sound going until it speaks.
@@ -8180,7 +8182,8 @@ function setReaderZoom(on) {
     : 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no');
 }
 
-function closeReader() {
+// opts.viaHistory: closed by going back, whose step has already been taken.
+function closeReader(opts) {
   hideFootnote(true);
   unwatchFrameFootnotes();
   const overlay = document.getElementById('reader-overlay');
@@ -8197,6 +8200,7 @@ function closeReader() {
   const bodyEl = document.getElementById('reader-body');
   bodyEl.innerHTML = '';
   readerEmail = null;
+  readerClosedForHistory(!!(opts && opts.viaHistory));
   // A reconnect happened while reading — now reload into the online flow.
   if (pendingReload) location.reload();
 }
@@ -11804,6 +11808,11 @@ function esc(str) {
 // entry of its own on top and puts it back whenever a back swipe takes it
 // away: the swipe just lands in the app again. With nothing behind (a fresh
 // launch) there's nothing to guard, and Android's back still leaves the app.
+//
+// The open email has an entry too, everywhere, so going back — a swipe, a
+// phone's back button, a browser's — closes it, as it would in a phone's own
+// apps. It's taken back when the reader is closed any other way, so spent
+// entries never pile up for back to wade through.
 const IS_INSTALLED = !!((window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone);
 let backGuardArmed = false;
 
@@ -11813,14 +11822,56 @@ let backGuardArmed = false;
 // or the guard entry would carry it.
 function armBackGuard() {
   if (backGuardArmed || !IS_INSTALLED || history.length < 2) return;
+  // Not on top of an open email's entry: back would then find the guard
+  // first, and the swipe wouldn't close the email. The next tap arms it.
+  if (readerInHistory) return;
   if (new URLSearchParams(location.search).has('code') || /access_token=/.test(location.hash)) return;
   backGuardArmed = true;
   history.pushState({ icBackGuard: true }, '');
 }
 
-function onBackSwipe(e) {
-  if (!backGuardArmed || (e.state && e.state.icBackGuard)) return;
-  history.pushState({ icBackGuard: true }, '');
+let readerInHistory = false;     // the open email's entry is the current one
+let historyBackPending = false;  // the reader closed from the app; its entry is being taken back
+
+function pushReaderEntry() {
+  history.pushState({ icReader: true }, '');
+  readerInHistory = true;
+}
+
+// From openReader, when the reader goes from closed to open.
+function readerOpenedForHistory() {
+  // The last email's entry is still being taken back; this one's is added
+  // once that has landed (onHistoryPop), or it would be the one taken.
+  if (historyBackPending) return;
+  pushReaderEntry();
+}
+
+// From closeReader. Closed by going back, the entry is already gone; closed
+// any other way, it's taken back. Not when the app is about to reload: the
+// reload and the step back would race, and init tidies the entry instead.
+function readerClosedForHistory(viaHistory) {
+  if (!readerInHistory) return;
+  readerInHistory = false;
+  if (viaHistory || pendingReload) return;
+  historyBackPending = true;
+  history.back();
+}
+
+function onHistoryPop(e) {
+  const st = e.state || {};
+  if (historyBackPending) {
+    // The app's own step back, after closing the reader: nothing to undo —
+    // unless another email opened meanwhile, which gets its entry now.
+    historyBackPending = false;
+    if (readerEmail && !readerInHistory) pushReaderEntry();
+    return;
+  }
+  if (readerInHistory && !st.icReader) {
+    readerInHistory = false;
+    closeReader({ viaHistory: true });
+    return;
+  }
+  if (backGuardArmed && !st.icBackGuard) history.pushState({ icBackGuard: true }, '');
 }
 
 // ── Service Worker ─────────────────────────────────────────
@@ -11841,8 +11892,11 @@ loadUnsubOnBlock();
 if (IS_INSTALLED) {
   document.addEventListener('pointerdown', armBackGuard, true);
   document.addEventListener('keydown', armBackGuard, true);
-  window.addEventListener('popstate', onBackSwipe);
 }
+window.addEventListener('popstate', onHistoryPop);
+// Reloaded while an email was open: the reader is closed now, so its entry
+// is just the app's.
+if (history.state && history.state.icReader) history.replaceState(null, '');
 loadAutoScroll();
 loadTts();
 loadKeepListen();   // after loadTts: the mode needs to know if the voice is on
