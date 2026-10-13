@@ -192,7 +192,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
   .suggest-dismiss-btn:hover, .section-card-header:hover, .email-item:hover,
   .acct-row:hover, .reader-close:hover, .reader-listen:hover, .reader-gmail:hover, .reader-mark-read:hover,
   .btn-secondary:hover, .gsi-btn:not(:disabled):hover,
-  .keep-row-mark:hover, .setting-row:not(.setting-slider):hover, .tts-linkbtn:hover {
+  .keep-row-mark:hover, .keep-menu-item:hover, .setting-row:not(.setting-slider):hover, .tts-linkbtn:hover {
     background-image: linear-gradient(var(--hover-layer), var(--hover-layer));
   }
 }
@@ -203,7 +203,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
 .suggest-dismiss-btn:active, .section-card-header:active, .email-item:active,
 .acct-row:active, .reader-close:active, .reader-listen:active, .reader-gmail:active, .reader-mark-read:active,
 .btn-secondary:active, .gsi-btn:not(:disabled):active,
-.keep-row-mark:active, .setting-row:not(.setting-slider):active {
+.keep-row-mark:active, .keep-menu-item:active, .setting-row:not(.setting-slider):active {
   background-image: linear-gradient(var(--press-layer), var(--press-layer));
 }
 
@@ -1623,6 +1623,35 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
 }
 .keep-row-mark svg { width: 20px; height: 20px; }
 
+/* Right-click menu on a Keep row: the computer's way to the Mark read that a
+   phone swipes for. Fixed, so it opens where the pointer is. */
+.keep-menu {
+  position: fixed;
+  z-index: 1200;
+  min-width: 180px;
+  padding: 8px 0;
+  background: var(--menu-bg);
+  border-radius: var(--r-sm);
+  box-shadow: var(--elev-2);
+}
+.keep-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 48px;
+  padding: 0 16px 0 12px;
+  border: none;
+  background-color: transparent;
+  color: var(--on-surface);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.keep-menu-item svg { color: var(--on-surface-variant); }
+/* The row the menu is for stays tinted while it's open. */
+.keep-row.kr-menu .keep-item { background-image: linear-gradient(var(--hover-layer), var(--hover-layer)); }
+
 .keep-offline {
   display: flex;
   align-items: center;
@@ -2584,6 +2613,9 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
 
 <div id="toast" role="status" aria-live="polite"></div>
 
+<!-- Right-click menu for a Keep row; filled in when it opens -->
+<div class="keep-menu" id="keep-menu" role="menu" aria-label="Kept email" style="display:none;"></div>
+
 <!-- Focused reader overlay -->
 <div class="reader-overlay" id="reader-overlay">
   <div class="reader-header">
@@ -2671,7 +2703,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v151'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v152'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -2722,6 +2754,8 @@ const KEEP_OPENED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // The kept emails as last rendered, in display order. Used to attribute a
 // pass to every other sender that was on screen when you opened one.
 let keepListItems = [];
+// The kept email a right-click menu is open on, or null when none is.
+let keepMenuId = null;
 // Standing per-sender rules applied to every fetch, in two categories:
 //   'block' → new mail goes to spam (out of the inbox)
 //   'read'  → new mail is marked read but stays in the inbox
@@ -6609,6 +6643,8 @@ async function renderKeepList() {
   }
   items.sort(keepComparator(keepSortMode, items));
   keepListItems = items;
+  // A menu left open on an email that's no longer listed has nothing to act on.
+  if (keepMenuId && !items.some(i => i.id === keepMenuId)) closeKeepMenu();
 
   const filtering = q || keepOfflineOnly || keepListenMode;
   const countLabel = document.getElementById('keep-count-label');
@@ -6636,7 +6672,7 @@ async function renderKeepList() {
   el.innerHTML = offlineBanner + items.map(e => {
     const { name, addr } = parseSender(e.sender || '');
     return `
-    <div class="keep-row" data-id="${e.id}">
+    <div class="keep-row${e.id === keepMenuId ? ' kr-menu' : ''}" data-id="${e.id}">
       <div class="keep-row-action"><button class="keep-row-mark" onclick="markKeptRead('${e.id}')">${icon('drafts')}Mark read</button></div>
       <div class="email-item keep-item" onclick="openKept('${e.id}')">
         ${senderAvatarHTML(e.sender)}
@@ -6756,6 +6792,72 @@ function initKeepSwipe() {
   };
   list.addEventListener('touchend', end);
   list.addEventListener('touchcancel', end);
+}
+
+// ── Keep-row right-click menu ──────────────────────────────
+// A computer has no swipe to reveal a row's Mark read, so a right click opens
+// it as a menu instead. A long press on a touch screen is left alone: phones
+// have the swipe, and keep whatever the press did before.
+let keepMenuPointer = 'mouse'; // what last pressed down: 'mouse', 'pen' or 'touch'
+
+function openKeepMenu(row, x, y) {
+  const m = document.getElementById('keep-menu');
+  if (!m || !row) return;
+  closeKeepMenu();
+  keepMenuId = row.getAttribute('data-id');
+  row.classList.add('kr-menu');
+  m.innerHTML = '<button class="keep-menu-item" role="menuitem" onclick="keepMenuMarkRead()">' +
+    icon('drafts') + 'Mark as read</button>';
+  m.style.display = 'block';
+  // Down and right of the pointer, flipped to the other side where that would
+  // run off the window.
+  const w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = Math.max(8, x + w > window.innerWidth - 8 ? x - w : x) + 'px';
+  m.style.top = Math.max(8, y + h > window.innerHeight - 8 ? y - h : y) + 'px';
+}
+
+function closeKeepMenu() {
+  if (!keepMenuId) return;
+  keepMenuId = null;
+  const m = document.getElementById('keep-menu');
+  if (m) { m.style.display = 'none'; m.innerHTML = ''; }
+  document.querySelectorAll('.keep-row.kr-menu').forEach(r => r.classList.remove('kr-menu'));
+}
+
+function keepMenuMarkRead() {
+  const id = keepMenuId;
+  closeKeepMenu();
+  if (id) markKeptRead(id);
+}
+
+function initKeepMenu() {
+  const list = document.getElementById('keep-list-el');
+  const menu = document.getElementById('keep-menu');
+  if (!list || !menu || list._kmBound) return;
+  list._kmBound = true;
+
+  // Capture, so a press anywhere closes the menu before it does anything else
+  // — including a right click on another row, which then opens its own.
+  document.addEventListener('pointerdown', e => {
+    keepMenuPointer = e.pointerType || 'mouse';
+    if (keepMenuId && !(e.target.closest && e.target.closest('#keep-menu'))) closeKeepMenu();
+  }, true);
+  list.addEventListener('contextmenu', e => {
+    if (keepMenuPointer === 'touch') return;
+    const row = e.target.closest('.keep-row');
+    if (!row) return;
+    e.preventDefault();
+    openKeepMenu(row, e.clientX, e.clientY);
+  });
+  menu.addEventListener('contextmenu', e => e.preventDefault());
+  document.addEventListener('keydown', e => {
+    if (keepMenuId && e.key === 'Escape') closeKeepMenu();
+  }, true);
+  // Anything that moves the row out from under the menu closes it, as a
+  // browser's own menu would.
+  document.addEventListener('scroll', closeKeepMenu, true);
+  window.addEventListener('resize', closeKeepMenu);
+  window.addEventListener('blur', closeKeepMenu);
 }
 
 function updateKeepBadge() {
@@ -11904,6 +12006,7 @@ loadClientId();
 setSwipeMode('triage'); // reflect the keep setting in the action labels/hint
 updateAccountChip();
 initKeepSwipe(); // enable swipe-left-to-mark-read on Keep rows
+initKeepMenu();  // and right-click-to-mark-read on a computer
 initTrackpadSwipe(); // trackpad two-finger swipe and mouse Shift+wheel
 // A tap anywhere outside a footnote marker dismisses its popup.
 document.addEventListener('click', e => {
