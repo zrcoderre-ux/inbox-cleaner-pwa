@@ -2703,7 +2703,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v152'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v153'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -8407,7 +8407,13 @@ function ttsCutAt(text, patterns) {
 // The line a bulk mailer is obliged to print: whose copyright it is, and the
 // address it was sent from. Nobody wrote it to be read and nobody wants to
 // hear it, wherever it ends up sitting.
-const TTS_COPYRIGHT_RE = /(?:\u00A9|\(c\)|\bcopyright\b)\s*(?:19|20)\d{2}\b|\b(?:19|20)\d{2}\s*(?:\u00A9|\bcopyright\b)/i;
+// The notice's own shapes only: the mark or the word, then the year \u2014 or the
+// year then the mark. The year then the word counts only where it opens the
+// line, as "2024 Copyright Acme" does; mid-sentence it is prose about the law
+// \u2014 "section 304(c) of the 1976 Copyright Act" \u2014 and that sentence was being
+// dropped, or, standing short in the back half, taking the rest of the email
+// with it. A "(c)" joined to a word is a subsection, not the mark.
+const TTS_COPYRIGHT_RE = /(?:\u00A9|(?<!\w)\(c\)|\bcopyright\b)\s*(?:19|20)\d{2}\b|\b(?:19|20)\d{2}\s*\u00A9|^\W*(?:19|20)\d{2}\s*copyright\b/i;
 // A street number, something that names a street, and a state and a ZIP at the
 // end of it. All three together, so an article that mentions a street stays.
 const TTS_ADDRESS_RE = new RegExp('(?:' + [
