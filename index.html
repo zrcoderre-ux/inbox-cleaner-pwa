@@ -2703,7 +2703,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v154'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v155'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -9266,6 +9266,10 @@ function ttsAudioEl() {
   ttsAudio.addEventListener('play', () => { ttsAudio._sounding = false; });
   ttsAudio.addEventListener('playing', () => { ttsAudio._sounding = true; });
   ttsAudio.addEventListener('timeupdate', ttsTopUp);
+  // The lock screen's figures, kept from these rather than from the frame loop:
+  // frames stop with the screen, and these don't.
+  ttsAudio.addEventListener('timeupdate', ttsAudioTick);
+  ttsAudio.addEventListener('playing', () => { ttsNoteDuration(ttsSession); ttsSetPositionState(); });
   return ttsAudio;
 }
 
@@ -10952,12 +10956,7 @@ function ttsSyncScroll(ts) {
   const s = ttsSession;
   if (!s) { ttsScrollRaf = null; return; }
   ttsScrollRaf = requestAnimationFrame(ttsSyncScroll);
-  // A passage that has loaded knows its real length; keep it, so what's left
-  // of the email stops being a guess as it goes.
-  if (s.mode === 'cloud' && ttsHeld(s) && isFinite(ttsAudio.duration) && ttsAudio.duration > 0) {
-    if (!s.durations) s.durations = [];
-    if (!s.durations[s.i]) { s.durations[s.i] = ttsRealDuration(s, s.i); ttsSetPositionState(); }
-  }
+  ttsNoteDuration(s);
   // The bar shows where the voice is, which has nothing to do with whether the
   // page can be scrolled — so it is painted before any of the reasons for not
   // moving the page. It used to sit below them, and froze at nought whenever
@@ -11167,20 +11166,54 @@ function ttsSetMediaSession() {
   set('nexttrack', () => ttsSkip(1));
 }
 
+// A passage that has loaded knows its real length; keep it, so what's left
+// of the email stops being a guess as it goes.
+function ttsNoteDuration(s) {
+  if (!s || s.mode !== 'cloud' || !ttsHeld(s) || !isFinite(ttsAudio.duration) || !(ttsAudio.duration > 0)) return;
+  if (!s.durations) s.durations = [];
+  if (!s.durations[s.i]) { s.durations[s.i] = ttsRealDuration(s, s.i); ttsSetPositionState(); }
+}
+
 // Without this the lock screen counts down the passage in hand, which is a
 // minute or so and means nothing to anyone. Handing it the whole email's
 // figures makes the bar there the email's bar.
+//
+// Told once, the lock screen counts on by itself, but it was only being told
+// when a passage's length first became known — and that was noticed by the
+// frame loop, which stops when the screen goes off. So it was left counting
+// from the last time the app was looked at, and a new passage starting could
+// set it back to that passage's own clock: 0:15 on the lock screen with half
+// the email gone. It is now retold as the voice goes (ttsAudioTick) and the
+// moment each passage starts.
+//
+// The figures are wall-clock seconds, at a rate of 1, so the lock screen's
+// "left" is the same time the player shows: at 1.35x, media seconds would
+// count down a third more time than there actually is.
 function ttsSetPositionState() {
   if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
-  const t = ttsTiming(ttsSession);
+  const s = ttsSession;
+  const t = ttsTiming(s);
   if (!t || !(t.total > 0)) return;
+  const rate = ttsRate || 1;
   try {
     navigator.mediaSession.setPositionState({
-      duration: t.total,
-      position: Math.min(t.position, t.total),
-      playbackRate: ttsRate
+      duration: t.total / rate,
+      position: Math.min(t.position, t.total) / rate,
+      playbackRate: 1
     });
+    s.posStateAt = Date.now();
   } catch(e) {}
+}
+
+// Retold every few seconds while the voice runs. Between tellings the lock
+// screen keeps time itself; this only corrects the drift from estimated
+// passage lengths giving way to real ones.
+const TTS_POSITION_EVERY = 5000;
+function ttsAudioTick() {
+  const s = ttsSession;
+  if (!s || !s.playing) return;
+  ttsNoteDuration(s);
+  if (!s.posStateAt || Date.now() - s.posStateAt >= TTS_POSITION_EVERY) ttsSetPositionState();
 }
 
 function ttsClearMediaSession() {
@@ -11279,6 +11312,7 @@ function ttsPaintTrack() {
       const text = ttsFormatTime(t.remaining / (ttsRate || 1)) + ' left';
       if (prog.textContent !== text) prog.textContent = text;
     }
+    if (s.playing && (!s.posStateAt || now - s.posStateAt >= TTS_POSITION_EVERY)) ttsSetPositionState();
   }
   if (label) {
     const line = s && s.lines && s.lines.length ? s.lines[ttsLineAtChar(s, frac * s.total)] : null;
@@ -11322,7 +11356,7 @@ function ttsUpdateUI() {
     btn.innerHTML = (s && s.playing) ? icon('pause') : icon('play');
     btn.setAttribute('aria-label', (s && s.playing) ? 'Pause' : 'Play');
   }
-  if (s) s.clockAt = 0;      // let the next paint recompute what's left
+  if (s) { s.clockAt = 0; ttsSetPositionState(); }   // let the next paint recompute what's left
   else {
     const prog = document.getElementById('rtts-progress');
     if (prog) prog.textContent = '';
