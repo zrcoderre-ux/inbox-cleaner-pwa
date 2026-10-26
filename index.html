@@ -2703,7 +2703,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v153'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v154'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -8387,6 +8387,8 @@ let ttsBridgeTimer = null;
 // { paused } — whether the next one should open paused.
 let ttsHandoff = null;
 let ttsScrollRaf = null;
+// Where the voice was when the app went into the background: { s, pos }.
+let ttsLeftAt = null;
 let ttsKeepTimer = null;
 let ttsDeviceVoices = [];
 
@@ -10148,8 +10150,25 @@ function ttsSilenceDeviceVoice() {
 }
 
 function ttsOnVisibilityChange() {
-  if (!ttsSession || !document.hidden) return;
-  ttsPrefetch(ttsSession.i + 1, TTS_PREFETCH_HIDDEN);
+  if (!ttsSession) { ttsLeftAt = null; return; }
+  if (document.hidden) {
+    ttsLeftAt = { s: ttsSession, pos: ttsCharPos(ttsSession) };
+    ttsPrefetch(ttsSession.i + 1, TTS_PREFETCH_HIDDEN);
+    return;
+  }
+  // Back from listening with the app in the background. The page stood still
+  // the whole time — nothing draws while it's hidden — so it is now well behind
+  // the voice, and the ordinary follow would only close that gap at reading
+  // pace and a bit. Nobody was watching the page meanwhile, so it goes straight
+  // to where the voice is, as "Back to the voice" would, even if it had been
+  // scrolled away by hand before leaving. A voice that didn't move (paused the
+  // whole time) leaves the page where the reader left it.
+  const left = ttsLeftAt;
+  ttsLeftAt = null;
+  const s = ttsSession;
+  if (left && left.s === s && ttsCharPos(s) - left.pos < 1) return;
+  ttsResync();
+  s.snapToVoice = true;
 }
 
 // Whether to finish the email with the device's own voice.
@@ -10918,6 +10937,7 @@ const TTS_RESYNC_LEAD = 0.45;     // catching back up is brisker
 const TTS_RESYNC_TAU = 0.12;
 const TTS_RESYNC_MAX = 2400;
 const TTS_READ_LINE = 0.3;        // where the line being read sits in the view
+const TTS_SNAP_GAP = 0.25;        // of a screen: further behind than this, jump
 
 // Not moving this frame: let the speed fall to nought and forget the last
 // frame's clock, so whatever resumes ramps up from rest instead of spending
@@ -10945,7 +10965,9 @@ function ttsSyncScroll(ts) {
   // hand, or the mail was HTML the reader can't reach into. Which looked, from
   // the outside, like no bar at all.
   ttsPaintTrack();
-  if (!s.playing || ttsDrag) { ttsHoldScroll(s); return; }
+  // A return from the background moves the page even while paused: the voice
+  // went on without it, and that is where the reader expects to find it.
+  if ((!s.playing && !s.snapToVoice) || ttsDrag) { ttsHoldScroll(s); return; }
   if (s.userScrolled) { ttsHoldScroll(s); return; }
   const t = readerScrollTarget();
   if (!t) { ttsHoldScroll(s); return; }
@@ -10986,38 +11008,50 @@ function ttsSyncScroll(ts) {
   target = Math.max(0, Math.min(target, span));
   if (s.scrollPos == null) { s.scrollPos = t.scroller.scrollTop; s.scrollVel = 0; }
 
-  // Elapsed time drives the movement, so a dropped frame doesn't change the
-  // pace — and, capped the way auto-scroll caps it, a long one doesn't lurch.
-  const now = (typeof ts === 'number') ? ts
-    : ((window.performance && performance.now) ? performance.now() : Date.now());
-  if (!s.lastFrame) s.lastFrame = now;
-  let dt = (now - s.lastFrame) / 1000;
-  s.lastFrame = now;
-  if (dt > 0.048) dt = 0.048;
-  if (dt <= 0) return;
-
-  if (!s.resyncing) {
-    // Never behind where the reader already is: a page they nudged forward
-    // stays forward, and the follow picks up from there.
-    if (s.scrollPos < t.scroller.scrollTop) { s.scrollPos = t.scroller.scrollTop; s.scrollVel = 0; }
+  // Back from the background: more than a little behind, the page is put where
+  // the voice is at once. A gap that small is left to the resync glide.
+  let jumped = false;
+  if (s.snapToVoice) {
+    s.snapToVoice = false;
+    if (Math.abs(target - s.scrollPos) > t.scroller.clientHeight * TTS_SNAP_GAP) {
+      s.scrollPos = target; s.scrollVel = 0; s.resyncing = false; s.lastFrame = 0;
+      jumped = true;
+    }
   }
-  const lead = s.resyncing ? TTS_RESYNC_LEAD : TTS_FOLLOW_LEAD;
-  const tau  = s.resyncing ? TTS_RESYNC_TAU : TTS_FOLLOW_TAU;
-  const cap  = s.resyncing ? TTS_RESYNC_MAX : TTS_FOLLOW_MAX;
-  // How far ahead the voice is, read as how fast to travel. Only a resync may
-  // come out negative — a voice that has just moved on shouldn't drag the page
-  // up to meet it.
-  let want = (target - s.scrollPos) / lead;
-  if (!s.resyncing && want < 0) want = 0;
-  want = Math.max(-cap, Math.min(want, cap));
-  // Easing the speed rather than the position is what turns the step at each
-  // new sentence into a change of pace instead of a jolt. Exponential in dt,
-  // so the smoothing is the same on a 60Hz screen and a 120Hz one.
-  const vel = s.scrollVel || 0;
-  s.scrollVel = vel + (want - vel) * (1 - Math.exp(-dt / tau));
-  s.scrollPos += s.scrollVel * dt;
-  if (s.resyncing && Math.abs(target - s.scrollPos) < 1.5) {
-    s.scrollPos = target; s.scrollVel = 0; s.resyncing = false;
+  if (!jumped) {
+    // Elapsed time drives the movement, so a dropped frame doesn't change the
+    // pace — and, capped the way auto-scroll caps it, a long one doesn't lurch.
+    const now = (typeof ts === 'number') ? ts
+      : ((window.performance && performance.now) ? performance.now() : Date.now());
+    if (!s.lastFrame) s.lastFrame = now;
+    let dt = (now - s.lastFrame) / 1000;
+    s.lastFrame = now;
+    if (dt > 0.048) dt = 0.048;
+    if (dt <= 0) return;
+
+    if (!s.resyncing) {
+      // Never behind where the reader already is: a page they nudged forward
+      // stays forward, and the follow picks up from there.
+      if (s.scrollPos < t.scroller.scrollTop) { s.scrollPos = t.scroller.scrollTop; s.scrollVel = 0; }
+    }
+    const lead = s.resyncing ? TTS_RESYNC_LEAD : TTS_FOLLOW_LEAD;
+    const tau  = s.resyncing ? TTS_RESYNC_TAU : TTS_FOLLOW_TAU;
+    const cap  = s.resyncing ? TTS_RESYNC_MAX : TTS_FOLLOW_MAX;
+    // How far ahead the voice is, read as how fast to travel. Only a resync may
+    // come out negative — a voice that has just moved on shouldn't drag the page
+    // up to meet it.
+    let want = (target - s.scrollPos) / lead;
+    if (!s.resyncing && want < 0) want = 0;
+    want = Math.max(-cap, Math.min(want, cap));
+    // Easing the speed rather than the position is what turns the step at each
+    // new sentence into a change of pace instead of a jolt. Exponential in dt,
+    // so the smoothing is the same on a 60Hz screen and a 120Hz one.
+    const vel = s.scrollVel || 0;
+    s.scrollVel = vel + (want - vel) * (1 - Math.exp(-dt / tau));
+    s.scrollPos += s.scrollVel * dt;
+    if (s.resyncing && Math.abs(target - s.scrollPos) < 1.5) {
+      s.scrollPos = target; s.scrollVel = 0; s.resyncing = false;
+    }
   }
   s.scrollPos = Math.max(0, Math.min(s.scrollPos, span));
 
@@ -11050,6 +11084,7 @@ function ttsManualScroll() {
   if (s.resumeTimer) { clearTimeout(s.resumeTimer); s.resumeTimer = null; }
   s.userScrolled = true;
   s.resyncing = false;
+  s.snapToVoice = false;
   ttsShowResync(true);
 }
 
