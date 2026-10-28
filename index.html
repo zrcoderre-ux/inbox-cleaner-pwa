@@ -2703,7 +2703,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v155'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v156'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -8646,14 +8646,36 @@ const TTS_INITIALISM = /\b(?:[A-Za-z]\.){2,}/g;
 // one letter of a person, not one sentence of an email.
 const TTS_INITIAL = /\b[A-Z]\.(?=\s+[A-Z])/g;
 
-function splitSentences(text) {
+// A heading, a title or a list item ends at its line with no stop of its own,
+// and joined to what follows by nothing but a space it was read straight into
+// it — "33-Year-Old Woman Latest in…" as one breath. A line like that is
+// tagged here, and given a full stop where the passage is put together, so
+// the voice pauses after it the way it does between sentences. The stop goes
+// only into what is spoken: the line keeps its own words, since it is shown in
+// the player and looked for on the page.
+const TTS_PAUSE = '\u0005';
+// What already ends a line audibly, past any closing quotation mark, bracket or
+// italic mark: a line ending on one of these needs nothing added.
+const TTS_ENDS_STOPPED = /[.!?,;:…–—-][\s"'’”»›)\]\u0002\u0003]*$/;
+// And what ends a sentence outright.
+const TTS_ENDS_SENTENCE = /[.!?][\s"'’”»›)\]\u0002\u0003]*$/;
+// Plain text is wrapped at a fixed width, so a line break there is usually the
+// middle of a sentence. Only a short line standing entirely on its own is taken
+// for a heading; a wrapped line runs nearly the full width.
+const TTS_PLAIN_HEAD_CHARS = 60;
+
+function splitSentences(text, opts = {}) {
   const masked = String(text || '')
     .replace(TTS_ABBREV, m => m.replace(/\./g, TTS_DOT))
     .replace(TTS_DECIMAL, '$1' + TTS_DOT)
     .replace(TTS_INITIALISM, m => m.slice(0, -1).replace(/\./g, TTS_DOT) + m.slice(-1))
     .replace(TTS_INITIAL, m => m[0] + TTS_DOT);
   const out = [];
+  // Whether the last sentence kept ended on a stop of its own, judged before
+  // the masked stops go back in — "Sept." at the end of a line isn't one.
+  let stopped = false;
   masked.split('\n').forEach(line => {
+    let pieces = 0, rejoined = false;
     // Runs of text up to a terminator (or the end of the line). The leading
     // [^.!?]+ can't match empty, so this always advances.
     // The terminator takes the marks that close after it — the quotation the
@@ -8674,8 +8696,20 @@ function splitSentences(text) {
           TTS_COPYRIGHT_RE.test(sentence) || TTS_ADDRESS_RE.test(sentence)) continue;
       // A break before a digit or a lowercase word wasn't the end of a
       // sentence — "Sept. 14", "No. 3", an initial. Put it back together.
-      if (out.length && /^[0-9a-z]/.test(sentence)) out[out.length - 1] += ' ' + sentence;
-      else out.push(sentence);
+      // Across a line break, only where the line before didn't end one: a
+      // heading that opens on a number — "33-Year-Old Woman" — was being read
+      // as the tail of the paragraph above it.
+      const carried = !pieces && stopped;
+      if (out.length && !carried && /^[0-9a-z]/.test(sentence)) {
+        out[out.length - 1] = out[out.length - 1].replace(TTS_PAUSE, '') + ' ' + sentence;
+        if (!pieces) rejoined = true;
+      } else out.push(sentence);
+      stopped = TTS_ENDS_SENTENCE.test(m[0].trim());
+      pieces++;
+    }
+    if (!pieces || TTS_ENDS_STOPPED.test(out[out.length - 1])) return;
+    if (opts.blocks || (pieces === 1 && !rejoined && line.trim().length <= TTS_PLAIN_HEAD_CHARS)) {
+      out[out.length - 1] += TTS_PAUSE;
     }
   });
   return out;
@@ -8715,6 +8749,8 @@ function chunkSentences(sentences, outLines) {
   // long that sentence is and whatever it costs the first passage's budget.
   const opening = () => !chunks.length && held === 1;
   sentences.forEach(s => {
+    const pause = s.endsWith(TTS_PAUSE);
+    if (pause) s = s.slice(0, -1);
     if (s.length > TTS_CHUNK_CHARS) {
       const opener = opening() ? cur : '';
       if (!opener) flush(); else { cur = ''; held = 0; }
@@ -8729,6 +8765,7 @@ function chunkSentences(sentences, outLines) {
     // While cur is being built, chunks.length is the index it will be given.
     if (outLines) outLines.push({ chunk: chunks.length, at: cur ? cur.length + 1 : 0, text: s });
     cur = cur ? cur + ' ' + s : s;
+    if (pause) cur += '.';    // the passage only; the line above keeps its words
     held++;
   });
   flush();
@@ -9215,10 +9252,13 @@ function ttsSsmlFor(s, i) {
 function buildSpeech(email) {
   // The page's own text where there is any, so the italics arrive with the
   // words they belong to; the plain-text part only where a mail has no HTML.
-  const source = (email.bodyHtml && ttsTextFromHtml(email.bodyHtml)) || email.bodyText || '';
+  const html = email.bodyHtml ? ttsTextFromHtml(email.bodyHtml) : '';
+  const source = html || email.bodyText || '';
   const body = cleanForSpeech(source);
   const lines = [];
-  const marked = chunkSentences(splitSentences(body), lines);
+  // From the page, every line is a block of its own, so a line with no stop is
+  // a heading; from plain text it may be a sentence wrapped in two.
+  const marked = chunkSentences(splitSentences(body, { blocks: !!html }), lines);
   // The marks have ridden this far with the text. Taking them out now leaves
   // every passage as the voice will hear it, and every italic phrase as a pair
   // of offsets into it.
