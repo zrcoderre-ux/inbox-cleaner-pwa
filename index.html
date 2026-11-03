@@ -2703,7 +2703,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v156'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v157'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -7536,6 +7536,10 @@ function recomputeAutoScrollSpeed() {
 function startAutoScroll(scroller, doc) {
   stopAutoScrollEngine();
   if (!scroller) return;
+  // Read-aloud drives the scroll at the voice's pace while it's on, including
+  // the hand-over between emails. A start timed from the email opening must
+  // not land under a voice that began meanwhile (Listen tapped straight away).
+  if (ttsSession || ttsHandoff) return;
   if (scroller.scrollHeight - scroller.clientHeight <= 4) return; // nothing to scroll
   asState = { scroller, doc, running: true, suspended: false, userPaused: false,
               pxPerSec: 20, last: 0, pos: scroller.scrollTop, lastWritten: null,
@@ -10761,7 +10765,9 @@ async function finishReadAloud() {
   // The good voice proving itself on this email counts for the next one; the
   // device voice reading it to the end proves nothing about a pocket.
   if (onward) { ttsHandoff = { paused: false, proven: !!(prev.mode === 'cloud' && prev.played) }; ttsBridge(); }
-  stopReadAloud({ keepSound: onward });
+  // An email heard to the end doesn't go back to auto-scroll: the voice drove
+  // its page, and the reader is about to show the footer or move on.
+  stopReadAloud({ keepSound: onward, handBack: false });
   // Where to go next is settled before the mailbox changes: marking this email
   // read takes it out of the Keep list the queue is read from, and the row
   // after it can't be found from a row that is no longer there.
@@ -10812,8 +10818,9 @@ function stopReadAloud(opts = {}) {
   ttsShowBar(false);
   hideVoicePicker();
   updateListenButton();
-  // Hand the reader back to auto-scroll if that's what the user had running.
-  if (s && autoScrollEnabled && readerEmail) {
+  // Hand the reader back to auto-scroll if that's what the user had running —
+  // when listening is stopped partway, not when the email was heard through.
+  if (s && opts.handBack !== false && autoScrollEnabled && readerEmail) {
     const t = readerScrollTarget();
     if (t) startAutoScroll(t.scroller, t.doc);
   }
