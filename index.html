@@ -2703,7 +2703,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v157'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v158'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -8658,6 +8658,11 @@ const TTS_INITIAL = /\b[A-Z]\.(?=\s+[A-Z])/g;
 // only into what is spoken: the line keeps its own words, since it is shown in
 // the player and looked for on the page.
 const TTS_PAUSE = '\u0005';
+// A picture stands below the line this ends. The passage is ended there, and
+// the voice waits at the join while the page is carried past the picture
+// (ttsPictureHold), instead of reading on into text that is still a photo's
+// height below the screen while the photo slides by at reading pace.
+const TTS_PICTURE = '\u0006';
 // What already ends a line audibly, past any closing quotation mark, bracket or
 // italic mark: a line ending on one of these needs nothing added.
 const TTS_ENDS_STOPPED = /[.!?,;:…–—-][\s"'’”»›)\]\u0002\u0003]*$/;
@@ -8678,7 +8683,9 @@ function splitSentences(text, opts = {}) {
   // Whether the last sentence kept ended on a stop of its own, judged before
   // the masked stops go back in — "Sept." at the end of a line isn't one.
   let stopped = false;
-  masked.split('\n').forEach(line => {
+  masked.split('\n').forEach(whole => {
+    const pictured = whole.endsWith(TTS_PICTURE);
+    const line = pictured ? whole.slice(0, -1) : whole;
     let pieces = 0, rejoined = false;
     // Runs of text up to a terminator (or the end of the line). The leading
     // [^.!?]+ can't match empty, so this always advances.
@@ -8705,15 +8712,20 @@ function splitSentences(text, opts = {}) {
       // as the tail of the paragraph above it.
       const carried = !pieces && stopped;
       if (out.length && !carried && /^[0-9a-z]/.test(sentence)) {
-        out[out.length - 1] = out[out.length - 1].replace(TTS_PAUSE, '') + ' ' + sentence;
+        out[out.length - 1] = out[out.length - 1].replace(TTS_PAUSE, '').replace(TTS_PICTURE, '') + ' ' + sentence;
         if (!pieces) rejoined = true;
       } else out.push(sentence);
       stopped = TTS_ENDS_SENTENCE.test(m[0].trim());
       pieces++;
     }
-    if (!pieces || TTS_ENDS_STOPPED.test(out[out.length - 1])) return;
-    if (opts.blocks || (pieces === 1 && !rejoined && line.trim().length <= TTS_PLAIN_HEAD_CHARS)) {
+    if (pieces && !TTS_ENDS_STOPPED.test(out[out.length - 1]) &&
+        (opts.blocks || (pieces === 1 && !rejoined && line.trim().length <= TTS_PLAIN_HEAD_CHARS))) {
       out[out.length - 1] += TTS_PAUSE;
+    }
+    // Last, after the pause: the picture is below the line, whatever ends it.
+    // A line that was dropped whole leaves the picture below the one before.
+    if (pictured && out.length && !out[out.length - 1].endsWith(TTS_PICTURE)) {
+      out[out.length - 1] += TTS_PICTURE;
     }
   });
   return out;
@@ -8752,25 +8764,33 @@ function chunkSentences(sentences, outLines) {
   // line of the email. It always takes the sentence after it along, however
   // long that sentence is and whatever it costs the first passage's budget.
   const opening = () => !chunks.length && held === 1;
+  let pictureAbove = false;   // the next line starts below a picture
   sentences.forEach(s => {
+    const pictured = s.endsWith(TTS_PICTURE);
+    if (pictured) s = s.slice(0, -1);
     const pause = s.endsWith(TTS_PAUSE);
     if (pause) s = s.slice(0, -1);
+    const below = pictureAbove;
+    pictureAbove = false;
     if (s.length > TTS_CHUNK_CHARS) {
       const opener = opening() ? cur : '';
       if (!opener) flush(); else { cur = ''; held = 0; }
       splitLongSentence(s).forEach((p, n) => {
         const lead = (n === 0 && opener) ? opener + ' ' : '';
-        if (outLines) outLines.push({ chunk: chunks.length, at: lead.length, text: p });
+        if (outLines) outLines.push({ chunk: chunks.length, at: lead.length, text: p, picture: below && n === 0 });
         chunks.push(lead + p);
       });
+      pictureAbove = pictured;
       return;
     }
     if (cur && !opening() && cur.length + s.length + 1 > budget()) flush();
     // While cur is being built, chunks.length is the index it will be given.
-    if (outLines) outLines.push({ chunk: chunks.length, at: cur ? cur.length + 1 : 0, text: s });
+    if (outLines) outLines.push({ chunk: chunks.length, at: cur ? cur.length + 1 : 0, text: s, picture: below });
     cur = cur ? cur + ' ' + s : s;
     if (pause) cur += '.';    // the passage only; the line above keeps its words
     held++;
+    // The voice can only wait between passages, so one ends at every picture.
+    if (pictured) { flush(); pictureAbove = true; }
   });
   flush();
   return chunks;
@@ -8901,6 +8921,24 @@ function ttsWorthEmphasis(run) {
 // looking at, with every italic phrase marked where it stands. This is the
 // source for any mail that has HTML, because the plain-text part is a different
 // rendering of the same mail and has no way of saying where the italics fall.
+// Whether an image is a picture worth waiting at, judged from what the markup
+// says of its size: a tracking pixel, an icon or a social badge declares
+// itself small. One that says nothing counts; the wait is skipped at play time
+// if it turns out to take no height on the page (ttsPictureHold).
+const TTS_PICTURE_MIN_PX = 100;
+function ttsIsPicture(img) {
+  if (!img.getAttribute('src') && !img.getAttribute('srcset')) return false;
+  const css = (img.getAttribute('style') || '').toLowerCase();
+  const size = (attr, prop) => {
+    const m = css.match(new RegExp('(?:^|;)\\s*' + prop + '\\s*:\\s*(\\d+(?:\\.\\d+)?)px'));
+    if (m) return parseFloat(m[1]);
+    const a = parseFloat(img.getAttribute(attr));
+    return isFinite(a) ? a : null;
+  };
+  const w = size('width', 'width'), h = size('height', 'height');
+  return !((w != null && w < TTS_PICTURE_MIN_PX) || (h != null && h < TTS_PICTURE_MIN_PX));
+}
+
 function ttsTextFromHtml(html) {
   if (!html) return '';
   try {
@@ -8951,14 +8989,30 @@ function ttsTextFromHtml(html) {
       el.insertBefore(document.createTextNode(TTS_MARK_ON), el.firstChild);
       el.appendChild(document.createTextNode(TTS_MARK_OFF));
     });
+    // Pictures, as a line of their own for now. Not one inside an italic
+    // phrase, where a break would split it.
+    div.querySelectorAll('img').forEach(img => {
+      if (ttsIsPicture(img) && !img.closest(ITALIC_SEL)) {
+        img.after(TTS_MARK_BREAK + TTS_PICTURE + TTS_MARK_BREAK);
+      }
+    });
     // After the phrases, so a break can never be inserted inside one.
     div.querySelectorAll(TTS_BLOCK_SEL).forEach(el => el.after(TTS_MARK_BREAK));
-    return (div.textContent || '')
+    const lines = [];
+    (div.textContent || '')
       .replace(/\s+/g, ' ')            // source whitespace is indentation, nothing more
       .split(TTS_MARK_BREAK)
       .map(line => line.trim())
       .filter(Boolean)
-      .join('\n');
+      .forEach(line => {
+        // A picture rides on the end of the line above it, which is where the
+        // voice will wait. One above all the text is where the page starts
+        // anyway, and two in a row are one wait.
+        if (line !== TTS_PICTURE) { lines.push(line); return; }
+        const n = lines.length - 1;
+        if (n >= 0 && !lines[n].endsWith(TTS_PICTURE)) lines[n] += TTS_PICTURE;
+      });
+    return lines.join('\n');
   } catch(e) { return ''; }
 }
 
@@ -9606,7 +9660,7 @@ function ttsAudioStopped(why) {
   const d = ttsRealDuration(s, s.i);
   const short = (why === 'error') ||
                 (isFinite(d) && d > 0 && a.currentTime < d - TTS_END_SLACK);
-  if (!short) { s.cut = 0; ttsPlayIndex(s.i + 1); return; }
+  if (!short) { s.cut = 0; ttsPlayIndex(s.i + 1, { next: true }); return; }
 
   // A shade before where it stopped, so nothing falls in the join.
   const at = (isFinite(d) && d > 0) ? Math.max(a.currentTime / d - 0.01, 0) : 0;
@@ -9799,10 +9853,16 @@ async function ttsPlayIndex(i, opts = {}) {
   s.i = i;
   s.chunkStarted = Date.now();
   ttsUpdateUI();
+  // Played through to a picture: the voice waits while the page is carried
+  // past it. Only then — a skip or a seek lands where it was sent.
+  const hold = (opts.next && s.playing) ? ttsPictureHold(s, i) : null;
 
   if (s.mode === 'device') {
-    if (s.playing) ttsSpeakOnDevice(s.chunks[i]);
-    else ttsUpdateUI();
+    if (!s.playing) ttsUpdateUI();
+    else if (!hold) ttsSpeakOnDevice(s.chunks[i]);
+    else hold.then(go => {
+      if (go) { s.chunkStarted = Date.now(); ttsSpeakOnDevice(s.chunks[i]); }
+    });
     return;
   }
   // Only the latest request for a passage gets to cue it. Two can be waiting
@@ -9818,6 +9878,11 @@ async function ttsPlayIndex(i, opts = {}) {
   try {
     const got = await ttsFetchChunk(text, false, s.voice, ssml);
     if (ttsSession !== s || s.i !== i || s.cue !== cue) return;  // stopped, skipped past it, or asked again
+    if (hold) {
+      ttsBridge();   // the wait is a gap like any other between passages
+      await hold;
+      if (ttsSession !== s || s.i !== i || s.cue !== cue) return;
+    }
     const a = ttsAudioEl();
     ttsDropPendingSeek(a);   // anything waiting on the last load is void now
     ttsLeaveBridge();
@@ -10262,13 +10327,14 @@ function ttsSpeakOnDevice(text) {
   if (!('speechSynthesis' in window)) { toast('This browser can’t speak text'); stopReadAloud(); return; }
   ttsUnbridge();   // the device voice is its own sound; silence under it is waste
   try { speechSynthesis.cancel(); } catch(e) {}
+  if (ttsSession) ttsSession.pictureWait = false;
   const u = new SpeechSynthesisUtterance(text);
   const v = bestDeviceVoice();
   if (v) { u.voice = v; u.lang = v.lang; }
   u.rate = ttsRate;
   const s = ttsSession;
   u.onstart = () => { if (ttsSession === s) s.deviceSpoke = true; };
-  u.onend = () => { if (ttsSession === s && s.playing) ttsPlayIndex(s.i + 1); };
+  u.onend = () => { if (ttsSession === s && s.playing) ttsPlayIndex(s.i + 1, { next: true }); };
   u.onerror = () => {
     if (ttsSession !== s || !s.playing) return;
     // Nothing has been spoken yet and the first utterance already failed: this
@@ -10424,7 +10490,7 @@ function ttsTogglePlay(force) {
     // spoken. One already under way is resumed, so it doesn't restart the
     // sentence the reader was halfway through.
     if (!s.playing) { try { speechSynthesis.pause(); } catch(e) {} }
-    else if (!s.deviceSpoke) ttsSpeakOnDevice(s.chunks[s.i]);
+    else if (!s.deviceSpoke || s.pictureWait) { s.chunkStarted = Date.now(); ttsSpeakOnDevice(s.chunks[s.i]); }
     else { try { speechSynthesis.resume(); } catch(e) {} }
   } else if (s.playing) ttsStartAudio(s);
   else { ttsUnbridge(); if (ttsAudio) ttsAudio.pause(); }
@@ -10989,6 +11055,60 @@ const TTS_RESYNC_TAU = 0.12;
 const TTS_RESYNC_MAX = 2400;
 const TTS_READ_LINE = 0.3;        // where the line being read sits in the view
 const TTS_SNAP_GAP = 0.25;        // of a screen: further behind than this, jump
+// Past a picture, with the voice waiting: quicker again, since nothing on the
+// way is being read.
+const TTS_CROSS_LEAD = 0.22;
+const TTS_CROSS_TAU = 0.08;
+const TTS_CROSS_MAX = 4000;
+const TTS_PICTURE_GAP = 0.2;      // of a screen: less height than this isn't waited for
+const TTS_PICTURE_ARRIVED = 0.08; // of a screen: this close to the far side is there
+const TTS_PICTURE_MIN_MS = 350;   // the beat, even when the page is there at once
+const TTS_PICTURE_MAX_MS = 1500;  // and never longer than this, whatever the page does
+
+// The voice has played through to the passage below a picture. If the page has
+// a picture's height still to cover before that passage is on the screen, the
+// scroll is sent across it at once and the voice waits for it — a short beat,
+// the page sliding past the photo, and the reading picks up beside its words.
+// Returns a promise of whether to go on speaking (false: paused, skipped,
+// stopped meanwhile), or null when there is nothing to wait for: the page
+// unwatched or in someone's hands, the picture taking no real height, or the
+// page already past it.
+function ttsPictureHold(s, i) {
+  if (document.hidden || s.userScrolled || ttsDrag || !s.lines) return null;
+  const li = s.lines.findIndex(l => l.chunk === i && l.at === 0);
+  const line = s.lines[li];
+  if (li < 1 || !line || !line.picture) return null;
+  const t = readerScrollTarget();
+  if (!t) return null;
+  const prev = s.lines[li - 1];
+  const above = ttsAnchorFor(s, t, 'l' + (li - 1), prev.text);
+  const below = ttsAnchorFor(s, t, 'l' + li, line.text);
+  if (!above || !below) return null;
+  const vh = t.scroller.clientHeight;
+  if (below.top - above.end < vh * TTS_PICTURE_GAP) return null;
+  const span = t.scroller.scrollHeight - vh;
+  const target = Math.max(0, Math.min(below.top - vh * TTS_READ_LINE, span));
+  if (target - t.scroller.scrollTop < vh * TTS_PICTURE_GAP) return null;
+  s.crossing = true;
+  s.resyncing = true;
+  s.crossGap = null;
+  s.pictureWait = true;
+  const started = Date.now();
+  return new Promise(resolve => {
+    const check = () => {
+      if (ttsSession !== s || s.i !== i || !s.playing) { resolve(false); return; }
+      const waited = Date.now() - started;
+      const there = !s.crossing || (s.crossGap != null && s.crossGap < vh * TTS_PICTURE_ARRIVED);
+      if ((waited >= TTS_PICTURE_MIN_MS && there) || waited >= TTS_PICTURE_MAX_MS) {
+        s.pictureWait = false;
+        resolve(true);
+        return;
+      }
+      setTimeout(check, 40);
+    };
+    setTimeout(check, 40);
+  });
+}
 
 // Not moving this frame: let the speed fall to nought and forget the last
 // frame's clock, so whatever resumes ramps up from rest instead of spending
@@ -11060,7 +11180,7 @@ function ttsSyncScroll(ts) {
   if (s.snapToVoice) {
     s.snapToVoice = false;
     if (Math.abs(target - s.scrollPos) > t.scroller.clientHeight * TTS_SNAP_GAP) {
-      s.scrollPos = target; s.scrollVel = 0; s.resyncing = false; s.lastFrame = 0;
+      s.scrollPos = target; s.scrollVel = 0; s.resyncing = false; s.crossing = false; s.lastFrame = 0;
       jumped = true;
     }
   }
@@ -11080,9 +11200,9 @@ function ttsSyncScroll(ts) {
       // stays forward, and the follow picks up from there.
       if (s.scrollPos < t.scroller.scrollTop) { s.scrollPos = t.scroller.scrollTop; s.scrollVel = 0; }
     }
-    const lead = s.resyncing ? TTS_RESYNC_LEAD : TTS_FOLLOW_LEAD;
-    const tau  = s.resyncing ? TTS_RESYNC_TAU : TTS_FOLLOW_TAU;
-    const cap  = s.resyncing ? TTS_RESYNC_MAX : TTS_FOLLOW_MAX;
+    const lead = s.crossing ? TTS_CROSS_LEAD : s.resyncing ? TTS_RESYNC_LEAD : TTS_FOLLOW_LEAD;
+    const tau  = s.crossing ? TTS_CROSS_TAU  : s.resyncing ? TTS_RESYNC_TAU  : TTS_FOLLOW_TAU;
+    const cap  = s.crossing ? TTS_CROSS_MAX  : s.resyncing ? TTS_RESYNC_MAX  : TTS_FOLLOW_MAX;
     // How far ahead the voice is, read as how fast to travel. Only a resync may
     // come out negative — a voice that has just moved on shouldn't drag the page
     // up to meet it.
@@ -11096,10 +11216,11 @@ function ttsSyncScroll(ts) {
     s.scrollVel = vel + (want - vel) * (1 - Math.exp(-dt / tau));
     s.scrollPos += s.scrollVel * dt;
     if (s.resyncing && Math.abs(target - s.scrollPos) < 1.5) {
-      s.scrollPos = target; s.scrollVel = 0; s.resyncing = false;
+      s.scrollPos = target; s.scrollVel = 0; s.resyncing = false; s.crossing = false;
     }
   }
   s.scrollPos = Math.max(0, Math.min(s.scrollPos, span));
+  if (s.crossing) s.crossGap = Math.abs(target - s.scrollPos);   // read by ttsPictureHold
 
   // Whole pixels to scrollTop, the leftover fraction to a GPU transform —
   // the same trick auto-scroll uses, since scrollTop alone steps a pixel at a
@@ -11129,7 +11250,7 @@ function ttsManualScroll() {
   if (!s) return;
   if (s.resumeTimer) { clearTimeout(s.resumeTimer); s.resumeTimer = null; }
   s.userScrolled = true;
-  s.resyncing = false;
+  s.resyncing = false; s.crossing = false;
   s.snapToVoice = false;
   ttsShowResync(true);
 }
