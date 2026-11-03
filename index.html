@@ -2703,7 +2703,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v158'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v159'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -8485,6 +8485,14 @@ function cleanForSpeech(raw) {
   // "concerned AI staff. org" as two sentences. Only a name ending in a known
   // top-level domain, so "Node.js" and "a.m." are still words. The lookbehind
   // keeps it off the domain half of an email address.
+  // A site named in a sentence is a word of it, not an address to skip: "sites
+  // such as FanFiction.net and Wattpad". Only a bare name — nothing before it
+  // like www. or https://, nothing after it like a path — and a short one. Its
+  // dot is masked, as an abbreviation's is, so the removal below passes over
+  // it and the sentence splitter doesn't break it in two; the dot is put back
+  // with the others once the sentences are cut.
+  t = t.replace(TTS_SITE_RE, m =>
+    (m.length <= TTS_SITE_MAX_CHARS && !m.includes('/') && !/^www\./i.test(m)) ? m.replace(/\./g, TTS_DOT) : m);
   const URL = '(?:(?:https?:\\/\\/|www\\.)[^\\s)\\]>]*[^\\s)\\]>.,;:!?]' +
               '|(?<![\\w@.-])(?:[a-z0-9-]+\\.)+(?:' + TTS_TLDS + ')\\b(?:\\/[^\\s)\\]>]*[^\\s)\\]>.,;:!?])?)';
   t = t.replace(new RegExp('\\s*\\b(?:at|to|via|from|here|see)\\s+' + URL, 'gi'), '');
@@ -8507,6 +8515,11 @@ function cleanForSpeech(raw) {
 // common ones: a two-letter country code on its own would take "et al." and
 // "i.e." for addresses.
 const TTS_TLDS = 'com|org|net|edu|gov|mil|io|co|ai|app|dev|me|us|uk|ca|au|de|fr|eu|info|biz|news|blog|tv|fm|xyz|substack|social|online|site|link';
+// A bare domain with whatever path it carries, standing clear of an address
+// around it (an email's, or a URL's after its //). Kept when it is no longer
+// than this: a name, not a link.
+const TTS_SITE_RE = new RegExp('(?<![\\w@./-])(?:[a-z0-9-]+\\.)+(?:' + TTS_TLDS + ')\\b(?:\\/[^\\s)\\]>]*)?', 'gi');
+const TTS_SITE_MAX_CHARS = 16;
 
 // How far into an email a repeated line is still the page's furniture rather
 // than the writing.
