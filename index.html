@@ -2716,7 +2716,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v160'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v161'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -11425,6 +11425,17 @@ function ttsSetMediaSession() {
   set('stop', () => ttsTogglePlay(false));
   set('previoustrack', () => ttsSkip(-1));
   set('nexttrack', () => ttsSkip(1));
+  // Back and forward by time, as the player's own buttons do: back is for the
+  // words a map's directions just talked over, which turn the voice down
+  // without the page ever hearing about it. A car or headset that names its
+  // own step is given it.
+  const seek = (dflt) => (d) => {
+    const step = d && d.seekOffset > 0 ? d.seekOffset : Math.abs(dflt);
+    ttsSkipSeconds(dflt < 0 ? -step : step);
+    ttsSetPositionState();
+  };
+  set('seekbackward', seek(-15));
+  set('seekforward', seek(30));
 }
 
 // A passage that has loaded knows its real length; keep it, so what's left
@@ -11480,7 +11491,7 @@ function ttsAudioTick() {
 function ttsClearMediaSession() {
   if (!('mediaSession' in navigator)) return;
   try { navigator.mediaSession.playbackState = 'none'; navigator.mediaSession.metadata = null; } catch(e) {}
-  ['play', 'pause', 'stop', 'previoustrack', 'nexttrack'].forEach(a => {
+  ['play', 'pause', 'stop', 'previoustrack', 'nexttrack', 'seekbackward', 'seekforward'].forEach(a => {
     try { navigator.mediaSession.setActionHandler(a, null); } catch(e) {}
   });
 }
