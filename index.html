@@ -192,7 +192,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
   .suggest-dismiss-btn:hover, .section-card-header:hover, .email-item:hover,
   .acct-row:hover, .reader-close:hover, .reader-listen:hover, .reader-gmail:hover, .reader-mark-read:hover,
   .btn-secondary:hover, .gsi-btn:not(:disabled):hover,
-  .keep-row-mark:hover, .keep-menu-item:hover, .setting-row:not(.setting-slider):hover, .tts-linkbtn:hover {
+  .keep-row-mark:hover, .keep-swipe-again:hover, .keep-menu-item:hover, .setting-row:not(.setting-slider):hover, .tts-linkbtn:hover {
     background-image: linear-gradient(var(--hover-layer), var(--hover-layer));
   }
 }
@@ -203,7 +203,7 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
 .suggest-dismiss-btn:active, .section-card-header:active, .email-item:active,
 .acct-row:active, .reader-close:active, .reader-listen:active, .reader-gmail:active, .reader-mark-read:active,
 .btn-secondary:active, .gsi-btn:not(:disabled):active,
-.keep-row-mark:active, .keep-menu-item:active, .setting-row:not(.setting-slider):active {
+.keep-row-mark:active, .keep-swipe-again:active, .keep-menu-item:active, .setting-row:not(.setting-slider):active {
   background-image: linear-gradient(var(--press-layer), var(--press-layer));
 }
 
@@ -1574,6 +1574,16 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
   padding: 4px 4px 0;
 }
 .list-subheader:empty { display: none; }
+/* The Keep count, with Swipe again opposite it. */
+.keep-count-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; }
+.keep-swipe-again {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; margin: -6px 0 -4px; padding: 0 12px;
+  border: none; border-radius: 16px; background: transparent;
+  font: inherit; font-size: 14px; font-weight: 500; color: var(--primary);
+  cursor: pointer;
+}
+.keep-swipe-again svg { width: 18px; height: 18px; }
 
 .keep-offline-status {
   font-size: 12px;
@@ -2338,7 +2348,10 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
           </div>
         </div>
         <p class="keep-intro">Emails you swiped <strong>Keep</strong>. Tap one to read — the <strong>Mark as read</strong> button is at the very bottom of each email, so it won't be tapped by accident.</p>
-        <div class="list-subheader" id="keep-count-label"></div>
+        <div class="keep-count-row">
+          <div class="list-subheader" id="keep-count-label"></div>
+          <button class="keep-swipe-again" id="keep-swipe-again" onclick="swipeKeepsAgain()" style="display:none;" title="Put every kept email back in the swipe deck to go through again"><svg class="mi" viewBox="0 -960 960 960"><path d="M480-860q-88 0-169 31t-147 89h86q13 0 21.5 8.5T280-710q0 13-8.5 21.5T250-680H120q-17 0-28.5-11.5T80-720v-130q0-13 8.5-21.5T110-880q13 0 21.5 8.5T140-850v51q72-59 159-90t181-31q94 0 181 31t159 90v-51q0-13 8.5-21.5T850-880q13 0 21.5 8.5T880-850v130q0 17-11.5 28.5T840-680H710q-13 0-21.5-8.5T680-710q0-13 8.5-21.5T710-740h86q-66-58-147-89t-169-31Zm-7 780q-24 0-46-9t-39-26L212-292q-11-11-11.5-27.5T211-348l3-3q16-16 37.5-21.5t42.5.5l66 19v-327q0-17 11.5-28.5T400-720q17 0 28.5 11.5T440-680v380q0 20-16 32t-35 7l-46-13 102 102q5 5 12.5 8.5T473-160h167q33 0 56.5-23.5T720-240v-160q0-17 11.5-28.5T760-440q17 0 28.5 11.5T800-400v160q0 66-47 113T640-80H473Zm47-480q17 0 28.5 11.5T560-520v120q0 17-11.5 28.5T520-360q-17 0-28.5-11.5T480-400v-120q0-17 11.5-28.5T520-560Zm120 40q17 0 28.5 11.5T680-480v80q0 17-11.5 28.5T640-360q-17 0-28.5-11.5T600-400v-80q0-17 11.5-28.5T640-520Zm-69 240Z"/></svg>Swipe again</button>
+        </div>
         <div class="section-card">
           <div class="keep-offline-status" id="keep-offline-status"></div>
           <div class="email-list-inner" id="keep-list-el" style="max-height:none;overflow:visible;">
@@ -2703,7 +2716,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v159'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v160'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -6217,25 +6230,28 @@ function swipeCard(direction) {
   if (!card) return;
 
   card.classList.remove('is-dragging');
+  // An email already in Keep (sent back by Swipe again) is restored to Keep on
+  // undo, read state and all, rather than forgotten.
+  const prior = { wasKept: keptIds.has(email.id), wasKeptRead: !!email.keptRead };
 
   if (swipeMode === 'triage') {
     if (direction === 'left') {
       card.classList.add('fly-left');
-      swipeHistory.push({ email, action: 'read' });
+      swipeHistory.push({ email, action: 'read', ...prior });
       doRead(email);
     } else {
       card.classList.add('fly-right');
-      swipeHistory.push({ email, action: 'skip' });
+      swipeHistory.push({ email, action: 'skip', ...prior });
       doKeep(email);
     }
   } else {
     if (direction === 'left') {
       card.classList.add('fly-left');
-      swipeHistory.push({ email, action: 'block' });
+      swipeHistory.push({ email, action: 'block', ...prior });
       doBlock(email);
     } else {
       card.classList.add('fly-right');
-      swipeHistory.push({ email, action: 'skip' });
+      swipeHistory.push({ email, action: 'skip', ...prior });
       doKeep(email);
     }
   }
@@ -6311,9 +6327,10 @@ async function undoSwipe() {
   const last = swipeHistory.pop();
 
   if (last.action === 'read') {
-    // Cancel a not-yet-synced read; otherwise re-mark it unread on Gmail.
+    // Cancel a not-yet-synced read; otherwise re-mark it unread on Gmail —
+    // unless it was a kept email that was already read before this swipe.
     removeOps(o => o.type === 'read' && o.id === last.email.id);
-    if (onlineReady()) {
+    if (onlineReady() && !last.wasKeptRead) {
       try {
         await gapi.client.gmail.users.messages.modify({
           userId: 'me', id: last.email.id,
@@ -6321,7 +6338,32 @@ async function undoSwipe() {
         });
       } catch(e) {}
     }
-    emails.push(last.email);
+    if (last.wasKept) {
+      // Back into Keep, label and offline copy included.
+      keptIds.add(last.email.id);
+      saveKept();
+      if (keptUnreadIds && !last.wasKeptRead) keptUnreadIds.add(last.email.id);
+      enqueueCache(last.email, 0);
+      const ok = await sendKeepToGmail(last.email.id, false);
+      if (!ok) enqueueOp({ type: 'keep', id: last.email.id, read: !!last.wasKeptRead });
+      renderKeepList();
+    }
+    if (!last.wasKeptRead && !emails.some(e => e.id === last.email.id)) emails.push(last.email);
+  } else if (last.action === 'skip' && last.wasKept) {
+    // A re-keep of an email that was already kept: it stays kept. Only a
+    // read the keep added is taken back off.
+    removeOps(o => o.type === 'keep' && o.id === last.email.id);
+    if (last.email.keptRead && !last.wasKeptRead) {
+      if (keptUnreadIds) keptUnreadIds.add(last.email.id);
+      if (onlineReady()) {
+        try {
+          await gapi.client.gmail.users.messages.modify({
+            userId: 'me', id: last.email.id, resource: { addLabelIds: ['UNREAD'] }
+          });
+        } catch(e) {}
+      }
+    }
+    last.email.keptRead = last.wasKeptRead;
   } else if (last.action === 'skip') {
     // The email was kept — undoing means we no longer remember it.
     removeOps(o => o.type === 'keep' && o.id === last.email.id);
@@ -6537,6 +6579,42 @@ function clearKept() {
   toast('Kept list cleared');
 }
 
+// Keep tab's Swipe again: puts every kept email at the front of the swipe
+// deck, in the deck's sort, to be triaged afresh. They stay kept until swiped,
+// so one not reached (or dropped by a reload) is still in the Keep tab — and a
+// kept email that's read or archived, which no inbox load would bring back,
+// isn't lost. Mark read un-keeps it; Keep leaves it kept.
+async function swipeKeepsAgain() {
+  if (!keptIds.size) { toast('No kept emails'); return; }
+  let cached = [];
+  try { cached = await idbGetAllMeta(); } catch(_) {}
+  const cacheMap = new Map(cached.map(r => [r.id, r]));
+  const inDeck = new Set(swipeQueue.map(e => e.id));
+  const batch = [];
+  for (const id of keptIds) {
+    if (inDeck.has(id)) continue;
+    let e = emails.find(x => x.id === id);
+    if (!e) {
+      // Not in this load's unread inbox: built from the offline copy, the
+      // same source the Keep tab lists it from. Read unless Gmail says not.
+      const rec = cacheMap.get(id);
+      if (!rec) continue;
+      e = { id, sender: rec.sender || '', subject: rec.subject || '(no subject)', date: rec.date || '',
+            keptRead: !(keptUnreadIds && keptUnreadIds.has(id)), bodyText: null, bodyLoaded: false };
+    }
+    batch.push(e);
+  }
+  if (!batch.length) {
+    toast(inDeck.size && [...keptIds].some(id => inDeck.has(id)) ? 'Your kept emails are already in the deck' : 'No kept emails to swipe');
+    return;
+  }
+  batch.sort(swipeComparator());
+  swipeQueue = [...batch, ...swipeQueue];
+  renderSwipeStack();
+  switchTab('swipe');
+  toast(`${batch.length} kept ${batch.length === 1 ? 'email' : 'emails'} back in the deck`);
+}
+
 // ── Keep tab ───────────────────────────────────────────────
 // Merges in-memory kept emails with the offline cache so the list works even
 // with no connection or before a load has run.
@@ -6647,6 +6725,8 @@ async function renderKeepList() {
   if (keepMenuId && !items.some(i => i.id === keepMenuId)) closeKeepMenu();
 
   const filtering = q || keepOfflineOnly || keepListenMode;
+  const swipeAgain = document.getElementById('keep-swipe-again');
+  if (swipeAgain) swipeAgain.style.display = total ? '' : 'none';
   const countLabel = document.getElementById('keep-count-label');
   if (countLabel) countLabel.textContent = !total ? ''
     : (filtering ? `${items.length} of ${total}` : `${total} kept`);
