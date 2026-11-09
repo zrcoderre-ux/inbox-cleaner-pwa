@@ -9,9 +9,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Inbox Cleaner">
 <link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-v2.png">
-<link rel="icon" type="image/png" sizes="192x192" href="icon-v2-192.png">
-<link rel="icon" type="image/png" sizes="512x512" href="icon-v2-512.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-v3.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-v3-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-v3-512.png">
 <title>Inbox Cleaner</title>
 <!-- Google Sans, loaded without blocking first paint: offline or on a slow
      connection the app draws in the system font and swaps when it arrives. -->
@@ -2716,7 +2716,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v162'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v163'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -11410,8 +11410,8 @@ function ttsSetMediaSession() {
       artist: resting ? TTS_AUTO_BATCH + ' read — press play to carry on'
                       : parseSender(e.sender || '').name || e.sender || '',
       album: 'Inbox Cleaner',
-      artwork: [{ src: '/icon-v2-192.png', sizes: '192x192', type: 'image/png' },
-                { src: '/icon-v2-512.png', sizes: '512x512', type: 'image/png' }]
+      artwork: [{ src: '/icon-v3-192.png', sizes: '192x192', type: 'image/png' },
+                { src: '/icon-v3-512.png', sizes: '512x512', type: 'image/png' }]
     });
     navigator.mediaSession.playbackState = ttsSession.playing ? 'playing' : 'paused';
   } catch(e) {}
