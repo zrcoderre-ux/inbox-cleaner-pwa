@@ -1,11 +1,11 @@
-const CACHE_NAME = 'inbox-cleaner-v66';
+const CACHE_NAME = 'inbox-cleaner-v67';
 const ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
-  '/icon-192.png',
-  '/icon-512.png',
-  '/apple-touch-icon.png'
+  '/icon-v2-192.png',
+  '/icon-v2-512.png',
+  '/apple-touch-icon-v2.png'
 ];
 
 self.addEventListener('install', e => {
