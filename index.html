@@ -2716,7 +2716,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v163'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v164'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -8989,6 +8989,13 @@ const TTS_EMBED_META_SEL = '[class*="tweet-footer" i], [class*="tweet-date" i], 
                            '[class*="tweet-stats" i], [class*="tweet-likes" i], [class*="tweet-retweets" i], ' +
                            '[class*="tweet-replies" i], [class*="tweet-views" i], [class*="tweet-actions" i], ' +
                            '[class*="tweet-author-handle" i], [class*="tweet-handle" i]';
+// A card linking to another post: a thumbnail, the post's title, its author
+// and date, and "Read full story". It is a link, not part of the article, so
+// the whole card goes, picture included, leaving no wait where it stood.
+// Substack marks the card with its component name as well as a class.
+const TTS_POST_EMBED_SEL = '[data-component-name*="PostEmbed" i], [data-component-name*="EmbeddedPost" i], ' +
+                           '[class*="digest-post-embed" i], [class*="digestPostEmbed" i], ' +
+                           '[class*="embedded-post" i], [class*="embeddedPost" i]';
 // No caption runs longer than this, and anything that does is the page around
 // one rather than the caption itself.
 const TTS_CAPTION_MAX_CHARS = 400;
@@ -9063,6 +9070,7 @@ function ttsTextFromHtml(html) {
     // view count and the scoreboard under a quoted tweet. The text rule in
     // cleanForSpeech catches the same lines wherever the markup doesn't say.
     div.querySelectorAll(TTS_EMBED_META_SEL).forEach(el => el.remove());
+    div.querySelectorAll(TTS_POST_EMBED_SEL).forEach(el => el.remove());
     // A caption with no class to say so still names where the picture came
     // from, and the description sits in the same block as the credit — so the
     // whole block goes. Only the innermost one that carries it, and only one
