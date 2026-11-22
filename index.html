@@ -2565,6 +2565,13 @@ svg.mi { width: 24px; height: 24px; fill: currentColor; flex-shrink: 0; }
             </span>
             <select class="tts-voice-select" id="tts-voice" onchange="setTtsVoice(this.value)" aria-label="Reading voice"></select>
           </div>
+          <div class="setting-row setting-slider" id="tts-device-voice-row" style="display:none;">
+            <span class="setting-text">
+              <span class="setting-title">Device voice</span>
+              <span class="setting-desc" id="tts-device-voice-desc">Used offline, and whenever the natural voice can't be.</span>
+            </span>
+            <select class="tts-voice-select" id="tts-device-voice" onchange="setTtsDeviceVoice(this.value)" aria-label="Device voice"></select>
+          </div>
           <div class="setting-row setting-slider" id="tts-rate-row" style="display:none;">
             <span class="setting-text">
               <span class="setting-title">Speaking speed</span>
@@ -2716,7 +2723,7 @@ const USE_REFRESH_BACKEND = true;
 // Scopes for the auth-code flow need openid+email so the Worker can key the
 // refresh token to an account.
 const CODE_FLOW_SCOPES = 'openid email ' + SCOPES;
-const APP_VERSION = 'v164'; // shown in Settings so the running build is verifiable
+const APP_VERSION = 'v165'; // shown in Settings so the running build is verifiable
 // Hardcode your Google OAuth Web client ID here to skip the manual entry
 // screen. The client ID is a public value (it's exposed in the OAuth redirect
 // anyway), so it's safe to ship in client-side code. Leave as '' to fall back
@@ -8475,6 +8482,8 @@ let ttsScrollRaf = null;
 let ttsLeftAt = null;
 let ttsKeepTimer = null;
 let ttsDeviceVoices = [];
+// The device voice chosen in Settings, by voiceURI; '' picks the best one.
+let ttsDeviceVoicePref = '';
 
 // ── Preparing the text ─────────────────────────────────────
 // Truncates at the earliest of these markers — whatever follows is the part of
@@ -10434,6 +10443,7 @@ function ttsSpeakOnDevice(text) {
   if (v) { u.voice = v; u.lang = v.lang; }
   u.rate = ttsRate;
   const s = ttsSession;
+  if (s) s.deviceVoiceName = v ? v.name : '';
   u.onstart = () => { if (ttsSession === s) s.deviceSpoke = true; };
   u.onend = () => { if (ttsSession === s && s.playing) ttsPlayIndex(s.i + 1, { next: true }); };
   u.onerror = () => {
@@ -10450,33 +10460,65 @@ function ttsSpeakOnDevice(text) {
   ttsUpdateUI();
 }
 
+// The voice chosen in Settings if this device still has it, else the best one.
+function bestDeviceVoice() {
+  // Read fresh every time: a voice downloaded in iOS Settings while the app
+  // was open doesn't always announce itself with voiceschanged.
+  loadDeviceVoices();
+  if (!ttsDeviceVoices.length) return null;
+  if (ttsDeviceVoicePref) {
+    const chosen = ttsDeviceVoices.find(v => ttsDeviceVoiceId(v) === ttsDeviceVoicePref);
+    if (chosen) return chosen;
+  }
+  return rankedDeviceVoices()[0] || null;
+}
+
+function ttsDeviceVoiceId(v) {
+  return v.voiceURI || v.name || '';
+}
+
+// Apple names the quality tier in the voiceURI
+// ("com.apple.voice.premium.en-US.Zoe") and not always in the name, so both
+// are read.
+function ttsDeviceVoiceTier(v) {
+  const n = ((v.name || '') + ' ' + (v.voiceURI || '')).toLowerCase();
+  if (n.indexOf('premium') !== -1) return 'Premium';
+  if (n.indexOf('enhanced') !== -1) return 'Enhanced';
+  if (n.indexOf('natural') !== -1) return 'Natural';
+  if (n.indexOf('neural') !== -1) return 'Neural';
+  if (n.indexOf('compact') !== -1) return 'Compact';
+  return '';
+}
+
 // Ranked by what actually sounds human: the browser's networked neural voices
 // first (Edge's "Natural", Chrome's Google voices), then Apple's downloadable
-// Premium and Enhanced voices, and the tiny "Compact" ones last of all.
-function bestDeviceVoice() {
-  if (!ttsDeviceVoices.length) loadDeviceVoices();
-  if (!ttsDeviceVoices.length) return null;
+// Premium and Enhanced voices, and the tiny "Compact" ones and Apple's novelty
+// and Eloquence voices last of all.
+function ttsDeviceVoiceScore(v) {
   const lang = (navigator.language || 'en-US').slice(0, 2).toLowerCase();
-  const score = v => {
-    const n = (v.name || '').toLowerCase();
-    let s = ((v.lang || '').slice(0, 2).toLowerCase() === lang) ? 40 : 0;
-    if (n.indexOf('natural') !== -1) s += 30;
-    if (n.indexOf('neural') !== -1) s += 25;
-    if (n.indexOf('premium') !== -1) s += 22;
-    if (n.indexOf('enhanced') !== -1) s += 18;
-    if (n.indexOf('siri') !== -1) s += 15;
-    if (n.indexOf('google') !== -1) s += 12;
-    if (n.indexOf('online') !== -1) s += 8;
-    if (v.default) s += 2;
-    if (n.indexOf('compact') !== -1) s -= 30;
-    if (n.indexOf('espeak') !== -1) s -= 40;
-    return s;
-  };
-  return ttsDeviceVoices.slice().sort((a, b) => score(b) - score(a))[0] || null;
+  const n = ((v.name || '') + ' ' + (v.voiceURI || '')).toLowerCase();
+  let s = ((v.lang || '').slice(0, 2).toLowerCase() === lang) ? 40 : 0;
+  if (n.indexOf('natural') !== -1) s += 30;
+  if (n.indexOf('neural') !== -1) s += 25;
+  if (n.indexOf('premium') !== -1) s += 22;
+  if (n.indexOf('enhanced') !== -1) s += 18;
+  if (n.indexOf('siri') !== -1) s += 15;
+  if (n.indexOf('google') !== -1) s += 12;
+  if (n.indexOf('online') !== -1) s += 8;
+  if (v.default) s += 2;
+  if (n.indexOf('compact') !== -1) s -= 30;
+  if (n.indexOf('espeak') !== -1) s -= 40;
+  if (n.indexOf('eloquence') !== -1 || n.indexOf('speech.synthesis.voice') !== -1) s -= 35;
+  return s;
+}
+
+function rankedDeviceVoices() {
+  return ttsDeviceVoices.slice().sort((a, b) => ttsDeviceVoiceScore(b) - ttsDeviceVoiceScore(a));
 }
 
 // getVoices() fills in asynchronously, and on some browsers only after the
-// voiceschanged event — so it's read on init and again whenever that fires.
+// voiceschanged event — so it's read on init, whenever that fires, whenever
+// the app comes back to the front, and before each device utterance.
 function loadDeviceVoices() {
   if (!('speechSynthesis' in window)) return;
   try { ttsDeviceVoices = speechSynthesis.getVoices() || []; } catch(e) { ttsDeviceVoices = []; }
@@ -11662,7 +11704,8 @@ function ttsUpdateUI() {
   // room; all that is left to say here is when a voice won't do them at all.
   if (note) {
     const runs = ttsEmphasisCount(s);
-    note.textContent = (s && s.mode === 'device') ? 'device voice'
+    note.textContent = (s && s.mode === 'device')
+      ? (s.deviceVoiceName ? 'device voice: ' + s.deviceVoiceName : 'device voice')
       : (runs && ttsNoSsml[s.voice]) ? 'no emphasis' : '';
   }
   updateListenButton();
@@ -11803,6 +11846,80 @@ function setTtsVoice(name) {
   // already being read changes voice at its next chunk.
 }
 
+// ── Device voice ──
+// Which of the device's own voices reads when the natural voice can't. The
+// list is the device's, so the choice is kept per device rather than synced.
+function loadTtsDeviceVoice() {
+  try { ttsDeviceVoicePref = localStorage.getItem('ic_tts_device_voice') || ''; } catch(e) {}
+  renderTtsDeviceVoices();
+  if (!('speechSynthesis' in window)) return;
+  try { speechSynthesis.addEventListener('voiceschanged', renderTtsDeviceVoices); } catch(e) {}
+  // Coming back from iOS Settings with a newly downloaded voice.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') renderTtsDeviceVoices();
+  });
+}
+
+function setTtsDeviceVoice(id) {
+  ttsDeviceVoicePref = id || '';
+  try { localStorage.setItem('ic_tts_device_voice', ttsDeviceVoicePref); } catch(e) {}
+  renderTtsDeviceVoices();
+  // An email already being read on the device voice changes at the next
+  // sentence; with nothing playing, say a line so the choice can be heard.
+  if (ttsSession) return;
+  if (!('speechSynthesis' in window)) return;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance('This is how your emails will sound.');
+    const v = bestDeviceVoice();
+    if (v) { u.voice = v; u.lang = v.lang; }
+    u.rate = ttsRate;
+    speechSynthesis.speak(u);
+  } catch(e) {}
+}
+
+function ttsDeviceVoiceLabel(v) {
+  const tier = ttsDeviceVoiceTier(v);
+  const name = v.name || v.voiceURI || 'Voice';
+  const showTier = tier && name.toLowerCase().indexOf(tier.toLowerCase()) === -1;
+  return name + (showTier ? ' · ' + tier : '') + (v.lang ? ' · ' + v.lang : '');
+}
+
+// Voices in the app's language, best first; the rest of the world's voices
+// would bury them (iOS lists well over a hundred).
+function renderTtsDeviceVoices() {
+  const row = document.getElementById('tts-device-voice-row');
+  const sel = document.getElementById('tts-device-voice');
+  const desc = document.getElementById('tts-device-voice-desc');
+  if (!row || !sel) return;
+  const supported = 'speechSynthesis' in window;
+  row.style.display = (ttsEnabled && supported) ? '' : 'none';
+  if (!supported) return;
+  loadDeviceVoices();
+  const lang = (navigator.language || 'en-US').slice(0, 2).toLowerCase();
+  const ranked = rankedDeviceVoices();
+  let list = ranked.filter(v => (v.lang || '').slice(0, 2).toLowerCase() === lang);
+  if (!list.length) list = ranked;
+  // A chosen voice in another language stays listed, so the select can show it.
+  const chosen = ttsDeviceVoicePref && ranked.find(v => ttsDeviceVoiceId(v) === ttsDeviceVoicePref);
+  if (chosen && list.indexOf(chosen) === -1) list = [chosen].concat(list);
+  const best = list[0];
+  sel.innerHTML = '<option value="">Automatic' + (best ? ' (' + esc(best.name) + ')' : '') + '</option>' +
+    list.map(v => '<option value="' + esc(ttsDeviceVoiceId(v)) + '">' + esc(ttsDeviceVoiceLabel(v)) + '</option>').join('');
+  sel.value = chosen ? ttsDeviceVoicePref : '';
+  sel.disabled = !list.length;
+  if (desc) {
+    const good = list.filter(v => /^(Premium|Enhanced|Natural|Neural)$/.test(ttsDeviceVoiceTier(v))).length;
+    desc.textContent = !list.length
+      ? 'This device hasn\u2019t offered any voices yet.'
+      : (ttsDeviceVoicePref && !chosen)
+        ? 'The voice chosen earlier isn\u2019t on this device any more, so the best available one reads.'
+        : 'Used offline, and whenever the natural voice can\u2019t be. ' + list.length +
+          (list.length === 1 ? ' voice' : ' voices') + ' on this device' +
+          (good ? ', ' + good + ' high quality.' : '; download Premium voices in the device\u2019s accessibility settings for better ones.');
+  }
+}
+
 function setTtsRate(r) {
   ttsRate = Math.min(Math.max(parseFloat(r) || 1, 0.7), 1.8);
   try { localStorage.setItem('ic_tts_rate', String(ttsRate)); } catch(e) {}
@@ -11834,6 +11951,7 @@ function syncTtsUI() {
     const el = document.getElementById(id);
     if (el) el.style.display = ttsEnabled ? '' : 'none';
   });
+  renderTtsDeviceVoices();
   const slider = document.getElementById('tts-rate');
   if (slider && parseFloat(slider.value) !== ttsRate) slider.value = ttsRate;
   const label = document.getElementById('tts-rate-label');
@@ -12356,6 +12474,7 @@ window.addEventListener('popstate', onHistoryPop);
 if (history.state && history.state.icReader) history.replaceState(null, '');
 loadAutoScroll();
 loadTts();
+loadTtsDeviceVoice();
 loadKeepListen();   // after loadTts: the mode needs to know if the voice is on
 loadClientId();
 setSwipeMode('triage'); // reflect the keep setting in the action labels/hint
